@@ -41,7 +41,7 @@ from util.plot import *
 def get_inline_arg():
     parser = argparse.ArgumentParser('Train', add_help=False)
     # common parameters
-    parser.add_argument('--config', default='config.json', type=str, help='Path to the config file')    # Model parameters
+    parser.add_argument('--config', default=None, type=str, help='Path to the config file')    # Model parameters
     parser.add_argument('--method', default='FM', type=str, help='Method used for training')
     parser.add_argument('--network', default='MLP', type=str, help='Network used for training')
     parser.add_argument("--train", action="store_true", help="Train a <run_name> model")
