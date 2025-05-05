@@ -50,6 +50,7 @@ def get_inline_arg():
                         help='device to use for training / testing')
     parser.add_argument('--run_name', default='RUN',
                         help='Name of the run')
+    parser.add_argument('--embedding', default='xyz', type=str)
 
     parser.add_argument('--seed', default=21, type=int)
     parser.add_argument('--epochs', default=10000, type=int)
@@ -353,7 +354,7 @@ def train(args, device):
 
 def inference(args, device):
 
-    model = models.__dict__[args.model](channels=3 if args.texture_path is None else 6, depth=args.depth,network=models.__dict__[args.network]())   
+    model = models.__dict__[args.model](channels=3, depth=args.depth,network=models.__dict__[args.network]())   
     model.to(device)
     model.load_state_dict(torch.load(args.output_dir + '/checkpoint-'+str(args.epochs-1)+'.pth', map_location=device,weights_only=False)['model'], strict=True)
     
