@@ -32,7 +32,7 @@ from model import models,networks
 from model.models import *
 from model.networks import *
 
-from losses import chamfer_dist, hausdorff_dist
+from model.losses import chamfer_dist, hausdorff_dist
 
 from util.mesh_utils import *
 from util.plot import *
@@ -240,7 +240,9 @@ def train_one_epoch(model: torch.nn.Module,
                 weight = (t ** 2 + 1) / (t) ** 2
 
             else:
-                t= torch.rand(y.shape[0], device=device)
+                #t= torch.rand(y.shape[0], device=device)   # random sampling
+                u = torch.rand(y.shape[0], device=device)
+                t = (torch.cos(u * (torch.pi / 2)) ** 2).to(device)
 
             X_0 = generate_samples(args, device=device)
 
