@@ -7,7 +7,7 @@ import torch.nn as nn
 import math
 import numpy as np
 import torch.nn.functional
-from networks import *
+from .networks import *
 
 from flow_matching.solver import ODESolver
 
