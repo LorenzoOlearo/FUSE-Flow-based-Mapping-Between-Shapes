@@ -353,7 +353,6 @@ def train(args, device):
 
 def inference(args, device):
 
-    args.landmarks = np.array( [412, 5891,6593,3323,2119] )
 
 
     model = models.__dict__[args.model](channels=3+len(args.landmarks), depth=args.depth,network=models.__dict__[args.network](channels=3+len(args.landmarks)))   
@@ -387,7 +386,6 @@ def main():
         
     ####DEFINE LANDMARKS####
     args.landmarks = np.array( [412, 5891,6593,3323,2119] )
-    
     
     device = initialize_device_and_seed(args)
     
