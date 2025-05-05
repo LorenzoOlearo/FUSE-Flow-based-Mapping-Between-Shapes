@@ -341,7 +341,7 @@ class MLP_dd(nn.Module):
         self.input_dim = channels
         self.hidden_dim = hidden_size
         self.ff_module = FourierFeatsEncoding(in_dim=4, num_frequencies=6, include_input=True)
-        self.fourier_dim = ((3+1) * 6 * 2) + (3 + 1) + channels-3
+        self.fourier_dim = ((3+1) * 6 * 2) + (3 + 1) + (channels-3)
         self.rff_module = nn.Identity()
 
         self.main = nn.Sequential(

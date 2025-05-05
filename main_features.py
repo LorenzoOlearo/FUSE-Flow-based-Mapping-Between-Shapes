@@ -2,6 +2,9 @@
 Main script for training and inference of the neural network model.
 This script includes functions for training the model, performing inference, and setting up the data loader.
 It also includes command-line argument parsing and logging setup.
+
+
+DIfferently from main; in this file we consider high dimensional embedding space, not xyz space.
 """
 
 import argparse
@@ -50,7 +53,8 @@ def get_inline_arg():
                         help='device to use for training / testing')
     parser.add_argument('--run_name', default='RUN',
                         help='Name of the run')
-
+    parser.add_argument('--embedding', default='xyz', type=str,
+                        help='Path to the texture file')
     parser.add_argument('--seed', default=21, type=int)
     parser.add_argument('--epochs', default=10000, type=int)
     parser.add_argument('--learning_rate', type=float, default=0.01, metavar='LR',
@@ -147,7 +151,7 @@ def initialize_model_and_optimizer(args,device):
     """Initialize the model, optimizer, and loss scaler."""
     
     # Initialize the model
-    model = models.__dict__[args.model](channels=3, depth=args.depth,network=networks.__dict__[args.network](channels=3))
+    model = models.__dict__[args.model](channels=3+len(args.landmarks), depth=args.depth,network=networks.__dict__[args.network](channels=3+len(args.landmarks)))
     model.to(device)
     
     
@@ -200,12 +204,8 @@ def train_one_epoch(model: torch.nn.Module,
 
     if isinstance(data_loader, dict):
         batch_size = data_loader['batch_size']
-        if len(mesh.faces)>0:
-            samples, _ = trimesh.sample.sample_surface(mesh, args.num_points_train)
-        else:
-            samples = mesh.vertices
-
-        samples = samples.astype(np.float32)
+        samples= generate_embeddings(mesh, args, device=device)
+        #samples = torch.tensor(samples, device=device).float()
         data_loader = range(data_loader['epoch_size'])
 
     for data_iter_step, batch in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
@@ -216,7 +216,7 @@ def train_one_epoch(model: torch.nn.Module,
         if isinstance(batch, int):
             ind = np.random.default_rng().choice(samples.shape[0], batch_size, replace=True)
             y = samples[ind]
-            y = torch.from_numpy(y).float().to(device, non_blocking=True)
+            #y = torch.from_numpy(y).float().to(device, non_blocking=True)
         else:
             y = batch.to(device, non_blocking=True)
 
@@ -302,7 +302,7 @@ def train(args, device):
     misc.load_model(args=args, model_without_ddp=model, optimizer=optimizer, loss_scaler=loss_scaler)    
     #load the data
     mesh= normalize_mesh(trimesh.load(args.data_path))  
-    
+        
     logging.info(f"Start training for {args.epochs} epochs")
     start_time = time.time()
     
@@ -353,10 +353,12 @@ def train(args, device):
 
 def inference(args, device):
 
-    model = models.__dict__[args.model](channels=3 if args.texture_path is None else 6, depth=args.depth,network=models.__dict__[args.network]())   
+    args.landmarks = np.array( [412, 5891,6593,3323,2119] )
+
+
+    model = models.__dict__[args.model](channels=3+len(args.landmarks), depth=args.depth,network=models.__dict__[args.network](channels=3+len(args.landmarks)))   
     model.to(device)
     model.load_state_dict(torch.load(args.output_dir + '/checkpoint-'+str(args.epochs-1)+'.pth', map_location=device,weights_only=False)['model'], strict=True)
-    
     noise = generate_samples(args, device=device)
 
     with torch.no_grad():
@@ -382,6 +384,11 @@ def main():
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
         setup_logging(args.output_dir)
+        
+    ####DEFINE LANDMARKS####
+    args.landmarks = np.array( [412, 5891,6593,3323,2119] )
+    
+    
     device = initialize_device_and_seed(args)
     
     if args.train:
