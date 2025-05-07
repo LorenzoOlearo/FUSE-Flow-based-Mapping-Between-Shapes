@@ -196,7 +196,6 @@ def train_one_epoch(model: torch.nn.Module,
     # Log
     if log_writer is not None:
         print(f'log_dir: {log_writer.log_dir}')
-    print(data_loader)
 
 
     if isinstance(data_loader, dict):
