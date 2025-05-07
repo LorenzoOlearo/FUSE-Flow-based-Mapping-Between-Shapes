@@ -51,7 +51,7 @@ def get_inline_arg():
     parser.add_argument('--run_name', default='RUN',
                         help='Name of the run')
     parser.add_argument('--embedding', default='xyz', type=str)
-
+    parser.add_argument('--landmarks', default=[], type=list)
     parser.add_argument('--seed', default=21, type=int)
     parser.add_argument('--epochs', default=10000, type=int)
     parser.add_argument('--learning_rate', type=float, default=0.01, metavar='LR',
@@ -378,10 +378,12 @@ def main():
             if not hasattr(args, key):
                 raise ValueError(f"Unknown argument in config file: {key}")
             setattr(args, key, value)
-    args.landmarks=[]
+
+    
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
         setup_logging(args.output_dir)
+   
     device = initialize_device_and_seed(args)
     
     if args.train:
