@@ -117,6 +117,11 @@ def get_inline_arg():
     parser.add_argument('--dist_url', default='env://',
                         help='url used to set up distributed training')
 
+    # features parameters
+    parser.add_argument('--embedding_dim', default=3, type=int, nargs='+', help='dimension of the features')
+    parser.add_argument('--features', default=None, type=float, nargs='+', help='dimension of the features')
+    parser.add_argument('--features_type', default='xyz', type=str, help='path to the features file')
+
     args = parser.parse_args()
 
     return args
@@ -139,9 +144,9 @@ def initialize_model_and_optimizer(args,device):
     
     # Initialize the model
     if args.method == 'FM':
-        model = FMCond(channels=3, depth=args.depth,network=networks.__dict__[args.network](channels=3))
+        model = FMCond(channels=args.embedding_dim, depth=args.depth,network=networks.__dict__[args.network](channels=args.embedding_dim))
     elif args.method == 'Geomdist':
-        model = EDMPrecond(channels=3, depth=args.depth,network=networks.__dict__[args.network](channels=3))
+        model = EDMPrecond(channels=args.embedding_dim, depth=args.depth,network=networks.__dict__[args.network](channels=args.embedding_dim))
     
     model.to(device)    
     
@@ -194,7 +199,7 @@ def train_one_epoch(model: torch.nn.Module,
     if isinstance(data_loader, dict):
         batch_size = data_loader['batch_size']
         data_loader = range(data_loader['epoch_size'])
-        y= generate_embeddings(mesh,args,device)
+        y = generate_embeddings(mesh,args,device)
 
     for data_iter_step, batch in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
 
@@ -208,6 +213,7 @@ def train_one_epoch(model: torch.nn.Module,
             y = y.float().to(device, non_blocking=True)
         else:
             y = batch.to(device, non_blocking=True)
+            
 
         # Forward pass and loss computation
         with torch.amp.autocast(args.device,enabled=False):
@@ -291,6 +297,9 @@ def train(args, device):
     #load the data
     mesh= normalize_mesh(trimesh.load(args.data_path, process=False))  
     
+    #compute features
+    args.features = compute_features(mesh,args,device)
+    
     logging.info(f"Start training for {args.epochs} epochs")
     start_time = time.time()
     
@@ -341,10 +350,9 @@ def train(args, device):
 def inference(args, device):
 
     if args.method == 'FM':
-        
-        model = FMCond(channels=3, depth=args.depth,network=models.__dict__[args.network]()) 
+        model = FMCond(channels=args.embedding_dim, depth=args.depth,network=models.__dict__[args.network](channels=args.embedding_dim)) 
     elif args.method == 'Geomdist':
-        model = EDMPrecond(channels=3, depth=args.depth,network=models.__dict__[args.network]())  
+        model = EDMPrecond(channels=args.embedding_dim, depth=args.depth,network=models.__dict__[args.network](channels=args.embedding_dim))  
     model.to(device)
     model.load_state_dict(torch.load(args.output_dir + '/checkpoint-'+str(args.epochs-1)+'.pth', map_location=device,weights_only=False)['model'], strict=True)
 
