@@ -193,13 +193,8 @@ def train_one_epoch(model: torch.nn.Module,
 
     if isinstance(data_loader, dict):
         batch_size = data_loader['batch_size']
-        if len(mesh.faces)>0:
-            samples, _ = trimesh.sample.sample_surface(mesh, args.num_points_train)
-        else:
-            samples = mesh.vertices
-
-        samples = samples.astype(np.float32)
         data_loader = range(data_loader['epoch_size'])
+        y= generate_embeddings(mesh,args,device)
 
     for data_iter_step, batch in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
 
@@ -208,9 +203,9 @@ def train_one_epoch(model: torch.nn.Module,
 
         # get input data
         if isinstance(batch, int):
-            ind = np.random.default_rng().choice(samples.shape[0], batch_size, replace=True)
-            y = samples[ind]
-            y = torch.from_numpy(y).float().to(device, non_blocking=True)
+            ind = np.random.default_rng().choice(y.shape[0], batch_size, replace=True)
+            y = y[ind]
+            y = y.float().to(device, non_blocking=True)
         else:
             y = batch.to(device, non_blocking=True)
 

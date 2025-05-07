@@ -281,21 +281,30 @@ def get_ldmk_feats(mesh, num_points, lm, ldmk_geodesic_distances, device=torch.d
     
 
 def generate_embeddings(mesh, args, device='cuda'):
-    if args.embedding =='landmark_feat':
-        embedding = get_ldmk_feats(mesh, args.num_points_train, args.landmarks,ldmk_geodesic_distances=args.ldmk_geodesic_distances, device=device)
-    elif args.embedding =='landmark_feat_mix':
-        embedding = get_ldmk_feats(mesh, args.num_points_train, args.landmarks,ldmk_geodesic_distances=args.ldmk_geodesic_distances, device=device)
-        samples = mesh.vertices
-        samples_tensor = torch.tensor(samples, device=device).float()
-        embedding_verts=torch.cat([samples_tensor, args.ldmk_geodesic_distances], -1)
-        embedding = torch.cat([embedding, embedding_verts], dim=0)
     
-    elif args.embedding == 'xyz':
-        if len(mesh.faces)>0:
-            samples, _ = trimesh.sample.sample_surface(mesh, args.num_points_train)
-        else:
+    if len(mesh.faces) > 0:
+        if args.embedding =='landmark_feat':
+            embedding = get_ldmk_feats(mesh, args.num_points_train, args.landmarks,ldmk_geodesic_distances=args.ldmk_geodesic_distances, device=device)
+        elif args.embedding =='landmark_feat_mix':
+            embedding = get_ldmk_feats(mesh, args.num_points_train, args.landmarks,ldmk_geodesic_distances=args.ldmk_geodesic_distances, device=device)
             samples = mesh.vertices
-        
-        embedding= torch.tensor(samples, dtype=torch.float32, device=device)
+            samples_tensor = torch.tensor(samples, device=device).float()
+            embedding_verts=torch.cat([samples_tensor, args.ldmk_geodesic_distances], -1)
+            embedding = torch.cat([embedding, embedding_verts], dim=0)
     
+        elif args.embedding == 'xyz':
+            samples, _ = trimesh.sample.sample_surface(mesh, args.num_points_train)
+            embedding= torch.tensor(samples, dtype=torch.float32, device=device)
+
+    else:
+        if args.embedding == 'xyz':
+            samples = mesh.vertices
+            embedding= torch.tensor(samples, dtype=torch.float32, device=device)
+
+        elif args.embedding == 'landmark_feat':
+            samples = mesh.vertices
+            samples_tensor = torch.tensor(samples, device=device).float()
+            embedding_verts=torch.cat([samples_tensor, args.ldmk_geodesic_distances], -1)
+            embedding = torch.cat([embedding, embedding_verts], dim=0)
+        
     return embedding
