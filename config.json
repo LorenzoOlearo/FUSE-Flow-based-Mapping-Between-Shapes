@@ -3,16 +3,19 @@
     "run_name": "tr_reg_080",
     "output_dir": "output/tr_reg_080",
     "log_dir": "output/tr_reg_080/",
-    "data_path": "../Matching-Flowing-Distributions/data/tr_reg_080.off",
+    "data_path": "./data/faust/test_set/tr_reg_080.off",
     "train": true,
     "inference": true,
     "epochs": 10000,
     "num_steps": 64,
     "method": "FM",
-    "model": "FMCond",
     "network": "MLP",
     "batch_size": 10000,
     "num_points_train": 10000,
     "learning_rate": 0.01,
-    "distribution": "Gaussian"
+    "distribution": "Gaussian",
+    "embedding_dim": 8,
+    "embedding":"features",
+    "features_type": "landmarks",
+    "landmarks": [412, 5891,6593,3323,2119]
 }

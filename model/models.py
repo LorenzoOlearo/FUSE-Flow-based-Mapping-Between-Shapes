@@ -207,9 +207,6 @@ class FMCond(torch.nn.Module):
     def __init__(self,
         channels = 3, 
         use_fp16 = False,
-        sigma_min = 0,
-        sigma_max = float('inf'),
-        sigma_data  = 1,
         depth = 6,
         network = None,
     ):

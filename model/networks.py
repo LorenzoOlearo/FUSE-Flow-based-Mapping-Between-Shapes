@@ -286,50 +286,8 @@ class FourierFeatsEncoding(nn.Module):
             encoded_inputs = torch.cat([in_tensor, encoded_inputs], dim=-1)
         return encoded_inputs
 
+
 class MLP(nn.Module):
-    """MLP 3D+time with Swish activations."""
-    def __init__(self,
-        channels = 3,
-        hidden_size = 256,
-        depth = 6,):
-    #input_dim: int = 3, time_dim: int = 1, hidden_dim: int = 128, fourier_encoding: str = 'FF', fourier_dim: int = 0):
-        super().__init__()
-        self.input_dim = channels
-        self.hidden_dim = hidden_size
-        self.ff_module = FourierFeatsEncoding(in_dim=4, num_frequencies=6, include_input=True)
-        self.fourier_dim = ((3+1) * 6 * 2) + (3 + 1)
-        self.rff_module = nn.Identity()
-
-        self.main = nn.Sequential(
-            nn.Linear(self.fourier_dim, self.hidden_dim),
-            Swish(),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            Swish(),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            Swish(),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            Swish(),
-            nn.Linear(self.hidden_dim, self.input_dim),
-        )
-    
-
-    def forward(self, x, t):
-        sz = x.size()
-        t = t.reshape(-1, 1)        
-        t = t.reshape(-1, 1).expand(x.shape[0], 1)
-        
-        h = torch.cat([x, t], dim=1)
-        
-        h = self.rff_module(h)
-        h = self.ff_module(h)
-       
-        output = self.main(h)
-        output = output.reshape(*sz)
-        
-        return output
-
-
-class MLP_dd(nn.Module):
     """MLP 3D+time+features with Swish activations."""
 
     def __init__(self,
@@ -341,7 +299,7 @@ class MLP_dd(nn.Module):
         self.input_dim = channels
         self.hidden_dim = hidden_size
         self.ff_module = FourierFeatsEncoding(in_dim=4, num_frequencies=6, include_input=True)
-        self.fourier_dim = ((3+1) * 6 * 2) + (3 + 1) + (channels-3)
+        self.fourier_dim = ((3+1) * 6 * 2) + (3 + 1) + (self.input_dim-3)
         self.rff_module = nn.Identity()
 
         self.main = nn.Sequential(
@@ -366,8 +324,7 @@ class MLP_dd(nn.Module):
         
         h = self.rff_module(h)
         h = self.ff_module(h)
-       
-        output = self.main(torch.cat([h, x[:,3:]], dim=1))
+        output = self.main(torch.cat([h, x[:,3:]], dim=-1))
         
         return output
 
