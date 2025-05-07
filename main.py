@@ -295,14 +295,13 @@ def train_one_epoch(model: torch.nn.Module,
 
 def train(args, device):
     """Main training loop."""
-    
     # Set up the data loader
     data_loader_train = setup_data_loader(args)
     # Initialize the model, optimizer, and loss scaler
     model, optimizer, loss_scaler = initialize_model_and_optimizer(args, device)
     misc.load_model(args=args, model_without_ddp=model, optimizer=optimizer, loss_scaler=loss_scaler)    
     #load the data
-    mesh= normalize_mesh(trimesh.load(args.data_path))  
+    mesh= normalize_mesh(trimesh.load(args.data_path, process=False))  
     
     logging.info(f"Start training for {args.epochs} epochs")
     start_time = time.time()
@@ -379,7 +378,7 @@ def main():
             if not hasattr(args, key):
                 raise ValueError(f"Unknown argument in config file: {key}")
             setattr(args, key, value)
-    
+    args.landmarks=[]
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
         setup_logging(args.output_dir)
