@@ -64,8 +64,6 @@ def get_inline_arg():
     parser.add_argument('--accum_iter', default=1, type=int,
                         help='Accumulate gradient iterations (for increasing the effective batch size under memory constraints)')
     parser.add_argument('--num-steps', default=64, type=int)
-    parser.add_argument('--model', default='FMCond', type=str, metavar='MODEL',
-                        help='Name of model to train')
     parser.add_argument('--depth', default=6, type=int, metavar='MODEL')
     
     parser.add_argument('--data_path', default='shapes/Jellyfish_lamp_part_A__B_normalized.obj', type=str,
@@ -140,9 +138,12 @@ def initialize_model_and_optimizer(args,device):
     """Initialize the model, optimizer, and loss scaler."""
     
     # Initialize the model
-    model = models.__dict__[args.model](channels=3, depth=args.depth,network=networks.__dict__[args.network](channels=3))
-    model.to(device)
+    if args.method == 'FM':
+        model = FMCond(channels=3, depth=args.depth,network=networks.__dict__[args.network](channels=3))
+    elif args.method == 'Geomdist':
+        model = EDMPrecond(channels=3, depth=args.depth,network=networks.__dict__[args.network](channels=3))
     
+    model.to(device)    
     
     # Initialize the optimizer and loss scaler (If distributed training different behaviour)
     eff_batch_size = args.batch_size * args.accum_iter * misc.get_world_size()
@@ -204,7 +205,8 @@ def train_one_epoch(model: torch.nn.Module,
 
         if data_iter_step % accum_iter == 0:
             lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
-        # Prepare input data
+
+        # get input data
         if isinstance(batch, int):
             ind = np.random.default_rng().choice(samples.shape[0], batch_size, replace=True)
             y = samples[ind]
@@ -215,13 +217,13 @@ def train_one_epoch(model: torch.nn.Module,
         # Forward pass and loss computation
         with torch.amp.autocast(args.device,enabled=False):
             
+            #time scheduler
             if args.method == 'Geomdist':
                 rnd_normal = torch.randn([y.shape[0],], device=y.device)
                 t = (rnd_normal * 1.2 -1).exp()
                 weight = (t ** 2 + 1) / (t) ** 2
-
             else:
-                #t= torch.rand(y.shape[0], device=device)   # random sampling
+                #t= torch.rand(y.shape[0], device=device)   # random time scheduler
                 u = torch.rand(y.shape[0], device=device)
                 t = (torch.cos(u * (torch.pi / 2)) ** 2).to(device)
 
@@ -341,15 +343,18 @@ def train(args, device):
     logging.info(f"Training completed in {str(datetime.timedelta(seconds=int(total_time)))}")
 
 
-
 def inference(args, device):
 
-    model = models.__dict__[args.model](channels=3, depth=args.depth,network=models.__dict__[args.network]())   
+    if args.method == 'FM':
+        
+        model = FMCond(channels=3, depth=args.depth,network=models.__dict__[args.network]()) 
+    elif args.method == 'Geomdist':
+        model = EDMPrecond(channels=3, depth=args.depth,network=models.__dict__[args.network]())  
     model.to(device)
     model.load_state_dict(torch.load(args.output_dir + '/checkpoint-'+str(args.epochs-1)+'.pth', map_location=device,weights_only=False)['model'], strict=True)
-    
-    noise = generate_samples(args, device=device)
 
+
+    noise = generate_samples(args, device=device)
     with torch.no_grad():
         sample,_ = model.sample(noise=noise, num_steps=args.num_steps, intermediate=True)
     

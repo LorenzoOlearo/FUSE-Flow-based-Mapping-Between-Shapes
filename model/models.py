@@ -61,22 +61,22 @@ class EDMPrecond(torch.nn.Module):
         return torch.as_tensor(sigma)
 
     #@torch.no_grad()
-    def sample(self, cond=None, batch_seeds=None, channels=3, num_steps=18):
+    def sample(self, cond=None, noise=None,num_steps=18,intermediate=False):
 
-        device = batch_seeds.device
-        batch_size = batch_seeds.shape[0]
+        device = noise.device
+        batch_size = noise.shape[0]
 
         rnd = None
-        points = batch_seeds
+        points = noise
 
         latents = points.float().to(device)
 
-        points = edm_sampler(self, latents, cond, num_steps=num_steps)
+        points = edm_sampler(self, latents, cond, num_steps=num_steps,intermediate=intermediate)
         return points
 
     #@torch.no_grad()
-    def inverse(self, cond=None, samples=None, channels=3, num_steps=18):
-        return inverse_edm_sampler(self, samples, cond, num_steps=num_steps)
+    def inverse(self, cond=None, samples=None, num_steps=18, intermediate=False):
+        return inverse_edm_sampler(self, samples, cond, num_steps=num_steps,intermediate=intermediate)
 
 
 class StackedRandomGenerator:
@@ -98,7 +98,7 @@ class StackedRandomGenerator:
 def edm_sampler(
     net, latents, class_labels=None, randn_like=torch.randn_like,
     num_steps=18, sigma_min=0.002, sigma_max=80, rho=7,
-    S_churn=0, S_min=0, S_max=float('inf'), S_noise=1,
+    S_churn=0, S_min=0, S_max=float('inf'), S_noise=1,intermediate=False,
 ):  
     # disable S_churn
     assert S_churn==0
@@ -136,12 +136,15 @@ def edm_sampler(
             d_prime = (x_next - denoised) / t_next
             x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
         outputs.append((x_next / (1+t_next**2).sqrt()).detach().cpu().numpy())
-    return x_next, outputs
+    if intermediate:
+        return x_next, outputs
+    else:
+        return x_next
 
 def inverse_edm_sampler(
     net, latents, class_labels=None, randn_like=torch.randn_like,
     num_steps=18, sigma_min=0.002, sigma_max=80, rho=7,
-    S_churn=0, S_min=0, S_max=float('inf'), S_noise=1,
+    S_churn=0, S_min=0, S_max=float('inf'), S_noise=1,intermediate = False
 ):  
     # disable S_churn
     assert S_churn==0
@@ -192,7 +195,10 @@ def inverse_edm_sampler(
 
         # outputs.append((x_next / (1+t_next**2).sqrt()).detach().cpu().numpy())
     x_next = x_next / (1+t_next**2).sqrt()
-    return x_next, outputs
+    if intermediate:
+        return x_next, outputs
+    else:
+        return x_next
 
 
 ######################   FLOW MATCHING MODEL   ##########################
