@@ -127,19 +127,11 @@ def get_inline_arg():
 
 def setup_data_loader(args):
     """Set up the data loader based on the input data path."""
-    if any(primitive in args.data_path for primitive in ['sphere', 'plane', 'volume']):
-        data_loader_train = {
-            'obj_file': None,
-            'primitive': args.data_path,
-            'batch_size': args.batch_size,
-            'epoch_size': args.num_points_train // args.batch_size, 
-        }
-    else:
-        data_loader_train = {
-            'obj_file': args.data_path,
-            'batch_size': args.batch_size,
-            'epoch_size': args.num_points_train // args.batch_size,
-        }
+    data_loader_train = {
+        'obj_file': args.data_path,
+        'batch_size': args.batch_size,
+        'epoch_size': args.num_points_train // args.batch_size,
+    }
     return data_loader_train
 
 
