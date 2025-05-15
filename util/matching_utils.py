@@ -152,3 +152,93 @@ class Non_Linear_Map(nn.Module):
         layers.append(nn.Linear(prev_dim, output_dim, bias=bias))
         return nn.Sequential(*layers)
 
+
+
+
+###############  matching functions   
+
+import sys
+sys.path.append('..')
+import numpy as np
+
+from util.plot import start_end_subplot
+
+from model import models, networks
+from model.models import EDMPrecond,FMCond
+from model.networks import MLP,MLP_general
+import trimesh
+from sklearn.neighbors import NearestNeighbors
+from util.mesh_utils import *
+
+device='cuda:0'
+torch.cuda.set_device(device)
+
+
+
+def compute_p2p_with_geomdist(source_input,target_input, source_model, target_model):
+
+
+    with torch.no_grad():
+        emb1_pullback=source_model.inverse(samples=source_input,num_steps=64)
+        sample = target_model.sample(noise=emb1_pullback, num_steps=64)
+    
+    nbrs = NearestNeighbors(n_neighbors=1, algorithm='auto').fit(target_input.cpu().numpy())
+    _, p2p = nbrs.kneighbors(sample.cpu().numpy())
+    p2p=p2p[:,0]
+
+    return p2p
+
+
+def compute_p2p_with_knn_gauss(source_input,target_input, source_model, target_model):
+    with torch.no_grad():
+        emb1_pullback=source_model.inverse(samples=source_input,num_steps=64)
+        emb2_pullback = target_model.inverse(samples= target_input,num_steps=64)
+    
+    nbrs = NearestNeighbors(n_neighbors=1, algorithm='auto').fit(emb2_pullback.cpu().numpy())
+    _, p2p = nbrs.kneighbors(emb1_pullback.cpu().numpy())
+    p2p=p2p[:,0]
+
+    return p2p
+
+
+def compute_p2p_with_knn(source_input,target_input):
+    
+    nbrs = NearestNeighbors(n_neighbors=1, algorithm='auto').fit(target_input.cpu().numpy())
+    _, p2p = nbrs.kneighbors(source_input.cpu().numpy())
+    p2p=p2p[:,0]
+
+    return p2p
+
+from pyFM.mesh import TriMesh
+from pyFM.functional import FunctionalMapping
+
+
+fit_params = {
+    'w_descr': 1e0,
+    'w_lap': 1e-2,
+    'w_dcomm': 1e-1,
+    'w_orient': 0
+}
+
+def compute_p2p_with_fmaps(source_path, target_path, lm_source, lm_target):
+    mesh1= normalize_mesh(trimesh.load(source_path, process=False))
+    mesh2= normalize_mesh(trimesh.load(target_path, process=False))
+
+    mesh1= TriMesh(mesh1.vertices, mesh1.faces).process()
+    mesh2= TriMesh(mesh2.vertices, mesh2.faces).process()
+    
+    
+    process_params = {
+        'n_ev': (20,20),  # Number of eigenvalues on source and Target
+        'landmarks':np.concat([lm_target[None],lm_source[None]],0).T,  # Landmarks
+        'subsample_step': 5,  # In order not to use too many descriptors
+        'descr_type': 'WKS',  # WKS or HKS
+    }
+    model_fm = FunctionalMapping(mesh2,mesh1)
+    model_fm.preprocess(**process_params,verbose=False)
+
+    model_fm.fit(**fit_params, verbose=False)
+
+    p2p = model_fm.get_p2p(n_jobs=1)
+    
+    return p2p

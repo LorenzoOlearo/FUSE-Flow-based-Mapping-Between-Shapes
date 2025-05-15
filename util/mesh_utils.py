@@ -1,6 +1,52 @@
 import numpy as np
 import torch
 import trimesh
+import os
+import networkx as nx
+
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import shortest_path
+from sklearn import neighbors
+from sklearn.manifold import MDS
+
+
+
+def compute_geodesic_distmat(verts, faces):
+    """
+    Compute geodesic distance matrix using Dijkstra algorithm
+
+    Args:
+        verts (np.ndarray): array of vertices coordinates [n, 3]
+        faces (np.ndarray): array of triangular faces [m, 3]
+
+    Returns:
+        geo_dist: geodesic distance matrix [n, n]
+    """
+    NN = 500
+
+    # get adjacency matrix
+    mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=False)
+    vertex_adjacency = mesh.vertex_adjacency_graph
+    assert nx.is_connected(vertex_adjacency), 'Graph not connected'
+    vertex_adjacency_matrix = nx.adjacency_matrix(vertex_adjacency, range(verts.shape[0]))
+    # get adjacency distance matrix
+    graph_x_csr = neighbors.kneighbors_graph(verts, n_neighbors=NN, mode='distance', include_self=False)
+    distance_adj = csr_matrix((verts.shape[0], verts.shape[0])).tolil()
+    distance_adj[vertex_adjacency_matrix != 0] = graph_x_csr[vertex_adjacency_matrix != 0]
+    # compute geodesic matrix
+    geodesic_x = shortest_path(distance_adj, directed=False)
+    if np.any(np.isinf(geodesic_x)):
+        print('Inf number in geodesic distance. Increase NN.')
+    return geodesic_x
+
+
+def compute_geodesic_embedding(verts, faces,k=8):
+    D= compute_geodesic_distmat(verts, faces)
+    mds = MDS(n_components=k, dissimilarity='precomputed')
+    embedding = mds.fit_transform(D)
+
+    return embedding
+
 
 def normalize_mesh(mesh):
     rescale = max(mesh.extents) / 2.
@@ -114,6 +160,66 @@ def compute_geodesic_distances(mesh, source_index):
     
     return distances
 
+import numpy as np
+import scipy.sparse
+import scipy.sparse.linalg
+import robust_laplacian
+def compute_biharmonic_distances(mesh, source_index, num_eigenpairs=50):
+    """
+    Compute biharmonic distances from a source vertex to all other vertices.
+    
+    Parameters:
+    -----------
+    mesh : trimesh.Trimesh
+        The input mesh.
+    source_index : int
+        Index of the source vertex.
+    num_eigenpairs : int
+        Number of eigenpairs to compute (controls approximation quality).
+    
+    Returns:
+    --------
+    distances : np.ndarray
+        Array of biharmonic distances from source to all vertices.
+    """
+    n_vertices = len(mesh.vertices)
+    
+    # Step 1: Build Laplace-Beltrami operator (cotangent weights)
+    L, M = robust_laplacian.mesh_laplacian(np.array(mesh.vertices), np.array(mesh.faces))
+    
+    # Step 2: Solve generalized eigenproblem L x = λ M x
+    evals, evecs = scipy.sparse.linalg.eigsh(
+        A=L,
+        M=M,
+        k=num_eigenpairs + 1,  # +1 to skip the zero eigenvalue
+        sigma=1e-6,            # shift to avoid zero
+        which='LM'             # largest magnitude
+    )
+    
+    # 3) Sort and drop the zero eigenvalue/eigenvector
+    evals = evals[1:]
+    evecs = evecs[:, 1:]
+
+    # 4) Compute the Biharmonic distance formula
+        #    d_bihar(p, s) = sqrt( Σ_i (φ_i(p) - φ_i(s))² / λ_i² )
+    # suppose source_index is a list/array of S indices
+    src_idx = np.atleast_1d(source_index)     # shape (S,)
+    phis     = evecs[src_idx, :]             # shape (S, k)
+    # Now compute diffs as (N, S, k):
+    diffs = evecs[ :, None, :] - phis[None, :, :]  
+    # shape: (N,1,k) - (1,S,k) → (N,S,k)
+
+    # Then weighted square:
+    inv2 = 1.0 / (evals**2)                   # shape (k,)
+    sq   = (diffs**2) * inv2[None, None, :]   # shape (N,S,k)
+
+    # Finally distances: for each source j, distances[:,j] 
+    distances = np.sqrt(sq.sum(axis=2))       # shape (N,S)
+        
+    return distances.T
+
+
+
 
 
 def get_interpolated_feats(mesh, args, device=torch.device('cuda:0')):
@@ -121,7 +227,6 @@ def get_interpolated_feats(mesh, args, device=torch.device('cuda:0')):
     Compute approximate geodesic distances between sampled points and landmarks.
     Fully vectorized implementation without any point-by-point loops.
     """
-    print('interpolating features')
     # Sample points
     samples, face_indices = trimesh.sample.sample_surface(mesh, args.num_points_train)
     samples = samples.astype(np.float32)
@@ -271,11 +376,12 @@ def generate_embeddings(mesh, args, device='cuda'):
         #    samples_tensor = torch.tensor(samples, device=device).float()
         #    embedding_verts=torch.cat([samples_tensor, args.ldmk_geodesic_distances], -1)
         #    embedding = torch.cat([embedding, embedding_verts], dim=0)
-    
+        if args.embedding == 'features_only':
+            embedding = get_interpolated_feats(mesh, args, device=device)
+            embedding=embedding[:,3:]
         elif args.embedding == 'xyz':
             samples, _ = trimesh.sample.sample_surface(mesh, args.num_points_train)
             embedding= torch.tensor(samples, dtype=torch.float32, device=device)
-
     else:
         if args.embedding == 'xyz':
             samples = mesh.vertices
@@ -286,7 +392,7 @@ def generate_embeddings(mesh, args, device='cuda'):
             samples_tensor = torch.tensor(samples, device=device).float()
             embedding_verts=torch.cat([samples_tensor, args.features], -1)
             embedding = torch.cat([embedding, embedding_verts], dim=0)
-
+            
     return embedding
 
 
@@ -314,3 +420,42 @@ def compute_features(mesh,args,device='cuda'):
     if args.features_type == 'landmarks':
         # Get the landmark vertices
         return torch.tensor(compute_geodesic_distances(mesh,source_index=np.array(args.landmarks))).T.to(device)    
+    if args.features_type == 'landmarks_biharmonic':
+        # Get the landmark vertices
+        return torch.tensor(compute_biharmonic_distances(mesh,source_index=np.array(args.landmarks))).T.to(device)    
+    if args.features_type == 'wks':
+        # Get the landmark vertices
+        return torch.tensor(compute_wks(mesh)).to(device)    
+    if args.features_type == 'geodesic':
+        # Get the mds embedding
+        print('Computing MDS embedding')
+        return torch.tensor(compute_geodesic_embedding(mesh.vertices,mesh.faces,k=args.embedding_dim-3)).to(device)
+
+
+
+
+
+def compute_wks(mesh):
+    from geomfum.shape.mesh import TriangleMesh
+    from geomfum.descriptor.spectral import WaveKernelSignature
+    from geomfum.descriptor.pipeline import DescriptorPipeline, ArangeSubsampler
+    from geomfum.laplacian import LaplacianFinder, LaplacianSpectrumFinder
+
+    mesh1_geomfum = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
+    spectrum_finder = LaplacianSpectrumFinder(
+        nonzero=False,
+        fix_sign=False,
+        laplacian_finder=LaplacianFinder.from_registry(which="robust"))
+    eigvals, eigvecs = spectrum_finder(mesh1_geomfum, as_basis=False, recompute=True)
+
+    wks = [
+        WaveKernelSignature.from_registry(n_domain=100),
+        ArangeSubsampler(subsample_step=10),
+        ]
+
+    wks = DescriptorPipeline(wks)
+
+
+    wks1=wks.apply(mesh1_geomfum).T
+    
+    return wks1
