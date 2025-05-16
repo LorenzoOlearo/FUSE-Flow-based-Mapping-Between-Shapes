@@ -384,7 +384,6 @@ def main():
                 raise ValueError(f"Unknown argument in config file: {key}")
             setattr(args, key, value)
 
-    args.embedding_dim = args.embedding_dim[0]
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
         setup_logging(args.output_dir)

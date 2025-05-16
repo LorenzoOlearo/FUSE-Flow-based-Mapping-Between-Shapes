@@ -102,7 +102,7 @@ for source, target in combinations(file_names, 2):
     print(eucl_fm[file_names.index(source), file_names.index(target)])
 
 
-    # Print mean results
+# Print mean results
 print("Mean Geometric Distance:", np.mean(eucl[eucl > 0]))
 print("Mean KNN Distance:", np.mean(eucl_knn[eucl_knn > 0]))
 print("Mean KNN Gaussian Distance:", np.mean(eucl_knn_g[eucl_knn_g > 0]))
