@@ -18,7 +18,7 @@ import numpy as np
 import torch
 import trimesh
 
-from util import lr_decay as misc
+from util import misc
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
 from util.train_utils import setup_logging, initialize_device_and_seed
 from util.mesh_utils import (
