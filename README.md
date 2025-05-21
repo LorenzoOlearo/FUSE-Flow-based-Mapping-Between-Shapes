@@ -12,3 +12,10 @@ In the config, you can modify the features that you want to use and the model. F
 - The features generated at inference
 - The log file
 
+
+To run the main on a dataset, you can run 
+python scripts/run_dataset.py --config configs/matching/faust_ldmk.json
+
+After training on the dataset, test the performance on matching, you can run
+python scripts/matching_scripts.py --config configs/matching/faust_ldmk.json
+
