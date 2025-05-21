@@ -1,9 +1,14 @@
 # FlowMatching4Matching
 
+In this repo, you can find a clean implementation of Geometry Distributions, and a new implementation of a similar representation based on the FlowMatching approach.
+In general, we propose a representation that leverages any feature as input, in particular distances between landmarks.
 
-In this repo, you can finde clean impleemntation of Geometry Distributions, and a new implementation of a similar representation based on FlowMatching approach.
-TO run GeomDist, select --method Geomdist --model EDMPrecond --network Network.
-TO run FM, select --method FM --model FMCond --network MLP.
+to run and create a model, run
+python main.py --config configs/model/config.json
 
-running the main_feat file, you con create a different kind of distribution, in which descriptors based on landmarks are representad, to solve matching.
+In the config, you can modify the features that you want to use and the model. FM will produce Flow matching trajectories, while Geomdist will use EDM trajectories. This code will produce a folder in which we store:
+- The checkpoints of the model that warp the Gaussian into features.
+- The features onto which the learning has been computed.
+- The features generated at inference
+- The log file
 
