@@ -3,6 +3,7 @@ import plotly.graph_objects as go
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 from plotly.subplots import make_subplots
+import numpy as np
 
 
 
@@ -198,3 +199,124 @@ def start_end_subplot_volume(x_0, x_1_estimated, run_name, plots_path, show=Fals
        
     fig.write_html(f'{plots_path}/{run_name}_radius.html')
     fig.write_image(f'{plots_path}/{run_name}_radius.png')
+    
+def create_colormap(VERT):
+    """
+    Creates a uniform color map on a mesh
+
+    Args:
+        VERT (Nx3 ndarray): The vertices of the object to plot
+
+    Returns:
+        Nx3: The RGB colors per point on the mesh
+    """
+    VERT = np.double(VERT)
+    minx = np.min(VERT[:, 0])
+    miny = np.min(VERT[:, 1])
+    minz = np.min(VERT[:, 2])
+    maxx = np.max(VERT[:, 0])
+    maxy = np.max(VERT[:, 1])
+    maxz = np.max(VERT[:, 2])
+    colors = np.stack(
+        [
+            ((VERT[:, 0] - minx) / (maxx - minx)),
+            ((VERT[:, 1] - miny) / (maxy - miny)),
+            ((VERT[:, 2] - minz) / (maxz - minz)),
+        ]
+    ).transpose()
+    return colors
+
+def to_rgb_strings(v):
+    """
+    Converts an (N,3) RGB array in [0,1] to Plotly-compatible 'rgb(r,g,b)' strings
+    """
+    v = np.clip(v, 0, 1)  # ensure in [0,1]
+    v8 = (v * 255).astype(np.uint8)
+    return [f"rgb({r},{g},{b})" for r, g, b in v8]
+
+
+    
+def source_target_plot(source, source_v, target, target_v,
+                              run_name='Source vs Target RGB',
+                              plots_path='./', show=True):
+    """
+    Plots source and target point clouds side by side, coloring points by their RGB values.
+    Args:
+        source: (N, 3) numpy array or tensor of source points
+        source_v: (N, 3) numpy array or tensor of RGB values for source, values in [0,1]
+        target: (M, 3) numpy array or tensor of target points
+        target_v: (M, 3) numpy array or tensor of RGB values for target, values in [0,1]
+        run_name: name for saving the plot
+        plots_path: directory to save the plot
+        show: whether to display the plot
+    """
+
+    # Convert to numpy if needed
+    if hasattr(source, 'cpu'): source = source.cpu().numpy()
+    if hasattr(source_v, 'cpu'): source_v = source_v.cpu().numpy()
+    if hasattr(target, 'cpu'): target = target.cpu().numpy()
+    if hasattr(target_v, 'cpu'): target_v = target_v.cpu().numpy()
+
+    # Prepare RGB color lists
+    #def to_rgb_strings(v):
+        # v is (N,3), values in [0,1]
+    #    v = np.clip(v, 0, 1)
+        # scale to 0-255 ints
+    #    v8 = (v * 255).astype(np.int32)
+    #    return [f"rgb({r},{g},{b})" for r, g, b in v8]
+
+    source_colors = to_rgb_strings(source_v) if source_v.ndim == 2 and source_v.shape[1] == 3 else None
+    target_colors = to_rgb_strings(target_v) if target_v.ndim == 2 and target_v.shape[1] == 3 else None
+
+    # Create subplots
+    fig = make_subplots(
+        rows=1, cols=2,
+        specs=[[{'type': 'scatter3d'}, {'type': 'scatter3d'}]],
+        subplot_titles=("Source", "Target")
+    )
+
+    # Add traces
+    fig.add_trace(
+        go.Scatter3d(
+            x=source[:, 0], y=source[:, 1], z=source[:, 2],
+            mode='markers',
+            marker=dict(
+                size=3,
+                color=source_colors if source_colors is not None else source_v,
+                colorscale=None if source_colors is not None else 'Plasma',
+                showscale=False if source_colors is not None else True,
+            ),
+            name='Source'
+        ),
+        row=1, col=1
+    )
+
+    fig.add_trace(
+        go.Scatter3d(
+            x=target[:, 0], y=target[:, 1], z=target[:, 2],
+            mode='markers',
+            marker=dict(
+                size=3,
+                color=target_colors if target_colors is not None else target_v,
+                colorscale=None if target_colors is not None else 'Plasma',
+                showscale=False if target_colors is not None else True,
+            ),
+            name='Target'
+        ),
+        row=1, col=2
+    )
+
+    # Layout
+    fig.update_layout(
+        scene=dict(xaxis_title='X', yaxis_title='Y', zaxis_title='Z'),
+        scene2=dict(xaxis_title='X', yaxis_title='Y', zaxis_title='Z'),
+        title=run_name,
+        width=1800,
+        height=800
+    )
+
+    # Show and save
+    if show:
+        fig.show()
+    fig.write_html(f'{plots_path}/{run_name}_rgb.html')
+    fig.write_image(f'{plots_path}/{run_name}_rgb.png')
