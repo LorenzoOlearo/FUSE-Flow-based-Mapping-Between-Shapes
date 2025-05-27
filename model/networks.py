@@ -372,7 +372,7 @@ class MLP_3D(nn.Module):
 
 
 class MLP(nn.Module):
-    """MLP 3D+time+features with Swish activations."""
+    """MLP time+features with Swish activations."""
 
     def __init__(
         self,
@@ -385,7 +385,7 @@ class MLP(nn.Module):
         self.input_dim = channels
         self.hidden_dim = hidden_size
         self.ff_module = FourierFeatsEncoding(
-            in_dim=4, num_frequencies=6, include_input=True
+            in_dim=channels + 1, num_frequencies=6, include_input=True
         )
         self.fourier_dim = ((channels + 1) * 6 * 2) + (channels + 1)
         self.rff_module = nn.Identity()
