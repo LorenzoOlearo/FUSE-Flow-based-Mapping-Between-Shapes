@@ -204,12 +204,19 @@ def get_inline_arg():
     parser.add_argument(
         "--features",
         default=None,
-        type=float,
+        type=str,
         nargs="+",
         help="dimension of the features",
     )
     parser.add_argument(
         "--features_type", default="xyz", type=str, help="path to the features file"
+    )
+
+    parser.add_argument(
+            "--features_path", 
+            default=None,
+            type=str,
+            help="Path to the features file"
     )
 
     args = parser.parse_args()
@@ -224,6 +231,7 @@ def setup_data_loader(args):
         "batch_size": args.batch_size,
         "epoch_size": args.num_points_train // args.batch_size,
     }
+    print(f"Data path: {args.data_path}")
     return data_loader_train
 
 
@@ -302,7 +310,8 @@ def train_one_epoch(
     if isinstance(data_loader, dict):
         batch_size = data_loader["batch_size"]
         data_loader = range(data_loader["epoch_size"])
-        y = generate_embeddings(mesh, args, device)
+        # y = generate_embeddings(mesh, args, device)
+        y = args.features
 
     if args.verbose:
         iterator = metric_logger.log_every(data_loader, print_freq, header)
@@ -411,12 +420,20 @@ def train(args, device):
     else:
         mesh.vertices = pc_normalize(mesh.vertices)
     # compute features
-    if args.features is None:
-        args.features = compute_features(mesh, args, device)
-        np.savetxt(
-            os.path.join(args.output_dir, "features.txt"),
-            args.features.detach().cpu().numpy(),
-        )
+    # if args.features is None:
+    #     args.features = compute_features(mesh, args, device)
+    #     np.savetxt(
+    #         os.path.join(args.output_dir, "features.txt"),
+    #         args.features.detach().cpu().numpy(),
+    #     )
+
+    if args.features_path is not None:
+        args.features = torch.tensor(
+            np.loadtxt(args.features_path, dtype=np.float32)
+        ).to(device)
+    else:
+        print("exiting, no features path provided")
+        sys.exit(1)
 
     logging.info(f"Start training for {args.epochs} epochs")
     start_time = time.time()
