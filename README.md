@@ -65,6 +65,36 @@ python scripts/matching_scripts.py --config configs/matching/faust_ldmk.json
 
 ---
 
+### Utilities
+
+#### **SDF Training**
+
+Given a mesh file, you can train a neural Signed Distance Function (SDF) model.
+Optionally, if landmark indices are available, the script can also convert mesh
+landmark coordinates to the SDF volume grid.
+
+To train an SDF model from a mesh located in the ```./data directory```, run:
+
+```bash
+python scripts/train_SDF.py --filename <MESH_FILE IN ./data>
+```
+
+To use a mesh file from a custom path, use the ```--path``` argument:
+
+```bash
+python scripts/train_SDF.py --path /path/to/mesh.ply
+```
+
+Output:
+
+- The trained SDF model will be saved as ```<FILENAME>-SDF.pth``` in the
+```./out/SDFs directory```.
+
+- If landmark indices are provided, a corresponding
+```<FILENAME>-landmark-voxels.ply``` file will also be saved, containing
+landmark coordinates transformed into the SDF volume grid.
+
+
 ## 📁 Repository Structure
 
 ```

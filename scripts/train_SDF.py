@@ -10,7 +10,7 @@ import os
 import argparse
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Dict, Literal, Optional, Set, Tuple, Type
+from typing import Any, Dict, Literal, Optional, Set, Tuple, Type, List
 
 import mcubes
 import numpy as np
@@ -32,6 +32,7 @@ min_coord: float = -1.0
 max_coord: float =  1.0
 resolution: int = 512
 chunk: int = 65536
+landmarks_indices: List[Int] = [412, 5891,6593,3323,2119]
 
 h = (max_coord - min_coord) / (resolution - 1)  # Voxel Sparcing
 EPSILON = 2 * h
@@ -225,6 +226,7 @@ class MeshDataConfig:
     local_noise_scale: float = 0.05
     device: str = 'cuda:1'
 
+
     @property
     def file(self) -> Path:
         if self.path is not None:
@@ -236,18 +238,18 @@ class MeshDataConfig:
 
 class MeshData:
     def __init__(self, config: MeshDataConfig):
-        mesh = trimesh.load(config.file, force='mesh')
-        verts = torch.tensor(mesh.vertices, dtype=torch.float32)
-        faces = torch.tensor(mesh.faces, dtype=torch.long)
+        self.mesh = trimesh.load(config.file, force='mesh')
+        self.verts = torch.tensor(self.mesh.vertices, dtype=torch.float32)
+        self.faces = torch.tensor(self.mesh.faces, dtype=torch.long)
 
         # Center and normalize the mesh
-        centroid = torch.tensor(mesh.centroid, dtype=torch.float32)
-        verts -= centroid
-        verts /= verts.abs().max()
-        verts *= 0.8
+        centroid = torch.tensor(self.mesh.centroid, dtype=torch.float32)
+        self.verts -= centroid
+        self.verts /= self.verts.abs().max()
+        self.verts *= 0.8
 
         # Store geometry as batched Kaolin mesh
-        self.geometry = kal.rep.SurfaceMesh(verts, faces).to_batched().to(config.device)
+        self.geometry = kal.rep.SurfaceMesh(self.verts, self.faces).to_batched().to(config.device)
 
         self.device = config.device
         self.surf_sample = config.surf_sample
@@ -257,6 +259,7 @@ class MeshData:
 
         self.domain = torch.tensor([[-1, -1, -1], [1, 1, 1]], dtype=torch.float32).to(config.device)
         self.dataset = MeshDataset(self)
+
 
 
 class MeshDataset(Dataset):
@@ -291,6 +294,7 @@ class MeshDataset(Dataset):
             'normal_sample': normals,
             'space_sample': space_pts
         }
+
 
 
 @dataclass
@@ -420,7 +424,6 @@ def compute_gradient(inputs: Tensor, outputs: Tensor) -> Tensor:
                  only_inputs=True)[0]
     return grads
 
-from tqdm import tqdm
 
 def detach_model(m: nn.Module):
     for p in m.parameters():
@@ -436,6 +439,15 @@ def make_volume(device):
     )
     xx, yy, zz = torch.meshgrid(steps, steps, steps, indexing="ij")
     return torch.vstack([xx.ravel(), yy.ravel(), zz.ravel()]).T.float()
+
+
+def world_to_grid(coord, min_coord, max_coord, resolution):
+    """
+    Maps a world-space point to voxel index space.
+    """
+    normalized = (coord - min_coord) / (max_coord - min_coord)
+    index = normalized * (resolution - 1)
+    return np.round(index).astype(int)
 
 
 @torch.no_grad()
@@ -534,9 +546,8 @@ def train(config: MeshDataConfig):
             total_loss.backward()
             optimizer.step()
 
-        out_dir = Path('out/SDFs')
-        out_dir.mkdir(parents=True, exist_ok=True)
-        torch.save(sdf_model.state_dict(), out_dir / f'SDF-{config.file.stem}.pth')
+        sdf_path = f'out/SDFs/{config.file.stem}-SDF.pth'
+        torch.save(sdf_model.state_dict(), sdf_path)
 
 
 def eval(config: MeshDataConfig):
@@ -544,12 +555,26 @@ def eval(config: MeshDataConfig):
     mlp_cfg = MLPConfig()
     sdf_model = MLP(mlp_cfg).to(device)
 
-    sdf_path = Path('out/SDFs') / f'SDF-{config.file.stem}.pth'
+    sdf_path = Path('out/SDFs') / f'{config.file.stem}-SDF.pth'
     sdf_model.load_state_dict(torch.load(sdf_path))
     sdf = evaluate_model(sdf_model, make_volume(device))
 
+    mesh_data = MeshData(config)
+
+    landmarks_voxels = []
+    if landmarks_indices is not None and len(landmarks_indices) > 0:
+        landmarks_vertices = mesh_data.verts[landmarks_indices]
+        for landmark_vertex in landmarks_vertices:
+            landmark_vertex = landmark_vertex.cpu().numpy()
+            voxel_index = world_to_grid(landmark_vertex, min_coord, max_coord, resolution)
+            print(f"> Landmark vertex {landmark_vertex} mapped to voxel index {voxel_index}")
+            landmarks_voxels.append(voxel_index)
+        landmarks_voxels_path = f'out/SDFs/{mesh_config.file.stem}-landmarks-voxels.npy'
+        np.save(landmarks_voxels_path, landmarks_voxels)
+        print(f"Landmarks voxel indices saved to {landmarks_voxels_path}")
+
     verts, faces = extract_mesh(sdf, resolution=resolution, level=0.0)
-    plot_mesh(verts, faces, save_path=f'out/SDFs/SDF-{config.file.stem}')
+    plot_mesh(verts, faces, save_path=f'out/SDFs/{config.file.stem}-plot')
     print(f"Extracted mesh with {len(verts)} vertices and {len(faces)} faces.")
     print(f"Mesh plot saved to out/SDFs/SDF-{config.file.stem}.html")
 
@@ -566,7 +591,6 @@ if __name__ == "__main__":
     )
 
     print(f"Using mesh file: {mesh_config.file}")
-
     print("Starting SDF training...")
     train(mesh_config)
     print("Training completed.")
