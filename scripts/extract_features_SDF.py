@@ -376,8 +376,12 @@ def main(args):
 
     target = args.target
 
-    sdf_path: Path = Path(f'./out/SDFs/{target}-SDF.pth')
-    landmarks_path = Path(f'./out/SDFs/{target}-landmarks-voxels.npy')
+    sdf_path: Path = Path(f'./out/SDFs/{target}/{target}-SDF.pth')
+    landmarks_path = Path(f'./out/SDFs/{target}/{target}-landmarks-voxels.npy')
+
+    print(f"Target: {target}")
+    print(f"SDF path: {sdf_path}")
+    print(f"Landmarks path: {landmarks_path}")
 
     # TODO: make this configurable
     if mesh_comparison:
@@ -421,11 +425,12 @@ def main(args):
                 save_path=f"out/{target}-geodesic-dijkstra-landmark-{i}"
             )
        
-        save_path = f"out/{target.split}"
-        if mesh_comparison:
+        save_path = f"out/SDFs/{target}/{target}-geodesic-comparison-landmark-{i}"
+        os.makedirs(Path(save_path), exist_ok=True)
+        if mesh_comparison == True:
             geo_dists = compute_mesh_geodesic_distances(mesh, landmarks_indices[i])
             geo_dists /= geo_dists.max()
-            plot_geodesic_comparison(mesh.vertices, mesh.faces, geo_dists, geo_dists_dijkastra, save_path=f"{save_path}-geodesic-comparison-landmark-{i}")
+            plot_geodesic_comparison(mesh.vertices, mesh.faces, geo_dists, geo_dists_dijkastra, save_path=save_path)
     
     neural_sdf_cfg = NeuralSDFConfig()
     neural_sdf = NeuralSDF(config=neural_sdf_cfg, network=sdf_model)
@@ -455,8 +460,8 @@ def main(args):
             save_path=f"out/{target}-sdf-dijkstra-sampled-points"
         )
         
-    os.makedirs("out/features", exist_ok=True)
-    np.savetxt(f"out/features/{target}-sdf-dijkstra-features.txt", dists_sampled, fmt='%.6f')
+    os.makedirs("out/SDFs/{target}", exist_ok=True)
+    np.savetxt(f"out/SDFs/{target}/{target}-sdf-dijkstra-features.txt", dists_sampled, fmt='%.6f')
     
 
 if __name__ == "__main__":
@@ -467,5 +472,7 @@ if __name__ == "__main__":
     parser.add_argument('--num_points', type=int, default=100000, help="Number of points to sample on the zero level set of the SDF")
 
     args = parser.parse_args()
+
+    print(f"Arguments: {args}")
 
     main(args)

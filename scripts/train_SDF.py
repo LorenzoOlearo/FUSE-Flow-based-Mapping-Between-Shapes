@@ -35,7 +35,7 @@ resolution: int = 512
 chunk: int = 65536
 landmarks_indices: List[Int] = [412, 5891,6593,3323,2119]
 
-h = (max_coord - min_coord) / (resolution - 1)  # Voxel Sparcing
+h = (max_coord - min_coord) / (resolution - 1) # Voxel spacing
 EPSILON = 2 * h
 
 
@@ -692,7 +692,9 @@ def train(config: MeshDataConfig):
             total_loss.backward()
             optimizer.step()
 
-        sdf_path = f'out/SDFs/{config.file.stem}-SDF.pth'
+        os.makedirs('out/SDFs', exist_ok=True)
+        os.makedirs(f'out/SDFs/{config.file.stem}', exist_ok=True)
+        sdf_path = f'out/SDFs/{config.file.stem}/{config.file.stem}-SDF.pth'
         torch.save(sdf_model.state_dict(), sdf_path)
 
 
@@ -701,7 +703,7 @@ def eval(config: MeshDataConfig):
     mlp_cfg = MLPConfig()
     sdf_model = MLP(mlp_cfg).to(device)
 
-    sdf_path = Path('out/SDFs') / f'{config.file.stem}-SDF.pth'
+    sdf_path = f'out/SDFs/{config.file.stem}/{config.file.stem}-SDF.pth'
     sdf_model.load_state_dict(torch.load(sdf_path))
     sdf = evaluate_model(sdf_model, make_volume(device))
 
@@ -715,14 +717,16 @@ def eval(config: MeshDataConfig):
             voxel_index = world_to_grid(landmark_vertex, min_coord, max_coord, resolution)
             print(f"> Landmark vertex {landmark_vertex} mapped to voxel index {voxel_index}")
             landmarks_voxels.append(voxel_index)
-        landmarks_voxels_path = f'out/SDFs/{mesh_config.file.stem}-landmarks-voxels.npy'
-        np.save(landmarks_voxels_path, landmarks_voxels)
-        print(f"Landmarks voxel indices saved to {landmarks_voxels_path}")
+        landmarks_path = f'out/SDFs/{config.file.stem}/{config.file.stem}'
+        np.save(f'{landmarks_path}-landmarks-voxels.npy', landmarks_voxels)
+        np.save(f'{landmarks_path}-landmarks-vertices.npy', landmarks_vertices.cpu().numpy())
+        print(f"Landmarks voxel indices saved to {landmarks_path}-landmarks-voxels.npy")
+        print(f"Landmarks vertices saved to {landmarks_path}-landmarks-vertices.npy")
 
     verts, faces = extract_mesh(sdf, resolution=resolution, level=0.0)
-    plot_mesh(verts, faces, save_path=f'out/SDFs/{config.file.stem}-plot')
+    plot_mesh(verts, faces, save_path=f'out/SDFs/{config.file.stem}/SDF-{config.file.stem}')
     print(f"Extracted mesh with {len(verts)} vertices and {len(faces)} faces.")
-    print(f"Mesh plot saved to out/SDFs/SDF-{config.file.stem}.html")
+    print(f"Mesh plot saved to out/SDFs/{config.file.stem}/SDF-{config.file.stem}.html")
 
 
 if __name__ == "__main__":
