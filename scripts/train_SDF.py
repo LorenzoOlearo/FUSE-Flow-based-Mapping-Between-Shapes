@@ -686,7 +686,7 @@ def train(config: MeshDataConfig):
             total_loss = sum(loss_dict.values())
 
             if epoch % 100 == 0:
-                tqdm.write(f"Epoch {epoch}, Losses: " + ", ".join(f"{k}: {v.item():.6f}" for k, v in loss_dict.items()))
+                tqdm.write(f"> Epoch {epoch}, Losses: " + ", ".join(f"{k}: {v.item():.6f}" for k, v in loss_dict.items()))
 
             optimizer.zero_grad()
             total_loss.backward()
@@ -733,17 +733,42 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train and evaluate SDF model on mesh")
     parser.add_argument('--filename', type=str, help="Filename in ./data directory")
     parser.add_argument('--path', type=str, help="Full path to mesh file")
+    parser.add_argument('--all', action='store_true', help="Train a neural SDF on all meshes in the provided path")
+    parser.add_argument('--eval', action='store_true', help="Evaluate the SDF model and plot the extracted mesh")
     args = parser.parse_args()
 
-    mesh_config = MeshDataConfig(
-        filename=args.filename if args.path is None else None,
-        path=Path(args.path) if args.path is not None else None
-    )
+    for arg in vars(args):
+            print(f"{arg}: {getattr(args, arg)}")
 
-    print(f"Using mesh file: {mesh_config.file}")
-    print("Starting SDF training...")
-    train(mesh_config)
-    print("Training completed.")
-    print("Starting SDF evaluation...")
-    eval(mesh_config)
-    print("Done.")
+    if args.all is not None and args.path is not None:
+        for i, mesh_file in enumerate(os.listdir(args.path)):
+            if mesh_file.endswith('.off') or mesh_file.endswith('.ply'):
+                args.filename = mesh_file
+                n_files = len([f for f in os.listdir(args.path) if f.endswith('.off') or f.endswith('.ply')])
+                print(f"{i+1}/{n_files}: Training on {args.filename} at {args.path}")
+                file_path = os.path.join(args.path, mesh_file)
+
+                mesh_config = MeshDataConfig(
+                    filename=args.filename,
+                    path=Path(file_path)
+                )
+                print(f"Using mesh file: {mesh_config.file}")
+                print("Starting SDF training...")
+                train(mesh_config)
+                if args.eval:
+                    print("Starting SDF evaluation...")
+                    eval(mesh_config)
+                print("Done.")
+    elif args.all is not None and args.path is None:
+        print("Please provide a path to the mesh files with --path argument.")
+        exit(1)
+    else:
+        mesh_config = MeshDataConfig(
+            filename=args.filename if args.filename is not None else None,
+            path=Path(args.path) if args.path is not None else None
+        )
+        train(mesh_config)
+        print("Training completed.")
+        print("Starting SDF evaluation...")
+        eval(mesh_config)
+        print("Done.")
