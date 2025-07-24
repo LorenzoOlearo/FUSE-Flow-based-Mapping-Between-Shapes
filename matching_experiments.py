@@ -1,9 +1,13 @@
 import os
+from pathlib import Path
+from typing import List
+import argparse
+import csv
 import numpy as np
 import torch
 import trimesh
-from itertools import combinations
-from sklearn.neighbors import NearestNeighbors
+import matplotlib.colors as mcolors
+
 from util.matching_utils import (
     compute_p2p_with_geomdist,
     compute_p2p_with_knn_gauss,
@@ -13,13 +17,13 @@ from util.matching_utils import (
 from util.mesh_utils import normalize_mesh
 from model.models import FMCond
 from model.networks import MLP
+from util.plot import start_end_subplot
 
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import trimesh
-import matplotlib.colors as mcolors
-
-from util.plot import plot_points, start_end_subplot
+SDFs_PATH = Path('./out/SDFs')
+FAUST_PATH = Path('./data/MPI-FAUST/training/registrations/')
+N_LANDMARKS = 5
+FLOWS_PATH = Path('./out/flows')
+MATCHING_PATH = Path('./out/matching')
 
 
 def create_rgb_colormap(points):
@@ -35,53 +39,125 @@ def create_rgb_colormap(points):
     return colors_hex 
 
 
-def main():
-    device = 'cuda:1'
-    torch.cuda.set_device(device)
-
-    source = 'tg_reg_000.off'
-    target = 'tg_reg_009.off'
-
-    source = './data/MPI-FAUST/test/scans/test_scan_000.ply'
-    target = './data/MPI-FAUST/test/scans/test_scan_009.ply'
-
-    print(source, target)
-    lm = np.array([412, 5891, 6593, 3323, 2119])
-
-    # Load features
-    source_features = torch.tensor(np.loadtxt(f'./out/SDFs/tr_reg_000/tr_reg_000-sdf-dijkstra-features.txt').astype(np.float32)).to(device)
-    target_features = torch.tensor(np.loadtxt(f'./out/SDFs/tr_reg_009/tr_reg_009-sdf-dijkstra-features.txt').astype(np.float32)).to(device)
-
-    # Load models
-    source_model = FMCond(channels=len(lm), network=MLP(channels=len(lm)).to(device))
-    target_model = FMCond(channels=len(lm), network=MLP(channels=len(lm)).to(device))
-    source_model.load_state_dict(torch.load('./out/flows/tr_reg_000/checkpoint-9999.pth', weights_only=False)['model'], strict=True)
-    target_model.load_state_dict(torch.load('./out/flows/tr_reg_009/checkpoint-9999.pth', weights_only=False)['model'], strict=True)
-    source_model.to(device)
-    target_model.to(device)
-    source_model.eval()
-    target_model.eval()
-
-    source_points = torch.tensor(np.loadtxt(f'./out/SDFs/tr_reg_000/tr_reg_000-sdf-sampled-points.txt').astype(np.float32)).to(device)
-    target_points = torch.tensor(np.loadtxt(f'./out/SDFs/tr_reg_009/tr_reg_009-sdf-sampled-points.txt').astype(np.float32)).to(device)
+def normalize_mesh(mesh):
+    rescale = max(mesh.extents) / 2.
+    tform = [
+        -(mesh.bounds[1][i] + mesh.bounds[0][i]) / 2.
+        for i in range(3)
+    ]
+    matrix = np.eye(4)
+    matrix[:3, 3] = tform
+    mesh.apply_transform(matrix)
+    matrix = np.eye(4)
+    matrix[:3, :3] /= rescale
+    mesh.apply_transform(matrix)
     
+    return mesh
+
+
+def is_in_range(name):
+    try:
+        num = int(''.join(filter(str.isdigit, name)))
+        return 80 <= num <= 100
+    except ValueError:
+        return False
+
+
+def get_targets() -> List[str]:
+    """Determine which targets to process based on CLI arguments."""
+    targets = [
+        f.name for f in SDFs_PATH.iterdir() if f.is_dir() and
+        any(child.name.endswith('-features.txt') for child in f.iterdir()) and
+        (FLOWS_PATH / f.name / 'checkpoint-9999.pth').is_file() and
+        is_in_range(f.name)
+    ]
+    print(f"Processing all targets: {targets}")
+    return targets
+
+
+def process_element(element:str, device: str, mesh_baseline: bool):
+    mesh_path = Path(FAUST_PATH, element + '.ply')
+    mesh = trimesh.load(mesh_path, process=False)
+    mesh = normalize_mesh(mesh)
+
+    if mesh_baseline is False:
+        features_path = Path(SDFs_PATH, element, f'{element}-sdf-dijkstra-features.txt')
+        points_path = Path(SDFs_PATH, element, f'{element}-sdf-sampled-points.txt')
+        points = torch.tensor(np.loadtxt(points_path).astype(np.float32)).to(device)
+    else:
+        features_path = Path(SDFs_PATH, element, f'{element}-sdf-mesh-dists.txt')
+        points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
+
+    features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
+
+    model = FMCond(channels=N_LANDMARKS, network=MLP(channels=N_LANDMARKS).to(device))
+    model.load_state_dict(torch.load(Path(FLOWS_PATH, element, 'checkpoint-9999.pth'), weights_only=False)['model'], strict=True)
+    model.to(device)
+    model.eval()
+
+    return features, points, model
+
+
+def process_pair(source: str, target: str, device, mesh_baseline: bool, plot_html: bool, plot_png: bool):
+    source_features, source_points, source_model = process_element(source, device, mesh_baseline)
+    target_features, target_points, target_model = process_element(target, device, mesh_baseline)
+
     p2p = compute_p2p_with_geomdist(source_features, target_features, source_model, target_model)
-    # p2p = compute_p2p_with_knn(source_features, target_features)
-    target_points = target_points[p2p]
-    
+    matched_points = target_points[p2p]
+
+    err = torch.norm(matched_points - target_points, dim=-1).mean().item()
+    print(f"Flow inversion error {source} -> {target}: {err:.4f}")
+
     source_points = source_points[:100000]
     target_points = target_points[:100000]
 
+    os.makedirs(MATCHING_PATH, exist_ok=True)
     start_end_subplot(
-        source_points, target_points,
-        plots_path='./out',
-        run_name=f'matching',
-        show=False
+        source_points, matched_points,
+        plots_path=str(MATCHING_PATH),
+        run_name=f'matching{source}-{target}',
+        show=False,
+        html=plot_html,
+        png=plot_png,
     )
 
-    print(f"saved to ./out/sdf-flow-{source}_{target}.html")
+    return err
 
+
+def main(args):
+    device = 'cuda:1'
+    torch.cuda.set_device(device)
+    mesh_baseline = args.mesh_baseline
+
+    targets = get_targets()
+
+    err_flow_inversion = {}
+    for source in targets:
+        for target in targets:
+            if source == target:
+                continue
+            print(f"Processing {source} -> {target}")
+            err = process_pair(source, target, device, mesh_baseline, args.plot_html, args.plot_png)
+            err_flow_inversion[(source, target)] = err
+
+    with open(f'{MATCHING_PATH}/err_flow_inversion.csv', 'w+', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['source', 'target', 'error'])
+        for (source, target), err in err_flow_inversion.items():
+            writer.writerow([source, target, err])
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Train and evaluate SDF model on mesh")
+    parser.add_argument('--mesh_baseline', action='store_true', help="Use the mesh vertices features instead of randomly sampled points", default=False)
+    parser.add_argument('--plot_png', action='store_true', help="Save a PNG plot of the matching", default=False)
+    parser.add_argument('--plot_html', action='store_true', help="Save an HTML plot of the matching", default=False)
+
+    args = parser.parse_args()
+
+    print("------------------------------------------")
+    for arg in vars(args):
+        print(f"{arg}: {getattr(args, arg)}")
+    print("------------------------------------------")
+
+    main(args)
