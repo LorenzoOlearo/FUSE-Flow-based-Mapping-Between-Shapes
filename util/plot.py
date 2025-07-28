@@ -1,9 +1,10 @@
 import os
+import torch
+import numpy as np
 import plotly.graph_objects as go
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 from plotly.subplots import make_subplots
-import numpy as np
 
 
 
@@ -45,9 +46,9 @@ def plot_target(filename, points, plots_path, show=False):
     fig.write_image(f'{plots_path}/{filename}.png')
 
 
-def start_end_subplot(x_0, x_1_estimated, run_name='Title', plots_path='./', show=False):
+def start_end_subplot(x_0, x_1_estimated, run_name='Title', plots_path='./', show=False, html=False, png=False):
     x_0 = x_0.cpu().numpy()
-    x_1_estimated = x_1_estimated#.cpu().numpy()
+    x_1_estimated = x_1_estimated.cpu().numpy()
     
     fig = make_subplots(rows=1, cols=2, specs=[[{'type': 'scatter3d'}, {'type': 'scatter3d'}]], subplot_titles=("Source (x_0)", "Estimated (x_T)"))
     colors_hex = create_rgb_colormap(x_0)
@@ -84,12 +85,14 @@ def start_end_subplot(x_0, x_1_estimated, run_name='Title', plots_path='./', sho
         scene=dict(
             xaxis_title='X',
             yaxis_title='Y',
-            zaxis_title='Z'
+            zaxis_title='Z',
+            aspectmode='data'
         ),
         scene2=dict(
             xaxis_title='X',
             yaxis_title='Y',
-            zaxis_title='Z'
+            zaxis_title='Z',
+            aspectmode='data'
         ),
         title=run_name,
         width=1800,
@@ -98,12 +101,13 @@ def start_end_subplot(x_0, x_1_estimated, run_name='Title', plots_path='./', sho
     
     if show: fig.show()
        
-    fig.write_html(f'{plots_path}/{run_name}.html')
-    fig.write_image(f'{plots_path}/{run_name}.png')
+    if html: fig.write_html(f'{plots_path}/{run_name}.html')
+    if png: fig.write_image(f'{plots_path}/{run_name}.png')
     
     
 def plot_points(points, run_name, plots_path, title, show=False):
-    points = points.cpu().numpy()
+    if isinstance(points, torch.Tensor):
+        points = points.cpu().numpy()
     
     colors_hex = create_rgb_colormap(points)
     fig = go.Figure()
