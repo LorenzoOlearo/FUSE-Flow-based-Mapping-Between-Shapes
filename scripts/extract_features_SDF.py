@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import argparse
+import re
 
 from typing import List, Tuple, Optional
 
@@ -392,6 +393,13 @@ def get_targets(args) -> List[str]:
             any(child.name.endswith('-landmarks-voxels.npy') for child in f.iterdir())
         ]
         print(f"Processing all targets: {targets}")
+    elif args.test:
+        targets = [
+            f.name for f in sdf_dir.iterdir() if f.is_dir() and
+            any(child.suffix == '.pth' for child in f.iterdir()) and
+            any(child.name.endswith('-landmarks-voxels.npy') for child in f.iterdir()) and
+            (not args.test or any(80 <= int(num) <= 99 for num in re.findall(r'\d+', f.name)))
+        ]
     elif args.target:
         targets = [args.target]
     else:
@@ -425,8 +433,12 @@ def compute_voxel_geodesics(surface_mask, landmarks, h, eps, target: str, additi
     for i, src_vox in enumerate(landmarks):
         print(f"Landmark {i}: {src_vox}")
         geo_dist = geodesic_dijkastra(surface_mask, src_vox, h=h)
-        geo_dist /= geo_dist.max()
-        dists.append(geo_dist)
+        if geo_dist.max() == 0:
+            print(f"Warning: Landmark {i} has no reachable voxels, exiting.")
+            exit(1)
+        else:
+            geo_dist /= geo_dist.max()
+            dists.append(geo_dist)
 
         if additional_plots is True:
             plot_points(
@@ -540,6 +552,7 @@ if __name__ == "__main__":
     parser.add_argument('--additional_plots', action='store_true', default=False, help="Plot the volume of sampled points, plot the volume of voxelized points, plot the geodesic distances between these points and the landmarks")
     parser.add_argument('--num_points', type=int, default=100000, help="Number of points to sample on the zero level set of the SDF")
     parser.add_argument('--all', action='store_true', help="Sample and extract features for all [off/ply] file in the target directory")
+    parser.add_argument('--test', action='store_true', help="Sample and extract features only from the last 20 targets (80-99) in the out/SDFs directory")
     parser.add_argument('--mesh_path', type=str, default=None, help="Path to the target mesh file to be processed")
     parser.add_argument('--mesh_folder', type=str, default=None, help="Folder containing the target mesh files to be processed. If not provided, will use the default out/SDFs directory.")
     parser.add_argument('--extension', type=str, default='ply', help="File extension of the target mesh files (default: 'ply')")
