@@ -2,21 +2,35 @@ import os
 import json
 import subprocess
 import argparse
+import re
 
 from pathlib import Path
 from typing import List
-
 
 OUTPUT_DIR = Path('./out/flows')
 SDF_DIR = Path('./out/SDFs')
 FAUST_DIR = Path('./data/MPI-FAUST/training/registrations')
 
 
-def get_targets(overwrite) -> List[str]:
+def get_targets(overwrite, test) -> List[str]:
     """Process all SDFs on which mesh vertex distances have been computed"""
-    if overwrite == True:
+    if overwrite and test:
         targets = [
             f.name for f in SDF_DIR.iterdir() if f.is_dir() and
+            any(80 <= int(num) <= 99 for num in re.findall(r'\d+', f.name)) and
+            any(child.suffix == '.pth' for child in f.iterdir()) and
+            any(child.name.endswith('sdf-mesh-dists.txt') for child in f.iterdir())
+        ]
+    elif overwrite == True:
+        targets = [
+            f.name for f in SDF_DIR.iterdir() if f.is_dir() and
+            any(child.suffix == '.pth' for child in f.iterdir()) and
+            any(child.name.endswith('sdf-mesh-dists.txt') for child in f.iterdir())
+        ]
+    elif test == True:
+        targets = [
+            f.name for f in SDF_DIR.iterdir() if f.is_dir() and
+            any(80 <= int(num) <= 99 for num in re.findall(r'\d+', f.name)) and
             any(child.suffix == '.pth' for child in f.iterdir()) and
             any(child.name.endswith('sdf-mesh-dists.txt') for child in f.iterdir())
         ]
@@ -35,9 +49,10 @@ def get_targets(overwrite) -> List[str]:
             targets.append(f.name)
     return targets
 
+
 def main(args):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    targets = get_targets(args.overwrite)
+    targets = get_targets(args.overwrite, args.test)
     if targets == []:
         print("No targets found, exiting.")
         exit(0)
@@ -80,7 +95,7 @@ def main(args):
         command = [
             "python", "main.py",
             "--config", config_path,
-            "--features_path", f"{SDF_DIR}/{target}/{target}-sdf-mesh-dists.txt",
+            "--features_path", f"{SDF_DIR}/{target}/{target}-sdf-dijkstra-features.txt",
         ]
 
         command_str = " ".join(command)
@@ -96,6 +111,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a flow on all FAUST SDFs features")
     parser.add_argument('--overwrite', action='store_true', help="Overwrite if an existing flow model \"checkpoint-9999.pth\" is found", default='False')
+    parser.add_argument('--test', action='store_true', help="Test mode, only process targets that are not in the range 80-99", default='False')
 
     args = parser.parse_args()
 

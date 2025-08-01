@@ -384,7 +384,7 @@ class MeshDataConfig:
 
 class MeshData:
     def __init__(self, config: MeshDataConfig):
-        self.mesh = trimesh.load(config.file, force='mesh')
+        self.mesh = trimesh.load(config.file, force='mesh', process=False)
         self.verts = torch.tensor(self.mesh.vertices, dtype=torch.float32)
         self.faces = torch.tensor(self.mesh.faces, dtype=torch.long)
 
@@ -405,7 +405,6 @@ class MeshData:
 
         self.domain = torch.tensor([[-1, -1, -1], [1, 1, 1]], dtype=torch.float32).to(config.device)
         self.dataset = MeshDataset(self)
-
 
 
 class MeshDataset(Dataset):
@@ -734,15 +733,19 @@ if __name__ == "__main__":
     parser.add_argument('--filename', type=str, help="Filename in ./data directory")
     parser.add_argument('--path', type=str, help="Full path to mesh file")
     parser.add_argument('--all', action='store_true', help="Train a neural SDF on all meshes in the provided path")
-    parser.add_argument('--eval', action='store_true', help="Evaluate the SDF model and plot the extracted mesh")
+    parser.add_argument('--eval', action='store_true', help="Evaluate the SDF model, convert the landmarks indices to voxel coordinates and save the mesh plot")
+    parser.add_argument('--test', action='store_true', help="Only train a neural SDF on the 80-99 mesh in the path directory")
     args = parser.parse_args()
 
     for arg in vars(args):
             print(f"{arg}: {getattr(args, arg)}")
 
     if args.all is not None and args.path is not None:
+
         for i, mesh_file in enumerate(os.listdir(args.path)):
-            if mesh_file.endswith('.off') or mesh_file.endswith('.ply'):
+            if (mesh_file.endswith('.off') or mesh_file.endswith('.ply')) and (
+                not args.test or any(f"tr_reg_{n:03d}" in mesh_file for n in range(80, 100))
+            ):
                 args.filename = mesh_file
                 n_files = len([f for f in os.listdir(args.path) if f.endswith('.off') or f.endswith('.ply')])
                 print(f"{i+1}/{n_files}: Training on {args.filename} at {args.path}")
