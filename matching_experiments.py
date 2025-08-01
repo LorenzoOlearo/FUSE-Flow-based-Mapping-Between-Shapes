@@ -19,12 +19,75 @@ from model.models import FMCond
 from model.networks import MLP
 from util.plot import start_end_subplot
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+from util.plot import plot_points
 
 SDFs_PATH = Path('./out/SDFs')
 FAUST_PATH = Path('./data/MPI-FAUST/training/registrations/')
 N_LANDMARKS = 5
-FLOWS_PATH = Path('./out/flows_vertex')
-MATCHING_PATH = Path('./out/matching_SDF-SDF-vertex-SAME')
+FLOWS_PATH = Path('./out/flows')
+FLOWS_VERTEX_PATH = Path('./out/flows_vertex')
+MATCHING_PATH = Path('./out/matching_TEST_SDF-SDF-vertex-CROSS')
+
+
+def plot_geodesic_comparison(vertices, faces, true_dists, dijkstra_dists, save_path):
+    """
+    Plot a mesh with two subplots: true geodesics vs Dijkstra-based distances.
+
+    Parameters:
+        vertices (Nx3): Vertex coordinates
+        faces (Mx3): Triangle indices
+        true_dists (N,): Ground truth geodesic distances
+        dijkstra_dists (N,): Approximated distances from voxel-based Dijkstra
+        save_path (str): Path to save the HTML file
+    """
+    x, y, z = vertices[:, 0], vertices[:, 1], vertices[:, 2]
+    i, j, k = faces[:, 0], faces[:, 1], faces[:, 2]
+
+    fig = make_subplots(
+        rows=1, cols=2,
+        specs=[[{'type': 'surface'}, {'type': 'surface'}]],
+        subplot_titles=("True Geodesic Distances", "Dijkstra Approximation")
+    )
+
+    mesh_true = go.Mesh3d(
+        x=x, y=y, z=z,
+        i=i, j=j, k=k,
+        intensity=true_dists,
+        colorscale="Viridis",
+        intensitymode="vertex",
+        colorbar=dict(title="Distance", x=0.45),
+        name="True",
+        showscale=True,
+        lighting=dict(ambient=0.5, diffuse=0.9)
+    )
+
+    mesh_dijkstra = go.Mesh3d(
+        x=x, y=y, z=z,
+        i=i, j=j, k=k,
+        intensity=dijkstra_dists,
+        colorscale="Viridis",
+        intensitymode="vertex",
+        colorbar=dict(title="Distance", x=1.0),
+        name="Dijkstra",
+        showscale=True,
+        lighting=dict(ambient=0.5, diffuse=0.9)
+    )
+
+    fig.add_trace(mesh_true, row=1, col=1)
+    fig.add_trace(mesh_dijkstra, row=1, col=2)
+
+    fig.update_layout(
+        title_text="Geodesic Distance Comparison",
+        scene=dict(xaxis_visible=False, yaxis_visible=False, zaxis_visible=False, aspectmode='data'),
+        scene2=dict(xaxis_visible=False, yaxis_visible=False, zaxis_visible=False, aspectmode='data'),
+        margin=dict(l=0, r=0, t=40, b=0)
+    )
+
+    fig.write_html(f"{save_path}.html")
+    fig.write_image(f"{save_path}.png", width=1600, height=800)
 
 
 def create_rgb_colormap(points):
@@ -113,7 +176,7 @@ def process_element(element: str, representation: str, device: str, mesh_baselin
     return features, points, model
 
 
-def process_pair(source: str, target: str, source_rep: str, target_rep: str, device: str, mesh_baseline: bool, plot_html: bool, plot_png: bool):
+def process_pair(source: str, target: str, source_rep: str, target_rep: str, device: str, mesh_baseline: bool, plot_html: bool, plot_png: bool, geo_error: bool):
     source_features, source_points, source_model = process_element(source, source_rep, device, mesh_baseline)
     target_features, target_points, target_model = process_element(target, target_rep, device, mesh_baseline)
 
@@ -150,6 +213,37 @@ def process_pair(source: str, target: str, source_rep: str, target_rep: str, dev
         png=plot_png,
     )
 
+    if mesh_baseline and geo_error:
+        geo = np.loadtxt(Path(FLOWS_VERTEX_PATH, source, 'features.txt'))
+        mesh = trimesh.load(Path(FAUST_PATH, source + '.ply'), process=False)
+        mesh = normalize_mesh(mesh)
+        # err_geo = np.linalg.norm(geo - source_features.cpu().numpy(), axis=1)
+
+        err_geo = np.abs(geo - source_features.cpu().numpy())
+        err_geo /= err_geo.max()
+
+        for i in range(geo.shape[1]):
+            plot_points(
+                source_points.cpu().numpy(),
+                distances=err_geo[:, i],
+                title=f"landmark {i} at {source}: geo - sdf_geo",
+                save_path=Path(MATCHING_PATH, f'err-geo-{source}-{target}-{i}'),
+                save_html=True,
+                save_png=True,
+                colorbar_title='geo_err',
+                colormap='hot',
+                range=(0, 1),
+            )
+
+            plot_geodesic_comparison(
+                mesh.vertices,
+                mesh.faces,
+                true_dists=geo[:, i],
+                dijkstra_dists= source_features[:, i].cpu().numpy(),
+                save_path=Path(MATCHING_PATH, f'geo-comparison-{source}-{target}-{i}')
+            )
+
+
     return err_flow, err_knn
 
 
@@ -173,7 +267,6 @@ def plot_matching_error(err_flow_inversion, map_err_knn):
     plt.title('Errors for all shapes as source')
     plt.xlabel('Target Shape')
     plt.ylabel('Error')
-    # plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
     plt.xticks(rotation=45)
     plt.tight_layout(rect=[0, 0, 0.75, 1])
     plt.savefig(f'{MATCHING_PATH}/plot_errors_all_shapes.png', bbox_inches='tight')
@@ -192,15 +285,15 @@ def main(args):
     if args.same:
         for target in targets:
             print(f"Matching the same shape {target} from {args.source_rep} to {args.target_rep}")
-            err_flow, err_knn = process_pair(target, target, args.source_rep, args.target_rep, device, mesh_baseline, args.plot_html, args.plot_png)
+            err_flow, err_knn = process_pair(target, target, args.source_rep, args.target_rep, device, mesh_baseline, args.plot_html, args.plot_png, args.geo_error)
             err_flow_inversion[(target, target)] = err_flow
             map_err_knn[(target, target)] = err_knn
     else:
         for source in targets:
             for target in targets:
-                if source ~= target:
+                if source is not target:
                     print(f"Processing {source} -> {target}")
-                    err_flow, err_knn = process_pair(source, target, args.source_rep, args.target_rep, device, mesh_baseline, args.plot_html, args.plot_png)
+                    err_flow, err_knn = process_pair(source, target, args.source_rep, args.target_rep, device, mesh_baseline, args.plot_html, args.plot_png, args.geo_error)
                     err_flow_inversion[(source, target)] = err_flow
                     map_err_knn[(source, target)] = err_knn
 
@@ -226,6 +319,7 @@ if __name__ == "__main__":
     parser.add_argument('--source_rep', type=str, default='mesh', help="Representation of the first element in the pair (e.g., 'mesh', 'sdf')")
     parser.add_argument('--target_rep', type=str, default='mesh', help="Representation of the first element in the pair (e.g., 'mesh', 'sdf')")
     parser.add_argument('--same', action='store_true', help="Match the same shape with different representations", default=False)
+    parser.add_argument('--geo_error', action='store_true', help="If true along side mesh_baseline and source_rep 'sdf', for each landmark plot the difference between the true geodesic distance and the Dijkastra approximation", default=False)
 
     args = parser.parse_args()
 
