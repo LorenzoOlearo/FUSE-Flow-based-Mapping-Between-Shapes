@@ -1,9 +1,10 @@
 import os
+import torch
+import numpy as np
 import plotly.graph_objects as go
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 from plotly.subplots import make_subplots
-import numpy as np
 
 
 
@@ -45,9 +46,11 @@ def plot_target(filename, points, plots_path, show=False):
     fig.write_image(f'{plots_path}/{filename}.png')
 
 
-def start_end_subplot(x_0, x_1_estimated, run_name='Title', plots_path='./', show=False):
-    x_0 = x_0.cpu().numpy()
-    x_1_estimated = x_1_estimated#.cpu().numpy()
+def start_end_subplot(x_0, x_1_estimated, run_name='Title', plots_path='./', show=False, html=False, png=False):
+    if hasattr(x_0, "cpu"):
+        x_0 = x_0.cpu().numpy()
+    if hasattr(x_1_estimated, "cpu"):
+        x_1_estimated = x_1_estimated.cpu().numpy()
     
     fig = make_subplots(rows=1, cols=2, specs=[[{'type': 'scatter3d'}, {'type': 'scatter3d'}]], subplot_titles=("Source (x_0)", "Estimated (x_T)"))
     colors_hex = create_rgb_colormap(x_0)
@@ -84,12 +87,14 @@ def start_end_subplot(x_0, x_1_estimated, run_name='Title', plots_path='./', sho
         scene=dict(
             xaxis_title='X',
             yaxis_title='Y',
-            zaxis_title='Z'
+            zaxis_title='Z',
+            aspectmode='data'
         ),
         scene2=dict(
             xaxis_title='X',
             yaxis_title='Y',
-            zaxis_title='Z'
+            zaxis_title='Z',
+            aspectmode='data'
         ),
         title=run_name,
         width=1800,
@@ -98,45 +103,65 @@ def start_end_subplot(x_0, x_1_estimated, run_name='Title', plots_path='./', sho
     
     if show: fig.show()
        
-    fig.write_html(f'{plots_path}/{run_name}.html')
-    fig.write_image(f'{plots_path}/{run_name}.png')
+    if html: fig.write_html(f'{plots_path}/{run_name}.html')
+    if png: fig.write_image(f'{plots_path}/{run_name}.png')
     
-    
-def plot_points(points, run_name, plots_path, title, show=False):
-    points = points.cpu().numpy()
-    
-    colors_hex = create_rgb_colormap(points)
-    fig = go.Figure()
 
-    # Plot the point cloud
-    fig.add_trace(go.Scatter3d(
+def plot_points(points, distances=None, title="3D Points", save_path=None, save_html=True, save_png=True, colorbar_title="", colormap='Viridis', range=None):
+    """
+    Plot 3D points, optionally colored by a distance array.
+
+    Args:
+        points (np.ndarray): (N, 3) array of point coordinates.
+        distances (np.ndarray or None): (N,) array of values to color points. If None, use blue.
+        title (str): Plot title.
+        save_path (str or None): If given, save HTML and PNG.
+        colorbar_title (str): Title for the colorbar if distances is provided.
+    """
+    if distances is not None:
+        marker_dict = dict(
+            size=3,
+            color=distances,
+            colorscale=colormap,
+            colorbar=dict(title=colorbar_title),
+            opacity=0.8
+        )
+    else:
+        marker_dict = dict(size=2, color='blue', opacity=0.8)
+
+    fig = go.Figure(data=[go.Scatter3d(
         x=points[:, 0],
         y=points[:, 1],
         z=points[:, 2],
         mode='markers',
-        marker=dict(
-            size=3,
-            color=colors_hex,  # corresponding colors for each point
-        ),
-        name='Points'
-    ))
+        marker=marker_dict
+    )])
 
-    # Adjust layout parameters
+    if range is not None and distances is not None:
+        fig.update_traces(marker=dict(
+            colorscale=colormap,
+            cmin=range[0],
+            cmax=range[1]
+        ))
+
     fig.update_layout(
+        title=title,
         scene=dict(
             xaxis_title='X',
             yaxis_title='Y',
-            zaxis_title='Z'
+            zaxis_title='Z',
+            aspectmode='data'
         ),
-        title=f"{run_name} - {title}",
-        width=900,  # Half the width since we're only showing one plot
-        height=800
+        margin=dict(l=0, r=0, b=0, t=40)
     )
-    
-    if show: 
+
+    if save_path is not None:
+        if save_html:
+            fig.write_html(f"{save_path}.html")
+        if save_png:
+            fig.write_image(f"{save_path}.png", width=800, height=600)
+    else:
         fig.show()
-       
-    fig.write_image(f'{plots_path}/{run_name}.png')
 
    
 def start_end_subplot_volume(x_0, x_1_estimated, run_name, plots_path, show=False):

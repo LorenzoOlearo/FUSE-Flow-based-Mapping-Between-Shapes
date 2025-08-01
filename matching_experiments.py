@@ -1,9 +1,13 @@
 import os
+from pathlib import Path
+from typing import List
+import argparse
+import csv
 import numpy as np
 import torch
 import trimesh
-from itertools import combinations
-from sklearn.neighbors import NearestNeighbors
+import matplotlib.colors as mcolors
+
 from util.matching_utils import (
     compute_p2p_with_geomdist,
     compute_p2p_with_knn_gauss,
@@ -13,111 +17,315 @@ from util.matching_utils import (
 from util.mesh_utils import normalize_mesh
 from model.models import FMCond
 from model.networks import MLP
-
+from util.plot import start_end_subplot
+import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import trimesh
 
-# Setup device
-device = 'cuda:1'
-torch.cuda.set_device(device)
+from util.plot import plot_points
 
-# Constants
-NUM_STEP = 64  # Number of steps for flow models
-IN_DIR = './data/test'
-OUT_DIR = './smal_experiments/matching'
-CORR_DIR = '../datasets/meshes/SMAL_r/corres/'
-CHECKPOINT_DIR = './data/test'
-# IN_DIR = '../datasets/meshes/SMAL_r/off/'
-# OUT_DIR = './smal_experiments/matching/'
-# CORR_DIR = '../datasets/meshes/SMAL_r/corres/'
-# CHECKPOINT_DIR = './smal_experiments/smal_landmarks_only/'
-# lm_smal=np.array([3162, 1931, 3731, 1399 ,1111, 1001])
-# lm=lm_smal
-
-lm = np.array([412, 5891,6593,3323,2119])
-
-# Define landmarks (assuming lm_smal is defined elsewhere)
-# You need to define lm_smal or load it from somewhere
-
-# Get all file names in the directory
-file_names = [f.split('.')[0] for f in os.listdir(IN_DIR) if f.endswith('.off')]
-
-# Initialize result matrices
-eucl = np.zeros((len(file_names), len(file_names)))
-eucl_knn = np.zeros((len(file_names), len(file_names)))
-eucl_knn_g = np.zeros((len(file_names), len(file_names)))
-eucl_fm = np.zeros((len(file_names), len(file_names)))
-
-source = 'tg_reg_002.off'
-target = 'tg_reg_009.off'
-
-# Iterate over combinations of file names
-print(source, target)
-
-# Load meshes
-# mesh1_path = IN_DIR+f'{source}.off'
-# mesh2_path = IN_DIR+f'{target}.off'
-mesh_1_path = './data/test/tr_reg_002.off'
-mesh_2_path = './data/test/tr_reg_009.off'
-mesh1 = normalize_mesh(trimesh.load(mesh_1_path, process=False))
-mesh2 = normalize_mesh(trimesh.load(mesh_2_path, process=False))
-
-# Load correspondences
-# corr_a = np.array(np.loadtxt(CORR_DIR+f'{source}.vts', dtype=np.int32)) - 1
-# corr_b = np.array(np.loadtxt(CORR_DIR+f'{target}.vts', dtype=np.int32)) - 1
-
-# Target vertices for evaluation
-v2 = torch.tensor(mesh2.vertices).float().to(device)
-
-# Load features
-source_features = torch.tensor(np.loadtxt(f'data/test/tr_reg_002-sdf-dijkstra.txt').astype(np.float32)).to(device)
-target_features = torch.tensor(np.loadtxt(f'data/test/tr_reg_009-sdf-dijkstra.txt').astype(np.float32)).to(device)
-
-# Load models
-source_model = FMCond(channels=len(lm), network=MLP(channels=len(lm)).to(device))
-source_model.to(device)
-# source_model.load_state_dict(torch.load(f'data/test/{source.split('.')[0]}/checkpoint-9999.pth')['model'], strict=True)
-source_model.load_state_dict(torch.load('./data/test/tr_reg_002/checkpoint-9999.pth', weights_only=False)['model'], strict=True)
-
-target_model = FMCond(channels=len(lm), network=MLP(channels=len(lm)).to(device))
-target_model.to(device)
-target_model.load_state_dict(torch.load('./data/test/tr_reg_009/checkpoint-9999.pth', weights_only=False)['model'], strict=True)
-
-source_model.eval()
-target_model.eval()
-
-# 1. Compute with geometric distance
-p2p = compute_p2p_with_geomdist(source_features, target_features, source_model, target_model)
-eucl[0, 0] = torch.mean(torch.norm(v2.cpu()[p2p] - v2.cpu(), dim=-1)).item()
-print(f"Ours: {eucl[0, 0]}")
-# 2. Compute with KNN
-p2p = compute_p2p_with_knn(source_features, target_features)
-eucl_knn[0, 0] = torch.mean(torch.norm(v2.cpu()[p2p] - v2.cpu(), dim=-1)).item()
-print(f"KNN: {eucl_knn[0, 0]}")
-# 3. Compute with KNN in Gaussian space
-p2p = compute_p2p_with_knn_gauss(source_features, target_features, source_model, target_model)
-eucl_knn_g[0, 0] = torch.mean(torch.norm(v2.cpu()[p2p] - v2.cpu(), dim=-1)).item()
-print(f"KNN in Gauss: {eucl_knn_g[0, 0]}")
-
-# 4. Compute with functional maps
-# Extract landmarks for functional maps
-lm_a = lm
-lm_b = lm
-
-p2p = compute_p2p_with_fmaps(mesh_1_path, mesh_2_path, source_features, target_features)
-eucl_fm[0, 0] = torch.mean(torch.norm(v2.cpu()[p2p] - v2.cpu(), dim=-1)).item()
-print(f'Functional maps: {eucl_fm[0, 0]}')
+SDFs_PATH = Path('./out/SDFs')
+FAUST_PATH = Path('./data/MPI-FAUST/training/registrations/')
+N_LANDMARKS = 5
+FLOWS_PATH = Path('./out/flows')
+FLOWS_VERTEX_PATH = Path('./out/flows_vertex')
+MATCHING_PATH = Path('./out/matching_TEST_SDF-SDF-vertex-CROSS')
 
 
-# Print mean results
-# print("Mean Geometric Distance:", np.mean(eucl[eucl > 0]))
-# print("Mean KNN Distance:", np.mean(eucl_knn[eucl_knn > 0]))
-# print("Mean KNN Gaussian Distance:", np.mean(eucl_knn_g[eucl_knn_g > 0]))
-# print("Mean Functional Maps Distance:", np.mean(eucl_fm[eucl_fm > 0]))
-# # Save the results if needed
-# os.makedirs(OUT_DIR, exist_ok=True)
-# np.save(OUT_DIR+'results_geomdist.npy', eucl)
-# np.save(OUT_DIR+'results_knn.npy', eucl_knn)
-# np.save(OUT_DIR+'results_knn_gauss.npy', eucl_knn_g)
-# np.save(OUT_DIR+'results_fmaps.npy', eucl_fm)
+def plot_geodesic_comparison(vertices, faces, true_dists, dijkstra_dists, save_path):
+    """
+    Plot a mesh with two subplots: true geodesics vs Dijkstra-based distances.
+
+    Parameters:
+        vertices (Nx3): Vertex coordinates
+        faces (Mx3): Triangle indices
+        true_dists (N,): Ground truth geodesic distances
+        dijkstra_dists (N,): Approximated distances from voxel-based Dijkstra
+        save_path (str): Path to save the HTML file
+    """
+    x, y, z = vertices[:, 0], vertices[:, 1], vertices[:, 2]
+    i, j, k = faces[:, 0], faces[:, 1], faces[:, 2]
+
+    fig = make_subplots(
+        rows=1, cols=2,
+        specs=[[{'type': 'surface'}, {'type': 'surface'}]],
+        subplot_titles=("True Geodesic Distances", "Dijkstra Approximation")
+    )
+
+    mesh_true = go.Mesh3d(
+        x=x, y=y, z=z,
+        i=i, j=j, k=k,
+        intensity=true_dists,
+        colorscale="Viridis",
+        intensitymode="vertex",
+        colorbar=dict(title="Distance", x=0.45),
+        name="True",
+        showscale=True,
+        lighting=dict(ambient=0.5, diffuse=0.9)
+    )
+
+    mesh_dijkstra = go.Mesh3d(
+        x=x, y=y, z=z,
+        i=i, j=j, k=k,
+        intensity=dijkstra_dists,
+        colorscale="Viridis",
+        intensitymode="vertex",
+        colorbar=dict(title="Distance", x=1.0),
+        name="Dijkstra",
+        showscale=True,
+        lighting=dict(ambient=0.5, diffuse=0.9)
+    )
+
+    fig.add_trace(mesh_true, row=1, col=1)
+    fig.add_trace(mesh_dijkstra, row=1, col=2)
+
+    fig.update_layout(
+        title_text="Geodesic Distance Comparison",
+        scene=dict(xaxis_visible=False, yaxis_visible=False, zaxis_visible=False, aspectmode='data'),
+        scene2=dict(xaxis_visible=False, yaxis_visible=False, zaxis_visible=False, aspectmode='data'),
+        margin=dict(l=0, r=0, t=40, b=0)
+    )
+
+    fig.write_html(f"{save_path}.html")
+    fig.write_image(f"{save_path}.png", width=1600, height=800)
+
+
+def create_rgb_colormap(points):
+    """
+    Create a colormap for the points based on their coordinates.
+    The color is determined by the distance from the origin.
+    """
+    if isinstance(points, torch.Tensor):
+        points = points.cpu().numpy()
+    points = (points - points.min(axis=0)) / (points.max(axis=0) - points.min(axis=0))
+    colors_hex = [mcolors.rgb2hex(c) for c in points]
+    
+    return colors_hex 
+
+
+def normalize_mesh(mesh):
+    rescale = max(mesh.extents) / 2.
+    tform = [
+        -(mesh.bounds[1][i] + mesh.bounds[0][i]) / 2.
+        for i in range(3)
+    ]
+    matrix = np.eye(4)
+    matrix[:3, 3] = tform
+    mesh.apply_transform(matrix)
+    matrix = np.eye(4)
+    matrix[:3, :3] /= rescale
+    mesh.apply_transform(matrix)
+    
+    return mesh
+
+
+def is_in_range(name):
+    try:
+        num = int(''.join(filter(str.isdigit, name)))
+        return 80 <= num <= 100
+    except ValueError:
+        return False
+
+
+def get_targets() -> List[str]:
+    """Determine which targets to process."""
+    # targets = [
+    #     f.name for f in SDFs_PATH.iterdir() if f.is_dir() and
+    #     any(child.name.endswith('-features.txt') for child in f.iterdir()) and
+    #     (FLOWS_PATH / f.name / 'checkpoint-9999.pth').is_file() and
+    #     is_in_range(f.name)
+    # ]
+
+    targets = []
+    for i in range(80, 100):
+        if i == 83:
+            continue
+        target = f"tr_reg_{i:03d}"
+        targets.append(target)
+
+    print(f"Processing all targets: {targets}")
+    return targets
+
+
+def process_element(element: str, representation: str, device: str, mesh_baseline: bool):
+    mesh_path = Path(FAUST_PATH, element + '.ply')
+    mesh = trimesh.load(mesh_path, process=False)
+    mesh = normalize_mesh(mesh)
+
+    if representation == 'mesh':
+        features_path = Path(FLOWS_PATH, element, f'features.txt')
+        points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
+        features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
+    elif representation == 'sdf':
+        print(f"Processing {element} with SDF representation")
+        if mesh_baseline is False:
+            features_path = Path(SDFs_PATH, element, f'{element}-sdf-dijkstra-features.txt')
+            points_path = Path(SDFs_PATH, element, f'{element}-sdf-sampled-points.txt')
+            points = torch.tensor(np.loadtxt(points_path).astype(np.float32)).to(device)
+        else:
+            print(f"Using mesh baseline for {element}")
+            features_path = Path(SDFs_PATH, element, f'{element}-sdf-mesh-dists.txt')
+            points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
+        features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
+
+    model = FMCond(channels=N_LANDMARKS, network=MLP(channels=N_LANDMARKS).to(device))
+    model.load_state_dict(torch.load(Path(FLOWS_PATH, element, 'checkpoint-9999.pth'), weights_only=False)['model'], strict=True)
+    model.to(device)
+    model.eval()
+
+    return features, points, model
+
+
+def process_pair(source: str, target: str, source_rep: str, target_rep: str, device: str, mesh_baseline: bool, plot_html: bool, plot_png: bool, geo_error: bool):
+    source_features, source_points, source_model = process_element(source, source_rep, device, mesh_baseline)
+    target_features, target_points, target_model = process_element(target, target_rep, device, mesh_baseline)
+
+    p2p_flow = compute_p2p_with_geomdist(source_features, target_features, source_model, target_model)
+    p2p_knn = compute_p2p_with_knn(source_features, target_features)
+    matched_points_flow = target_points[p2p_flow]
+    matched_points_knn = target_points[p2p_knn]
+
+    err_flow = torch.norm(matched_points_flow - target_points, dim=-1).mean().item()
+    err_knn = torch.norm(target_points[p2p_knn] - target_points, dim=-1).mean().item()
+    print(f"> Flow inversion error: {source} -> {target}: {err_flow:.4f}")
+    print(f"> KNN error:            {source} -> {target}: {err_knn:.4f}")
+
+    source_points = source_points[:100000]
+    target_points = target_points[:100000]
+
+    os.makedirs(MATCHING_PATH, exist_ok=True)
+    start_end_subplot(
+        source_points, matched_points_flow,
+        plots_path=str(MATCHING_PATH),
+        run_name=f'flow-{source}-{target}',
+        show=False,
+        html=plot_html,
+        png=plot_png,
+    )
+
+    os.makedirs(MATCHING_PATH, exist_ok=True)
+    start_end_subplot(
+        source_points, matched_points_knn,
+        plots_path=str(MATCHING_PATH),
+        run_name=f'knn-{source}-{target}',
+        show=False,
+        html=plot_html,
+        png=plot_png,
+    )
+
+    if mesh_baseline and geo_error:
+        geo = np.loadtxt(Path(FLOWS_VERTEX_PATH, source, 'features.txt'))
+        mesh = trimesh.load(Path(FAUST_PATH, source + '.ply'), process=False)
+        mesh = normalize_mesh(mesh)
+        # err_geo = np.linalg.norm(geo - source_features.cpu().numpy(), axis=1)
+
+        err_geo = np.abs(geo - source_features.cpu().numpy())
+        err_geo /= err_geo.max()
+
+        for i in range(geo.shape[1]):
+            plot_points(
+                source_points.cpu().numpy(),
+                distances=err_geo[:, i],
+                title=f"landmark {i} at {source}: geo - sdf_geo",
+                save_path=Path(MATCHING_PATH, f'err-geo-{source}-{target}-{i}'),
+                save_html=True,
+                save_png=True,
+                colorbar_title='geo_err',
+                colormap='hot',
+                range=(0, 1),
+            )
+
+            plot_geodesic_comparison(
+                mesh.vertices,
+                mesh.faces,
+                true_dists=geo[:, i],
+                dijkstra_dists= source_features[:, i].cpu().numpy(),
+                save_path=Path(MATCHING_PATH, f'geo-comparison-{source}-{target}-{i}')
+            )
+
+
+    return err_flow, err_knn
+
+
+def plot_matching_error(err_flow_inversion, map_err_knn):
+    shapes = sorted(set([k[0] for k in err_flow_inversion.keys()] + [k[1] for k in err_flow_inversion.keys()]))
+    plt.figure(figsize=(14, 8))
+    color_map = plt.get_cmap('tab20')
+    for idx, shape in enumerate(shapes):
+        color = color_map(idx % 20)
+        x = []
+        y_flow = []
+        y_knn = []
+        for (source, target), err_flow in err_flow_inversion.items():
+            if source == shape:
+                x.append(target)
+                y_flow.append(err_flow)
+                y_knn.append(map_err_knn[(source, target)])
+        if x:
+            plt.plot(x, y_flow, marker='o', label=f'Flow Inversion Error ({shape})', color=color)
+            plt.plot(x, y_knn, marker='x', label=f'KNN Error ({shape})', color=color, linestyle='--')
+    plt.title('Errors for all shapes as source')
+    plt.xlabel('Target Shape')
+    plt.ylabel('Error')
+    plt.xticks(rotation=45)
+    plt.tight_layout(rect=[0, 0, 0.75, 1])
+    plt.savefig(f'{MATCHING_PATH}/plot_errors_all_shapes.png', bbox_inches='tight')
+    plt.close()
+
+
+def main(args):
+    device = 'cuda:1'
+    torch.cuda.set_device(device)
+    mesh_baseline = args.mesh_baseline
+
+    targets = get_targets()
+    err_flow_inversion = {}
+    map_err_knn = {}
+
+    if args.same:
+        for target in targets:
+            print(f"Matching the same shape {target} from {args.source_rep} to {args.target_rep}")
+            err_flow, err_knn = process_pair(target, target, args.source_rep, args.target_rep, device, mesh_baseline, args.plot_html, args.plot_png, args.geo_error)
+            err_flow_inversion[(target, target)] = err_flow
+            map_err_knn[(target, target)] = err_knn
+    else:
+        for source in targets:
+            for target in targets:
+                if source is not target:
+                    print(f"Processing {source} -> {target}")
+                    err_flow, err_knn = process_pair(source, target, args.source_rep, args.target_rep, device, mesh_baseline, args.plot_html, args.plot_png, args.geo_error)
+                    err_flow_inversion[(source, target)] = err_flow
+                    map_err_knn[(source, target)] = err_knn
+
+    print(f"Average flow inversion error: {np.mean(list(err_flow_inversion.values())):.4f}")
+    print(f"Average KNN error:            {np.mean(list(map_err_knn.values())):.4f}")
+
+    plot_matching_error(err_flow_inversion, map_err_knn) 
+
+    with open(f'{MATCHING_PATH}/err_flow_inversion.csv', 'w+', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['source', 'target', 'error_flow', 'error_knn'])
+        for (source, target) in err_flow_inversion:
+            err_flow = err_flow_inversion[(source, target)]
+            err_knn = map_err_knn[(source, target)]
+            writer.writerow([source, target, err_flow, err_knn])
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train and evaluate SDF model on mesh")
+    parser.add_argument('--mesh_baseline', action='store_true', help="Use the mesh vertices features instead of randomly sampled points", default=False)
+    parser.add_argument('--plot_png', action='store_true', help="Save a PNG plot of the matching", default=False)
+    parser.add_argument('--plot_html', action='store_true', help="Save an HTML plot of the matching", default=False)
+    parser.add_argument('--source_rep', type=str, default='mesh', help="Representation of the first element in the pair (e.g., 'mesh', 'sdf')")
+    parser.add_argument('--target_rep', type=str, default='mesh', help="Representation of the first element in the pair (e.g., 'mesh', 'sdf')")
+    parser.add_argument('--same', action='store_true', help="Match the same shape with different representations", default=False)
+    parser.add_argument('--geo_error', action='store_true', help="If true along side mesh_baseline and source_rep 'sdf', for each landmark plot the difference between the true geodesic distance and the Dijkastra approximation", default=False)
+
+    args = parser.parse_args()
+
+    print("------------------------------------------")
+    for arg in vars(args):
+        print(f"{arg}: {getattr(args, arg)}")
+    print("------------------------------------------")
+
+    main(args)

@@ -384,7 +384,7 @@ class MeshDataConfig:
 
 class MeshData:
     def __init__(self, config: MeshDataConfig):
-        self.mesh = trimesh.load(config.file, force='mesh')
+        self.mesh = trimesh.load(config.file, force='mesh', process=False)
         self.verts = torch.tensor(self.mesh.vertices, dtype=torch.float32)
         self.faces = torch.tensor(self.mesh.faces, dtype=torch.long)
 
@@ -405,7 +405,6 @@ class MeshData:
 
         self.domain = torch.tensor([[-1, -1, -1], [1, 1, 1]], dtype=torch.float32).to(config.device)
         self.dataset = MeshDataset(self)
-
 
 
 class MeshDataset(Dataset):
@@ -686,7 +685,7 @@ def train(config: MeshDataConfig):
             total_loss = sum(loss_dict.values())
 
             if epoch % 100 == 0:
-                tqdm.write(f"Epoch {epoch}, Losses: " + ", ".join(f"{k}: {v.item():.6f}" for k, v in loss_dict.items()))
+                tqdm.write(f"> Epoch {epoch}, Losses: " + ", ".join(f"{k}: {v.item():.6f}" for k, v in loss_dict.items()))
 
             optimizer.zero_grad()
             total_loss.backward()
@@ -717,7 +716,7 @@ def eval(config: MeshDataConfig):
             voxel_index = world_to_grid(landmark_vertex, min_coord, max_coord, resolution)
             print(f"> Landmark vertex {landmark_vertex} mapped to voxel index {voxel_index}")
             landmarks_voxels.append(voxel_index)
-        landmarks_path = f'out/SDFs/{config.file.stem}/{config.file.stem}-'
+        landmarks_path = f'out/SDFs/{config.file.stem}/{config.file.stem}'
         np.save(f'{landmarks_path}-landmarks-voxels.npy', landmarks_voxels)
         np.save(f'{landmarks_path}-landmarks-vertices.npy', landmarks_vertices.cpu().numpy())
         print(f"Landmarks voxel indices saved to {landmarks_path}-landmarks-voxels.npy")
@@ -733,17 +732,46 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train and evaluate SDF model on mesh")
     parser.add_argument('--filename', type=str, help="Filename in ./data directory")
     parser.add_argument('--path', type=str, help="Full path to mesh file")
+    parser.add_argument('--all', action='store_true', help="Train a neural SDF on all meshes in the provided path")
+    parser.add_argument('--eval', action='store_true', help="Evaluate the SDF model, convert the landmarks indices to voxel coordinates and save the mesh plot")
+    parser.add_argument('--test', action='store_true', help="Only train a neural SDF on the 80-99 mesh in the path directory")
     args = parser.parse_args()
 
-    mesh_config = MeshDataConfig(
-        filename=args.filename if args.path is None else None,
-        path=Path(args.path) if args.path is not None else None
-    )
+    for arg in vars(args):
+            print(f"{arg}: {getattr(args, arg)}")
 
-    print(f"Using mesh file: {mesh_config.file}")
-    print("Starting SDF training...")
-    train(mesh_config)
-    print("Training completed.")
-    print("Starting SDF evaluation...")
-    eval(mesh_config)
-    print("Done.")
+    if args.all is not None and args.path is not None:
+
+        for i, mesh_file in enumerate(os.listdir(args.path)):
+            if (mesh_file.endswith('.off') or mesh_file.endswith('.ply')) and (
+                not args.test or any(f"tr_reg_{n:03d}" in mesh_file for n in range(80, 100))
+            ):
+                args.filename = mesh_file
+                n_files = len([f for f in os.listdir(args.path) if f.endswith('.off') or f.endswith('.ply')])
+                print(f"{i+1}/{n_files}: Training on {args.filename} at {args.path}")
+                file_path = os.path.join(args.path, mesh_file)
+
+                mesh_config = MeshDataConfig(
+                    filename=args.filename,
+                    path=Path(file_path)
+                )
+                print(f"Using mesh file: {mesh_config.file}")
+                print("Starting SDF training...")
+                train(mesh_config)
+                if args.eval:
+                    print("Starting SDF evaluation...")
+                    eval(mesh_config)
+                print("Done.")
+    elif args.all is not None and args.path is None:
+        print("Please provide a path to the mesh files with --path argument.")
+        exit(1)
+    else:
+        mesh_config = MeshDataConfig(
+            filename=args.filename if args.filename is not None else None,
+            path=Path(args.path) if args.path is not None else None
+        )
+        train(mesh_config)
+        print("Training completed.")
+        print("Starting SDF evaluation...")
+        eval(mesh_config)
+        print("Done.")
