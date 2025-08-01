@@ -729,49 +729,68 @@ def eval(config: MeshDataConfig):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train and evaluate SDF model on mesh")
-    parser.add_argument('--filename', type=str, help="Filename in ./data directory")
-    parser.add_argument('--path', type=str, help="Full path to mesh file")
-    parser.add_argument('--all', action='store_true', help="Train a neural SDF on all meshes in the provided path")
-    parser.add_argument('--eval', action='store_true', help="Evaluate the SDF model, convert the landmarks indices to voxel coordinates and save the mesh plot")
-    parser.add_argument('--test', action='store_true', help="Only train a neural SDF on the 80-99 mesh in the path directory")
+    parser = argparse.ArgumentParser(description="Train and evaluate an SDF model on mesh data.")
+    parser.add_argument('--mesh_path', type=str, help="Path to a single mesh file (.off or .ply).")
+    parser.add_argument('--mesh_folder', type=str, help="Folder containing multiple mesh files.")
+    parser.add_argument('--all', action='store_true', help="Train on all mesh files in the specified folder.")
+    parser.add_argument('--eval', action='store_true', help="Evaluate the trained SDF model.")
+    parser.add_argument('--test', action='store_true', help="Only train on meshes with names like 'tr_reg_080' to 'tr_reg_099'.")
     args = parser.parse_args()
 
+    print("--------------------------")
     for arg in vars(args):
-            print(f"{arg}: {getattr(args, arg)}")
+        print(f"  {arg}: {getattr(args, arg)}")
+    print("--------------------------")
 
-    if args.all is not None and args.path is not None:
+    if args.all:
+        if not args.mesh_folder:
+            print("Error: '--all' requires '--mesh_folder' to be specified.")
+            exit(1)
 
-        for i, mesh_file in enumerate(os.listdir(args.path)):
-            if (mesh_file.endswith('.off') or mesh_file.endswith('.ply')) and (
-                not args.test or any(f"tr_reg_{n:03d}" in mesh_file for n in range(80, 100))
-            ):
-                args.filename = mesh_file
-                n_files = len([f for f in os.listdir(args.path) if f.endswith('.off') or f.endswith('.ply')])
-                print(f"{i+1}/{n_files}: Training on {args.filename} at {args.path}")
-                file_path = os.path.join(args.path, mesh_file)
+        mesh_files = [
+            f for f in os.listdir(args.mesh_folder)
+            if f.endswith(('.off', '.ply')) and (
+                not args.test or any(f"tr_reg_{n:03d}" in f for n in range(80, 100))
+            )
+        ]
 
-                mesh_config = MeshDataConfig(
-                    filename=args.filename,
-                    path=Path(file_path)
-                )
-                print(f"Using mesh file: {mesh_config.file}")
-                print("Starting SDF training...")
-                train(mesh_config)
-                if args.eval:
-                    print("Starting SDF evaluation...")
-                    eval(mesh_config)
-                print("Done.")
-    elif args.all is not None and args.path is None:
-        print("Please provide a path to the mesh files with --path argument.")
-        exit(1)
-    else:
-        mesh_config = MeshDataConfig(
-            filename=args.filename if args.filename is not None else None,
-            path=Path(args.path) if args.path is not None else None
-        )
+        if not mesh_files:
+            print("No valid mesh files found in the specified folder.")
+            exit(1)
+
+        for i, mesh_file in enumerate(mesh_files, start=1):
+            file_path = os.path.join(args.mesh_folder, mesh_file)
+            print(f"{i}/{len(mesh_files)}: Training on {mesh_file}")
+
+            mesh_config = MeshDataConfig(filename=mesh_file, path=Path(file_path))
+            print("Starting SDF training...")
+            train(mesh_config)
+
+            if args.eval:
+                print("Starting SDF evaluation...")
+                eval(mesh_config)
+
+        print("All training complete.")
+
+    elif args.mesh_path:
+        file_path = Path(args.mesh_path)
+        if not file_path.exists():
+            print(f"Error: File not found at {file_path}")
+            exit(1)
+
+        mesh_config = MeshDataConfig(filename=file_path.name, path=file_path)
+        print(f"Using mesh file: {mesh_config.file}")
+        print("Starting SDF training...")
         train(mesh_config)
-        print("Training completed.")
-        print("Starting SDF evaluation...")
-        eval(mesh_config)
+
+        if args.eval:
+            print("Starting SDF evaluation...")
+            eval(mesh_config)
+
         print("Done.")
+
+    else:
+        print("Error: You must provide either:")
+        print("  --all and --mesh_folder (to train on all meshes)")
+        print("  OR --mesh_path (to train on a single mesh)")
+        exit(1)
