@@ -29,7 +29,6 @@ FAUST_PATH = Path('./data/MPI-FAUST/training/registrations/')
 N_LANDMARKS = 5
 FLOWS_PATH = Path('./out/flows')
 FLOWS_VERTEX_PATH = Path('./out/flows_vertex')
-MATCHING_PATH = Path('./out/matching_TEST_SDF-SDF-vertex-CROSS')
 
 
 def plot_geodesic_comparison(vertices, faces, true_dists, dijkstra_dists, save_path):
@@ -151,11 +150,13 @@ def process_element(element: str, representation: str, device: str, mesh_baselin
     mesh_path = Path(FAUST_PATH, element + '.ply')
     mesh = trimesh.load(mesh_path, process=False)
     mesh = normalize_mesh(mesh)
+    model = FMCond(channels=N_LANDMARKS, network=MLP(channels=N_LANDMARKS).to(device))
 
     if representation == 'mesh':
-        features_path = Path(FLOWS_PATH, element, f'features.txt')
+        features_path = Path(FLOWS_VERTEX_PATH, element, f'features.txt')
         points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
         features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
+        model.load_state_dict(torch.load(Path(FLOWS_VERTEX_PATH, element, 'checkpoint-9999.pth'), weights_only=False)['model'], strict=True)
     elif representation == 'sdf':
         print(f"Processing {element} with SDF representation")
         if mesh_baseline is False:
@@ -164,19 +165,18 @@ def process_element(element: str, representation: str, device: str, mesh_baselin
             points = torch.tensor(np.loadtxt(points_path).astype(np.float32)).to(device)
         else:
             print(f"Using mesh baseline for {element}")
-            features_path = Path(SDFs_PATH, element, f'{element}-sdf-mesh-dists.txt')
+            features_path = Path(SDFs_PATH, element, f'{element}-sdf-mesh-dists-projected.txt')
             points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
         features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
+        model.load_state_dict(torch.load(Path(FLOWS_PATH, element, 'checkpoint-9999.pth'), weights_only=False)['model'], strict=True)
 
-    model = FMCond(channels=N_LANDMARKS, network=MLP(channels=N_LANDMARKS).to(device))
-    model.load_state_dict(torch.load(Path(FLOWS_PATH, element, 'checkpoint-9999.pth'), weights_only=False)['model'], strict=True)
     model.to(device)
     model.eval()
 
     return features, points, model
 
 
-def process_pair(source: str, target: str, source_rep: str, target_rep: str, device: str, mesh_baseline: bool, plot_html: bool, plot_png: bool, geo_error: bool):
+def process_pair(source: str, target: str, source_rep: str, target_rep: str, device: str, mesh_baseline: bool, plot_html: bool, plot_png: bool, geo_error: bool, output_dir: str):
     source_features, source_points, source_model = process_element(source, source_rep, device, mesh_baseline)
     target_features, target_points, target_model = process_element(target, target_rep, device, mesh_baseline)
 
@@ -187,26 +187,24 @@ def process_pair(source: str, target: str, source_rep: str, target_rep: str, dev
 
     err_flow = torch.norm(matched_points_flow - target_points, dim=-1).mean().item()
     err_knn = torch.norm(target_points[p2p_knn] - target_points, dim=-1).mean().item()
-    print(f"> Flow inversion error: {source} -> {target}: {err_flow:.4f}")
     print(f"> KNN error:            {source} -> {target}: {err_knn:.4f}")
+    print(f"> Flow inversion error: {source} -> {target}: {err_flow:.4f}")
 
     source_points = source_points[:100000]
     target_points = target_points[:100000]
 
-    os.makedirs(MATCHING_PATH, exist_ok=True)
     start_end_subplot(
         source_points, matched_points_flow,
-        plots_path=str(MATCHING_PATH),
+        plots_path=str(output_dir),
         run_name=f'flow-{source}-{target}',
         show=False,
         html=plot_html,
         png=plot_png,
     )
 
-    os.makedirs(MATCHING_PATH, exist_ok=True)
     start_end_subplot(
         source_points, matched_points_knn,
-        plots_path=str(MATCHING_PATH),
+        plots_path=str(output_dir),
         run_name=f'knn-{source}-{target}',
         show=False,
         html=plot_html,
@@ -227,7 +225,7 @@ def process_pair(source: str, target: str, source_rep: str, target_rep: str, dev
                 source_points.cpu().numpy(),
                 distances=err_geo[:, i],
                 title=f"landmark {i} at {source}: geo - sdf_geo",
-                save_path=Path(MATCHING_PATH, f'err-geo-{source}-{target}-{i}'),
+                save_path=Path(output_dir, f'err-geo-{source}-{target}-{i}'),
                 save_html=True,
                 save_png=True,
                 colorbar_title='geo_err',
@@ -240,14 +238,14 @@ def process_pair(source: str, target: str, source_rep: str, target_rep: str, dev
                 mesh.faces,
                 true_dists=geo[:, i],
                 dijkstra_dists= source_features[:, i].cpu().numpy(),
-                save_path=Path(MATCHING_PATH, f'geo-comparison-{source}-{target}-{i}')
+                save_path=Path(output_dir, f'geo-comparison-{source}-{target}-{i}')
             )
 
 
     return err_flow, err_knn
 
 
-def plot_matching_error(err_flow_inversion, map_err_knn):
+def plot_matching_error(err_flow_inversion, map_err_knn, output_dir):
     shapes = sorted(set([k[0] for k in err_flow_inversion.keys()] + [k[1] for k in err_flow_inversion.keys()]))
     plt.figure(figsize=(14, 8))
     color_map = plt.get_cmap('tab20')
@@ -269,7 +267,7 @@ def plot_matching_error(err_flow_inversion, map_err_knn):
     plt.ylabel('Error')
     plt.xticks(rotation=45)
     plt.tight_layout(rect=[0, 0, 0.75, 1])
-    plt.savefig(f'{MATCHING_PATH}/plot_errors_all_shapes.png', bbox_inches='tight')
+    plt.savefig(f'{output_dir}/plot_errors_all_shapes.png', bbox_inches='tight')
     plt.close()
 
 
@@ -278,6 +276,9 @@ def main(args):
     torch.cuda.set_device(device)
     mesh_baseline = args.mesh_baseline
 
+    output_dir = Path(f'./out/matching/matching-{args.source_rep}-{args.target_rep}-{args.run_name}')
+    os.makedirs(output_dir, exist_ok=True)
+
     targets = get_targets()
     err_flow_inversion = {}
     map_err_knn = {}
@@ -285,7 +286,7 @@ def main(args):
     if args.same:
         for target in targets:
             print(f"Matching the same shape {target} from {args.source_rep} to {args.target_rep}")
-            err_flow, err_knn = process_pair(target, target, args.source_rep, args.target_rep, device, mesh_baseline, args.plot_html, args.plot_png, args.geo_error)
+            err_flow, err_knn = process_pair(target, target, args.source_rep, args.target_rep, device, mesh_baseline, args.plot_html, args.plot_png, args.geo_error, output_dir)
             err_flow_inversion[(target, target)] = err_flow
             map_err_knn[(target, target)] = err_knn
     else:
@@ -293,16 +294,16 @@ def main(args):
             for target in targets:
                 if source is not target:
                     print(f"Processing {source} -> {target}")
-                    err_flow, err_knn = process_pair(source, target, args.source_rep, args.target_rep, device, mesh_baseline, args.plot_html, args.plot_png, args.geo_error)
+                    err_flow, err_knn = process_pair(source, target, args.source_rep, args.target_rep, device, mesh_baseline, args.plot_html, args.plot_png, args.geo_error, output_dir)
                     err_flow_inversion[(source, target)] = err_flow
                     map_err_knn[(source, target)] = err_knn
 
-    print(f"Average flow inversion error: {np.mean(list(err_flow_inversion.values())):.4f}")
     print(f"Average KNN error:            {np.mean(list(map_err_knn.values())):.4f}")
+    print(f"Average flow inversion error: {np.mean(list(err_flow_inversion.values())):.4f}")
 
-    plot_matching_error(err_flow_inversion, map_err_knn) 
+    plot_matching_error(err_flow_inversion, map_err_knn, output_dir)
 
-    with open(f'{MATCHING_PATH}/err_flow_inversion.csv', 'w+', newline='') as csvfile:
+    with open(f'{output_dir}/err_flow_inversion.csv', 'w+', newline='') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(['source', 'target', 'error_flow', 'error_knn'])
         for (source, target) in err_flow_inversion:
@@ -312,7 +313,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train and evaluate SDF model on mesh")
+    parser = argparse.ArgumentParser(description="Matching experiments for SDFs and meshes")
     parser.add_argument('--mesh_baseline', action='store_true', help="Use the mesh vertices features instead of randomly sampled points", default=False)
     parser.add_argument('--plot_png', action='store_true', help="Save a PNG plot of the matching", default=False)
     parser.add_argument('--plot_html', action='store_true', help="Save an HTML plot of the matching", default=False)
@@ -320,8 +321,11 @@ if __name__ == "__main__":
     parser.add_argument('--target_rep', type=str, default='mesh', help="Representation of the first element in the pair (e.g., 'mesh', 'sdf')")
     parser.add_argument('--same', action='store_true', help="Match the same shape with different representations", default=False)
     parser.add_argument('--geo_error', action='store_true', help="If true along side mesh_baseline and source_rep 'sdf', for each landmark plot the difference between the true geodesic distance and the Dijkastra approximation", default=False)
+    parser.add_argument('--run_name', type=str, help="Name of the run to append at the end of the output directory", default="")
 
     args = parser.parse_args()
+    if args.run_name == "":
+        args.run_name = input("Enter a run name: ")
 
     print("------------------------------------------")
     for arg in vars(args):
