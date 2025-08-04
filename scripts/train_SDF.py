@@ -697,6 +697,17 @@ def train(config: MeshDataConfig):
         torch.save(sdf_model.state_dict(), sdf_path)
 
 
+def project_to_surface(points, sdf_model, device):
+    sdf_model_cfg = NeuralSDFConfig()
+    neural_SDF = NeuralSDF(config=sdf_model_cfg, network=sdf_model)
+
+    points = torch.tensor(points, dtype=torch.float32, device=device)
+    projected = neural_SDF.project_nearest(points)
+    projected = projected.detach().cpu().numpy()
+
+    return projected
+
+
 def eval(config: MeshDataConfig):
     device = config.device
     mlp_cfg = MLPConfig()
@@ -713,8 +724,10 @@ def eval(config: MeshDataConfig):
         landmarks_vertices = mesh_data.verts[landmarks_indices]
         for landmark_vertex in landmarks_vertices:
             landmark_vertex = landmark_vertex.cpu().numpy()
-            voxel_index = world_to_grid(landmark_vertex, min_coord, max_coord, resolution)
-            print(f"> Landmark vertex {landmark_vertex} mapped to voxel index {voxel_index}")
+
+            landmark_vertex_projected = project_to_surface(landmark_vertex, sdf_model, device)
+            voxel_index = world_to_grid(landmark_vertex_projected, min_coord, max_coord, resolution)
+            print(f"> Landmark vertex {landmark_vertex} | Projected in {landmark_vertex_projected} | Mapped to voxel index {voxel_index}")
             landmarks_voxels.append(voxel_index)
         landmarks_path = f'out/SDFs/{config.file.stem}/{config.file.stem}'
         np.save(f'{landmarks_path}-landmarks-voxels.npy', landmarks_voxels)

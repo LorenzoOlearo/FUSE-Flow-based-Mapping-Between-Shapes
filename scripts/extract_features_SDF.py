@@ -507,7 +507,28 @@ def extract_mesh_dists(args, surface_mask, dists, target, resolution, min_coord,
         print(f"args.all: {args.all}, args.mesh_path: {args.mesh_path}, args.mesh_folder: {args.mesh_folder}, args.extension: {args.extension}")
         exit(1)
 
-    return dists_mesh
+    return dists_mesh, mesh
+
+
+def project_to_surface(points, sdf_model, device):
+    sdf_model_cfg = NeuralSDFConfig()
+    neural_SDF = NeuralSDF(config=sdf_model_cfg, network=sdf_model)
+
+    points = torch.tensor(points, dtype=torch.float32, device=device)
+    projected = neural_SDF.project_nearest(points)
+    projected = projected.detach().cpu().numpy()
+
+    return projected
+
+
+def project_landmarks_to_surface(landmark_indices, mesh, sdf_model, device):
+    """
+    Projects landmark indices to the surface of the SDF model.
+    """
+    landmarks = mesh.vertices[landmark_indices]
+    projected_landmarks = project_to_surface(landmarks, sdf_model, device)
+
+    return projected_landmarks
 
 
 def main(args):
@@ -517,7 +538,7 @@ def main(args):
     max_coord = 1.0
     h = (max_coord - min_coord) / (resolution - 1)
     eps = h  # Equal to voxel spacing
-    mesh_indices = [412, 5891, 6593, 3323, 2119]  # TODO: Configurable
+    landmark_indices = [412, 5891, 6593, 3323, 2119]  # TODO: Configurable
 
     targets = get_targets(args)
     print(f"Processing {len(targets)} targets: {targets}")
@@ -530,6 +551,7 @@ def main(args):
         sdf_model_cfg = NeuralSDFConfig()
         neural_SDF = NeuralSDF(config=sdf_model_cfg, network=sdf_model)
 
+        print(f"Sampling zero level set with eps={eps}, h={h}, resolution={resolution}")
         surface_points = neural_SDF.sample_zero_level_set(
             num_samples=args.num_points,
             threshold=eps,
@@ -537,7 +559,6 @@ def main(args):
         ).detach().cpu().numpy()
         print(f"Sampled {len(surface_points)} points from SDF - shape: {surface_points.shape}")
 
-        print(f"Sampling zero level set with eps={eps}, h={h}, resolution={resolution}")
         dists_surface_points = points_dist_in_grid(surface_points, surface_mask, dists, target, resolution, min_coord, max_coord, args.additional_plots)
         if args.additional_plots:
             if args.num_points > 100000:
@@ -550,17 +571,26 @@ def main(args):
                 plot_points(surface_points, distances=dists_surface_points[:, 0], title="Dijkstra Distances on SDF-sampled points", save_path=f"out/SDFs/{target}/{target}-sdf-dijkstra-sampled-points")
         print(f"Features shape: {dists_surface_points.shape}")
 
-        mesh_dists = extract_mesh_dists(args, surface_mask, dists, target, resolution, min_coord, max_coord)
+        mesh_dists, mesh = extract_mesh_dists(args, surface_mask, dists, target, resolution, min_coord, max_coord)
 
         print(f"Number of surface voxels: {len(surface_mask)}")
         print(f"Surface points shape: {surface_points.shape} - number of surface points: {len(surface_points)}")
         print(f"Dijkstra distances shape: {dists_surface_points.shape} - number of distances: {len(dists_surface_points)}")
+
+        print(f"Projecting mesh vertices to SDF zero level set...")
+        verts_projection = project_to_surface(mesh.vertices, sdf_model, device)
+        np.savetxt(f"out/SDFs/{target}/{target}-mesh-vertices-projected.txt", verts_projection, fmt='%.6f')
+        mesh_dists_projected = points_dist_in_grid(verts_projection, surface_mask, dists, target, resolution, min_coord, max_coord, args.additional_plots)
+
+        proj_diff = np.abs(mesh_dists - mesh_dists_projected)
+        print(f"Projection difference: min={np.min(proj_diff)}, max={np.max(proj_diff)}, mean={np.mean(proj_diff)}")
 
         out_dir = Path(f"out/SDFs/{target}")
         out_dir.mkdir(exist_ok=True)
         np.savetxt(out_dir / f"{target}-sdf-dijkstra-features.txt", dists_surface_points, fmt='%.6f')
         np.savetxt(out_dir / f"{target}-sdf-sampled-points.txt", surface_points, fmt='%.6f')
         np.savetxt(out_dir / f"{target}-sdf-mesh-dists.txt", mesh_dists, fmt='%.6f')
+        np.savetxt(out_dir / f"{target}-sdf-mesh-dists-projected.txt", mesh_dists_projected, fmt='%.6f')
 
 
 if __name__ == "__main__":
