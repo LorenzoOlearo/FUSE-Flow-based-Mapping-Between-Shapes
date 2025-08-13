@@ -16,6 +16,9 @@ from plotly.subplots import make_subplots
 from scipy.spatial import cKDTree
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import shortest_path
+# from scipy.ndimage import map_coordinates
+from scipy.interpolate import RegularGridInterpolator
+from sklearn.neighbors import NearestNeighbors
 
 from train_SDF import MLP, MLPConfig, make_volume, evaluate_model, NeuralSDF, NeuralSDFConfig
 
@@ -229,6 +232,8 @@ def convert_world_to_grid(coords, min_coord, max_coord, resolution, unique=False
     normalized = (coords - min_coord) / (max_coord - min_coord)
     index = np.clip(normalized * (resolution - 1), 0, resolution - 1)
     voxel_indices = np.round(index).astype(np.int32)
+    
+    fractional_offset = index - voxel_indices
 
     if unique:
         unique_voxel_indices = np.unique(voxel_indices, axis=0)
@@ -254,6 +259,7 @@ def find_closest_occupied_index(occupied_voxels, query_coord, min_coord, max_coo
     
     # Single point
     if query_coord.ndim == 1:
+        print("Finding closest occupied voxel for a single point...")
         diffs = occupied_voxels - query_coord
         dists = np.linalg.norm(diffs, axis=1)
         closest_idx = np.argmin(dists)
@@ -329,6 +335,35 @@ def geodesic(sdf, src_pt, eps, h, min_coord, max_coord, resolution):
             dist_grid[x, y, z] = h * dist
 
     return dist_grid
+
+
+def compute_voxel_geodesics(surface_mask, landmarks, h, eps, target: str, additional_plots=False) -> List[np.ndarray]:
+    """Compute geodesic distances for each landmark voxel."""
+    dists = []
+
+    for i, src_vox in enumerate(landmarks):
+        print(f"Landmark {i}: {src_vox}")
+        geo_dist = geodesic_dijkastra(surface_mask, src_vox, h=h)
+        if geo_dist.max() == 0:
+            print(f"Warning: Landmark {i} has no reachable voxels, exiting.")
+            exit(1)
+        else:
+            dists.append(geo_dist)
+
+        if additional_plots is True:
+            plot_points(
+                surface_mask,
+                distances=geo_dist,
+                title=f"Geodesic distances from landmark {i}",
+                save_path=f"out/SDFs/{target}/{target}-geodesic-dijkstra-landmark-{i}",
+            )
+
+    max_dist = max(np.max(dist) for dist in dists)
+    dists = [dist / max_dist for dist in dists]
+    for i, dist in enumerate(dists):
+        print(f"Landmark {i} distances: min={np.min(dist)}, max={np.max(dist)}, mean={np.mean(dist)}")
+
+    return dists
 
 
 def geodesic_dijkastra(surface_voxs, landmark_vox, h):
@@ -427,33 +462,6 @@ def load_target_data(target: str, eps: float, device: str) -> Tuple[Path, Path, 
     return landmarks, surface_mask, sdf_model
 
 
-def compute_voxel_geodesics(surface_mask, landmarks, h, eps, target: str, additional_plots=False) -> List[np.ndarray]:
-    """Compute geodesic distances for each landmark voxel."""
-    dists = []
-
-    for i, src_vox in enumerate(landmarks):
-        print(f"Landmark {i}: {src_vox}")
-        geo_dist = geodesic_dijkastra(surface_mask, src_vox, h=h)
-        if geo_dist.max() == 0:
-            print(f"Warning: Landmark {i} has no reachable voxels, exiting.")
-            exit(1)
-        else:
-            dists.append(geo_dist)
-
-        if additional_plots is True:
-            plot_points(
-                surface_mask,
-                distances=geo_dist,
-                title=f"Geodesic distances from landmark {i}",
-                save_path=f"out/SDFs/{target}/{target}-geodesic-dijkstra-landmark-{i}",
-            )
-
-    max_dist = max(np.max(dist) for dist in dists)
-    dists = [dist / max_dist for dist in dists]
-    for i, dist in enumerate(dists):
-        print(f"Landmark {i} distances: min={np.min(dist)}, max={np.max(dist)}, mean={np.mean(dist)}")
-
-    return dists
 
 
 def points_dist_in_grid(surface_points, surface_mask, dists, target: str, resolution, min_coord, max_coord, additional_plots=False):
@@ -481,14 +489,101 @@ def points_dist_in_grid(surface_points, surface_mask, dists, target: str, resolu
     return dists_surface_points
 
 
-def extract_mesh_dists(args, surface_mask, dists, target, resolution, min_coord, max_coord):
+def idw(surface_coords, dists, query_coords, k=8, p=2, eps=1e-12):
+    """
+    Interpolate multi-channel distances at query points from sparse surface samples via IDW.
+
+    Parameters
+    ----------
+    surface_coords : (Ns, 3) array
+        Coordinates of surface voxels (grid or world coords).
+    dists          : list length M, each (Ns,)
+        Distance values for each surface voxel per channel.
+    query_coords   : (N, 3) array
+        Query coordinates in the same space as surface_coords.
+    k              : int
+        Number of nearest neighbors to use.
+    p              : float
+        Power parameter for inverse-distance weighting.
+    eps            : float
+        Small value to avoid division by zero.
+
+    Returns
+    -------
+    out : (N, M) array
+        Interpolated distances for each query point.
+    """
+    Ns = surface_coords.shape[0]
+    M = len(dists)
+    D = np.stack(dists, axis=1)  # (Ns, M)
+
+    tree = cKDTree(surface_coords)
+    d, idx = tree.query(query_coords, k=min(k, Ns))  # d: (N,k), idx: (N,k)
+
+    out = np.empty((query_coords.shape[0], M), dtype=D.dtype)
+
+    # Exact match handling
+    exact = d[:, 0] < eps
+    out[exact] = D[idx[exact, 0]]
+
+    # IDW for others
+    mask = ~exact
+    if np.any(mask):
+        d_safe = np.clip(d[mask], eps, None)
+        w = 1.0 / (d_safe ** p)
+        w /= w.sum(axis=1, keepdims=True)
+        vals = D[idx[mask]]  # (Nm, k, M)
+        out[mask] = np.einsum('nk,nkm->nm', w, vals)
+
+    return out
+
+
+def points_dist_in_grid_interpolated_IDW(surface_points, surface_mask, dists, target: str,
+                                     resolution, min_coord, max_coord, additional_plots=False,
+                                     k_neighbors=8, idw_power=2):
+    """
+    Interpolate distances for surface points using inverse-distance weighting
+    from sparse surface voxel samples.
+    """
+
+    print("Interpolating distances for surface points using IDW...")
+
+    # Convert to grid coordinates (so KD-tree works in same space as surface_mask)
+    surface_mask = np.asarray(surface_mask, dtype=np.float32)
+    coords = np.asarray(surface_points, dtype=np.float32)
+    min_coord = np.asarray(min_coord)
+    max_coord = np.asarray(max_coord)
+
+    # Transform surface_points into grid space
+    normalized = (coords - min_coord) / (max_coord - min_coord)
+    query_grid_coords = normalized * (np.array(resolution) - 1)
+
+    # IDW interpolation in grid space
+    dists_interpolated = idw(surface_mask, dists, query_grid_coords,
+                             k=k_neighbors, p=idw_power)
+
+    if additional_plots:
+        plot_points(surface_mask, distances=dists[0],
+                    title="Dijkstra Geodesic Distances on surface voxels",
+                    save_path=f"out/SDFs/{target}/{target}-dijkstra-on-voxels")
+
+    return dists_interpolated
+
+
+def extract_mesh_dists(args, sdf_model, surface_mask, dists, target, resolution, min_coord, max_coord, device):
     if (args.all is True or args.test is True) and args.mesh_folder is not None and args.extension is not None:
         mesh_path = os.path.join(args.mesh_folder, target + f".{args.extension}")
         print(f"Loading mesh from {mesh_path}")
         mesh = trimesh.load(mesh_path, force='mesh', process=False)
         print(f"Mesh loaded with {len(mesh.vertices)} vertices and {len(mesh.faces)} faces.")
         mesh = normalize_mesh(mesh)
-        dists_mesh = points_dist_in_grid(mesh.vertices, surface_mask, dists, target, resolution, min_coord, max_coord, args.additional_plots)
+        verts_projection = project_to_surface(mesh.vertices, sdf_model, device)
+        print(f"Projected mesh vertices shape: {verts_projection.shape}")
+        np.savetxt(f"out/SDFs/{target}/{target}-mesh-vertices-projected.txt", verts_projection, fmt='%.6f')
+
+        dists_mesh = points_dist_in_grid(
+            verts_projection, surface_mask, dists, target, resolution, min_coord, max_coord, args.additional_plots
+        )
         if args.additional_plots:
             plot_points(mesh.vertices, distances=dists_mesh[:, 0], title="Dijkstra Distances on Mesh Vertices", save_path=f"out/SDFs/{target}/{target}-dijkstra-on-mesh-vertices")
         print(f"Mesh distances shape: {dists_mesh.shape}")
@@ -531,66 +626,138 @@ def project_landmarks_to_surface(landmark_indices, mesh, sdf_model, device):
     return projected_landmarks
 
 
+def sample_zero_level_set(num_samples, threshold, samples_per_step, sdf_model):
+    """
+    Sample points from the zero level set of the SDF model.
+    """
+    sdf_model_cfg = NeuralSDFConfig()
+    neural_SDF = NeuralSDF(config=sdf_model_cfg, network=sdf_model)
+
+    surface_points = neural_SDF.sample_zero_level_set(
+        num_samples=num_samples,
+        threshold=threshold,
+        samples_per_step=samples_per_step
+    ).detach().cpu().numpy()
+
+    return surface_points
+
+
+def plot_sampled_points(surface_points, dists_surface_points, target, additional_plots, num_points):
+    if not additional_plots:
+        return
+    if num_points > 100000:
+        print("Sampling 100k points for plotting...")
+        sample_indices = np.random.choice(len(surface_points), size=100000, replace=False)
+        surface_points_plot = surface_points[sample_indices]
+        plot_points(surface_points_plot,
+                    distances=dists_surface_points[sample_indices, 0],
+                    title="Dijkstra Distances on SDF-sampled points",
+                    save_path=f"out/SDFs/{target}/{target}-sdf-dijkstra-sampled-points")
+    else:
+        print("Plotting all sampled points...")
+        plot_points(surface_points,
+                    distances=dists_surface_points[:, 0],
+                    title="Dijkstra Distances on SDF-sampled points",
+                    save_path=f"out/SDFs/{target}/{target}-sdf-dijkstra-sampled-points")
+
+
+def project_and_compare_mesh(mesh, sdf_model, surface_mask, dists, target, resolution, min_coord, max_coord, device, additional_plots):
+    print("Projecting mesh vertices to SDF zero level set...")
+    verts_projection = project_to_surface(mesh.vertices, sdf_model, device)
+    np.savetxt(f"out/SDFs/{target}/{target}-mesh-vertices-projected.txt",
+               verts_projection, fmt='%.6f')
+    mesh_dists_projected = points_dist_in_grid(
+        verts_projection, surface_mask, dists, target,
+        resolution, min_coord, max_coord, additional_plots
+    )
+    return verts_projection, mesh_dists_projected
+
+
+def save_outputs(target, surface_points, dists_surface_points, mesh_dists):
+    out_dir = Path(f"out/SDFs/{target}")
+    out_dir.mkdir(exist_ok=True)
+    np.savetxt(out_dir / f"{target}-sdf-dijkstra-features.txt", dists_surface_points, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-sdf-sampled-points.txt", surface_points, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-sdf-mesh-dists-projected.txt", mesh_dists, fmt='%.6f')
+
+
 def main(args):
     device = "cuda:0"
     resolution = 512
     min_coord = -1.0
     max_coord = 1.0
     h = (max_coord - min_coord) / (resolution - 1)
-    eps = h  # Equal to voxel spacing
-    landmark_indices = [412, 5891, 6593, 3323, 2119]  # TODO: Configurable
+    eps = h
+    landmark_indices = [412, 5891, 6593, 3323, 2119]  # TODO: Configurable, currently unused
 
     targets = get_targets(args)
     print(f"Processing {len(targets)} targets: {targets}")
 
     for target in targets:
+        print(f"\n===== Processing target: {target} =====")
+
+        # 1. Load data (landmark voxels, surface voxel mask, trained SDF model)
         landmarks, surface_mask, sdf_model = load_target_data(target, eps, device)
 
-        dists = compute_voxel_geodesics(surface_mask, landmarks, h, eps, target, args.additional_plots)
+        # 2. Compute geodesic distance fields (one per landmark)
+        dists = compute_voxel_geodesics(
+            surface_mask=surface_mask,
+            landmarks=landmarks,
+            h=h,
+            eps=eps,
+            target=target,
+            additional_plots=args.additional_plots
+        )
 
-        sdf_model_cfg = NeuralSDFConfig()
-        neural_SDF = NeuralSDF(config=sdf_model_cfg, network=sdf_model)
-
-        print(f"Sampling zero level set with eps={eps}, h={h}, resolution={resolution}")
-        surface_points = neural_SDF.sample_zero_level_set(
+        # 3. Sample points on zero level set of SDF
+        surface_points = sample_zero_level_set(
             num_samples=args.num_points,
             threshold=eps,
-            samples_per_step=100000
-        ).detach().cpu().numpy()
-        print(f"Sampled {len(surface_points)} points from SDF - shape: {surface_points.shape}")
+            samples_per_step=100_000,
+            sdf_model=sdf_model
+        )
 
-        dists_surface_points = points_dist_in_grid(surface_points, surface_mask, dists, target, resolution, min_coord, max_coord, args.additional_plots)
-        if args.additional_plots:
-            if args.num_points > 100000:
-                print("Sampling 100k points for plotting...")
-                sample_indices = np.random.choice(len(surface_points), size=100000, replace=False)
-                surface_points_plot = surface_points[sample_indices]
-                plot_points(surface_points_plot, distances=dists_surface_points[sample_indices, 0], title="Dijkstra Distances on SDF-sampled points", save_path=f"out/SDFs/{target}/{target}-sdf-dijkstra-sampled-points")
-            else:
-                print("Plotting all sampled points...")
-                plot_points(surface_points, distances=dists_surface_points[:, 0], title="Dijkstra Distances on SDF-sampled points", save_path=f"out/SDFs/{target}/{target}-sdf-dijkstra-sampled-points")
-        print(f"Features shape: {dists_surface_points.shape}")
+        # 4. Interpolate geodesic distances at sampled surface points
+        dists_surface_points = points_dist_in_grid(
+            surface_points=surface_points,
+            surface_mask=surface_mask,
+            dists=dists,
+            target=target,
+            resolution=resolution,
+            min_coord=min_coord,
+            max_coord=max_coord,
+            additional_plots=args.additional_plots
+        )
 
-        mesh_dists, mesh = extract_mesh_dists(args, surface_mask, dists, target, resolution, min_coord, max_coord)
+        # 5. Optional visualization of sampled point distances
+        plot_sampled_points(
+            surface_points=surface_points,
+            dists_surface_points=dists_surface_points,
+            target=target,
+            additional_plots=args.additional_plots,
+            num_points=args.num_points
+        )
 
-        print(f"Number of surface voxels: {len(surface_mask)}")
-        print(f"Surface points shape: {surface_points.shape} - number of surface points: {len(surface_points)}")
-        print(f"Dijkstra distances shape: {dists_surface_points.shape} - number of distances: {len(dists_surface_points)}")
+        # 6. Extract the mesh vertices, project them to the SDF surface, and get the distances from the surface voxel grid
+        mesh_dists, mesh = extract_mesh_dists(
+            args=args, 
+            sdf_model=sdf_model,
+            surface_mask=surface_mask,
+            dists=dists,
+            target=target,
+            resolution=resolution,
+            min_coord=min_coord,
+            max_coord=max_coord,
+            device=device
+        )
 
-        print(f"Projecting mesh vertices to SDF zero level set...")
-        verts_projection = project_to_surface(mesh.vertices, sdf_model, device)
-        np.savetxt(f"out/SDFs/{target}/{target}-mesh-vertices-projected.txt", verts_projection, fmt='%.6f')
-        mesh_dists_projected = points_dist_in_grid(verts_projection, surface_mask, dists, target, resolution, min_coord, max_coord, args.additional_plots)
-
-        proj_diff = np.abs(mesh_dists - mesh_dists_projected)
-        print(f"Projection difference: min={np.min(proj_diff)}, max={np.max(proj_diff)}, mean={np.mean(proj_diff)}")
-
-        out_dir = Path(f"out/SDFs/{target}")
-        out_dir.mkdir(exist_ok=True)
-        np.savetxt(out_dir / f"{target}-sdf-dijkstra-features.txt", dists_surface_points, fmt='%.6f')
-        np.savetxt(out_dir / f"{target}-sdf-sampled-points.txt", surface_points, fmt='%.6f')
-        np.savetxt(out_dir / f"{target}-sdf-mesh-dists.txt", mesh_dists, fmt='%.6f')
-        np.savetxt(out_dir / f"{target}-sdf-mesh-dists-projected.txt", mesh_dists_projected, fmt='%.6f')
+        # 7. Save the results
+        save_outputs(
+            target=target,
+            surface_points=surface_points,
+            dists_surface_points=dists_surface_points,
+            mesh_dists=mesh_dists,
+        )
 
 
 if __name__ == "__main__":
@@ -606,6 +773,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    print("-----------------------------------------------")
     print("SDF Feature Extraction:")
     for arg, value in vars(args).items():
         print(f"  {arg}: {value}")
