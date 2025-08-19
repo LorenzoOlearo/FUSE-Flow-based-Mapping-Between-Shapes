@@ -54,12 +54,12 @@ def main(args):
             "num_steps": 64,
             "method": "FM",
             "network": "MLP",
-            "batch_size": 10000,
-            "num_points_train": 10000,
+            "batch_size": 100000,
+            "num_points_train": 500000,
             "learning_rate": 0.01,
-            "distribution": "Gaussian",
+            "distribution": "gaussian",
             "embedding_dim": 5,
-            "embedding":"features_only",
+            "embedding_type": "features_only",
             "features_type": "landmarks",
             "landmarks": [412, 5891, 6593, 3323, 2119]
         }
@@ -89,7 +89,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    print("SDF Feature Extraction:")
+    print("Training flows on FAUST dataset:")
     for arg, value in vars(args).items():
         print(f"  {arg}: {value}")
     print("-----------------------------------------------")
