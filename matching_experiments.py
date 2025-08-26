@@ -9,12 +9,15 @@ import trimesh
 import matplotlib.colors as mcolors
 
 from util.matching_utils import (
-    compute_p2p_with_geomdist,
+    compute_p2p_with_flows_composition,
+    compute_p2p_with_flows_composition_hungarian,
+    compute_p2p_with_flows_composition_lapjv,
     compute_p2p_with_knn_gauss,
     compute_p2p_with_knn,
-    compute_p2p_with_fmaps
+    compute_p2p_with_lapjv,
+    compute_p2p_with_fmaps,
+    compute_p2p_with_hungarian,
 )
-from util.mesh_utils import normalize_mesh
 from model.models import FMCond
 from model.networks import MLP
 from util.plot import start_end_subplot
@@ -137,8 +140,6 @@ def get_targets() -> List[str]:
 
     targets = []
     for i in range(80, 100):
-        if i == 83:
-            continue
         target = f"tr_reg_{i:03d}"
         targets.append(target)
 
@@ -165,7 +166,7 @@ def process_element(element: str, representation: str, device: str, mesh_baselin
             points = torch.tensor(np.loadtxt(points_path).astype(np.float32)).to(device)
         else:
             print(f"Using mesh baseline for {element}")
-            features_path = Path(SDFs_PATH, element, f'{element}-sdf-mesh-dists-projected.txt')
+            features_path = Path(SDFs_PATH, element, f'{element}-sdf-mesh-dists-projected-interpolated.txt')
             points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
         features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
         model.load_state_dict(torch.load(Path(FLOWS_PATH, element, 'checkpoint-9999.pth'), weights_only=False)['model'], strict=True)
@@ -180,15 +181,33 @@ def process_pair(source: str, target: str, source_rep: str, target_rep: str, dev
     source_features, source_points, source_model = process_element(source, source_rep, device, mesh_baseline)
     target_features, target_points, target_model = process_element(target, target_rep, device, mesh_baseline)
 
-    p2p_flow = compute_p2p_with_geomdist(source_features, target_features, source_model, target_model)
+    p2p_flow = compute_p2p_with_flows_composition(source_features, target_features, source_model, target_model, device)
+    p2p_flow_h = compute_p2p_with_flows_composition_hungarian(source_features, target_features, source_model, target_model)
+    p2p_flow_lapjv = compute_p2p_with_flows_composition_lapjv(source_features, target_features, source_model, target_model)
     p2p_knn = compute_p2p_with_knn(source_features, target_features)
+    p2p_h = compute_p2p_with_hungarian(source_features, target_features)
+    p2p_lapjv = compute_p2p_with_lapjv(source_features, target_features)
+
     matched_points_flow = target_points[p2p_flow]
+    matched_points_flow_h = target_points[p2p_flow_h]
+    matched_points_flow_lapjv = target_points[p2p_flow_lapjv]
     matched_points_knn = target_points[p2p_knn]
+    matched_points_h = target_points[p2p_h]
+    matched_points_lapjv = target_points[p2p_lapjv]
 
     err_flow = torch.norm(matched_points_flow - target_points, dim=-1).mean().item()
-    err_knn = torch.norm(target_points[p2p_knn] - target_points, dim=-1).mean().item()
+    err_flow_h = torch.norm(matched_points_flow_h - target_points, dim=-1).mean().item()
+    err_flow_lapjv = torch.norm(matched_points_flow_lapjv - target_points, dim=-1).mean().item()
+    err_knn = torch.norm(matched_points_knn - target_points, dim=-1).mean().item()
+    err_h = torch.norm(matched_points_h - target_points, dim=-1).mean().item()
+    err_lapjv = torch.norm(matched_points_lapjv - target_points, dim=-1).mean().item()
+
     print(f"> KNN error:            {source} -> {target}: {err_knn:.4f}")
+    print(f"> Hungarian error:      {source} -> {target}: {err_h:.4f}")
+    print(f"> LapJV error:          {source} -> {target}: {err_lapjv:.4f}")
     print(f"> Flow inversion error: {source} -> {target}: {err_flow:.4f}")
+    print(f"> Flow Hungarian error: {source} -> {target}: {err_flow_h:.4f}")
+    print(f"> Flow LapJV error:     {source} -> {target}: {err_flow_lapjv:.4f}")
 
     source_points = source_points[:100000]
     target_points = target_points[:100000]
@@ -203,9 +222,45 @@ def process_pair(source: str, target: str, source_rep: str, target_rep: str, dev
     )
 
     start_end_subplot(
+        source_points, matched_points_flow_lapjv,
+        plots_path=str(output_dir),
+        run_name=f'flow-lapjv-{source}-{target}',
+        show=False,
+        html=plot_html,
+        png=plot_png,
+    )
+
+    start_end_subplot(
+        source_points, matched_points_flow_h,
+        plots_path=str(output_dir),
+        run_name=f'flow-hungarian-{source}-{target}',
+        show=False,
+        html=plot_html,
+        png=plot_png,
+    )
+
+    start_end_subplot(
+        source_points, matched_points_lapjv,
+        plots_path=str(output_dir),
+        run_name=f'lapjv-{source}-{target}',
+        show=False,
+        html=plot_html,
+        png=plot_png,
+    )
+
+    start_end_subplot(
         source_points, matched_points_knn,
         plots_path=str(output_dir),
         run_name=f'knn-{source}-{target}',
+        show=False,
+        html=plot_html,
+        png=plot_png,
+    )
+
+    start_end_subplot(
+        source_points, matched_points_h,
+        plots_path=str(output_dir),
+        run_name=f'hungarian-{source}-{target}',
         show=False,
         html=plot_html,
         png=plot_png,
@@ -242,11 +297,11 @@ def process_pair(source: str, target: str, source_rep: str, target_rep: str, dev
             )
 
 
-    return err_flow, err_knn
+    return err_flow, err_knn, err_flow_h, err_flow_lapjv, err_h, err_lapjv
 
 
-def plot_matching_error(err_flow_inversion, map_err_knn, output_dir):
-    shapes = sorted(set([k[0] for k in err_flow_inversion.keys()] + [k[1] for k in err_flow_inversion.keys()]))
+def plot_matching_error(err_flow_composition, map_err_knn, output_dir):
+    shapes = sorted(set([k[0] for k in err_flow_composition.keys()] + [k[1] for k in err_flow_composition.keys()]))
     plt.figure(figsize=(14, 8))
     color_map = plt.get_cmap('tab20')
     for idx, shape in enumerate(shapes):
@@ -254,7 +309,7 @@ def plot_matching_error(err_flow_inversion, map_err_knn, output_dir):
         x = []
         y_flow = []
         y_knn = []
-        for (source, target), err_flow in err_flow_inversion.items():
+        for (source, target), err_flow in err_flow_composition.items():
             if source == shape:
                 x.append(target)
                 y_flow.append(err_flow)
@@ -280,34 +335,52 @@ def main(args):
     os.makedirs(output_dir, exist_ok=True)
 
     targets = get_targets()
-    err_flow_inversion = {}
+    err_flow_composition = {}
+    err_flow_h_composition = {}
+    err_flow_lapjv_composition = {}
     map_err_knn = {}
+    err_hungarian = {}
+    map_err_lapjv = {}
 
     if args.same:
         for target in targets:
             print(f"Matching the same shape {target} from {args.source_rep} to {args.target_rep}")
-            err_flow, err_knn = process_pair(target, target, args.source_rep, args.target_rep, device, mesh_baseline, args.plot_html, args.plot_png, args.geo_error, output_dir)
-            err_flow_inversion[(target, target)] = err_flow
+            err_flow, err_knn, err_flow_h, err_flow_lapjv, err_h, err_lapjv = process_pair(target, target, args.source_rep, args.target_rep, device, mesh_baseline, args.plot_html, args.plot_png, args.geo_error, output_dir)
+            err_flow_composition[(target, target)] = err_flow
             map_err_knn[(target, target)] = err_knn
+            map_err_knn[(target, target)] = err_knn
+            err_flow_h_composition[(target, target)] = err_flow_h
+            err_flow_lapjv_composition[(target, target)] = err_flow_lapjv
+            err_hungarian[(target, target)] = err_h
+            map_err_lapjv[(target, target)] = err_lapjv
     else:
         for source in targets:
             for target in targets:
                 if source is not target:
                     print(f"Processing {source} -> {target}")
-                    err_flow, err_knn = process_pair(source, target, args.source_rep, args.target_rep, device, mesh_baseline, args.plot_html, args.plot_png, args.geo_error, output_dir)
-                    err_flow_inversion[(source, target)] = err_flow
+                    err_flow, err_knn, err_flow_h, err_flow_lapjv, err_h, err_lapjv = process_pair(source, target, args.source_rep, args.target_rep, device, mesh_baseline, args.plot_html, args.plot_png, args.geo_error, output_dir)
+                    err_flow_composition[(source, target)] = err_flow
                     map_err_knn[(source, target)] = err_knn
+                    err_flow_h_composition[(source, target)] = err_flow_h
+                    err_flow_lapjv_composition[(source, target)] = err_flow_lapjv
+                    err_hungarian[(source, target)] = err_h
+                    map_err_lapjv[(source, target)] = err_lapjv
 
     print(f"Average KNN error:            {np.mean(list(map_err_knn.values())):.4f}")
-    print(f"Average flow inversion error: {np.mean(list(err_flow_inversion.values())):.4f}")
+    print(f"Average Hungarian error:      {np.mean(list(err_hungarian.values())):.4f}")
+    print(f"Average LapJV error:          {np.mean(list(map_err_lapjv.values())):.4f}")
+    print(f"Average flow inversion error: {np.mean(list(err_flow_composition.values())):.4f}")
+    print(f"Average flow Hungarian error: {np.mean(list(err_flow_h_composition.values())):.4f}")
+    print(f"Average flow LapJV error:     {np.mean(list(err_flow_lapjv_composition.values())):.4f}")
 
-    plot_matching_error(err_flow_inversion, map_err_knn, output_dir)
 
-    with open(f'{output_dir}/err_flow_inversion.csv', 'w+', newline='') as csvfile:
+    plot_matching_error(err_flow_composition, map_err_knn, output_dir)
+
+    with open(f'{output_dir}/err_flow_composition.csv', 'w+', newline='') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(['source', 'target', 'error_flow', 'error_knn'])
-        for (source, target) in err_flow_inversion:
-            err_flow = err_flow_inversion[(source, target)]
+        for (source, target) in err_flow_composition:
+            err_flow = err_flow_composition[(source, target)]
             err_knn = map_err_knn[(source, target)]
             writer.writerow([source, target, err_flow, err_knn])
 
@@ -323,6 +396,7 @@ if __name__ == "__main__":
     parser.add_argument('--geo_error', action='store_true', help="If true along side mesh_baseline and source_rep 'sdf', for each landmark plot the difference between the true geodesic distance and the Dijkastra approximation", default=False)
     parser.add_argument('--run_name', type=str, help="Name of the run to append at the end of the output directory", default="")
 
+
     args = parser.parse_args()
     if args.run_name == "":
         args.run_name = input("Enter a run name: ")
@@ -331,5 +405,7 @@ if __name__ == "__main__":
     for arg in vars(args):
         print(f"{arg}: {getattr(args, arg)}")
     print("------------------------------------------")
+
+    a = 1
 
     main(args)
