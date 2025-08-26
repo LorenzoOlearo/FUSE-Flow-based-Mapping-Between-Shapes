@@ -8,6 +8,10 @@ import torch
 import trimesh
 import matplotlib.colors as mcolors
 
+from typing import Callable, Dict
+from dataclasses import dataclass
+import pandas as pd
+
 from util.matching_utils import (
     compute_p2p_with_flows_composition,
     compute_p2p_with_flows_composition_hungarian,
@@ -177,94 +181,126 @@ def process_element(element: str, representation: str, device: str, mesh_baselin
     return features, points, model
 
 
-def process_pair(source: str, target: str, source_rep: str, target_rep: str, device: str, mesh_baseline: bool, plot_html: bool, plot_png: bool, geo_error: bool, output_dir: str):
+@dataclass
+class P2PResult:
+    """Holds the output of a P2P method."""
+    indices: torch.Tensor
+    matched_points: torch.Tensor
+    error: float
+
+
+def prepare_elements(
+    source: str, target: str, source_rep: str, target_rep: str, device: str, mesh_baseline: bool
+):
+    """Extract features, points, and models for source and target."""
     source_features, source_points, source_model = process_element(source, source_rep, device, mesh_baseline)
     target_features, target_points, target_model = process_element(target, target_rep, device, mesh_baseline)
 
-    p2p_flow = compute_p2p_with_flows_composition(source_features, target_features, source_model, target_model, device)
-    p2p_flow_h = compute_p2p_with_flows_composition_hungarian(source_features, target_features, source_model, target_model)
-    p2p_flow_lapjv = compute_p2p_with_flows_composition_lapjv(source_features, target_features, source_model, target_model)
-    p2p_knn = compute_p2p_with_knn(source_features, target_features)
-    p2p_h = compute_p2p_with_hungarian(source_features, target_features)
-    p2p_lapjv = compute_p2p_with_lapjv(source_features, target_features)
+    return source_features, source_points, source_model, target_features, target_points, target_model
 
-    matched_points_flow = target_points[p2p_flow]
-    matched_points_flow_h = target_points[p2p_flow_h]
-    matched_points_flow_lapjv = target_points[p2p_flow_lapjv]
-    matched_points_knn = target_points[p2p_knn]
-    matched_points_h = target_points[p2p_h]
-    matched_points_lapjv = target_points[p2p_lapjv]
 
-    err_flow = torch.norm(matched_points_flow - target_points, dim=-1).mean().item()
-    err_flow_h = torch.norm(matched_points_flow_h - target_points, dim=-1).mean().item()
-    err_flow_lapjv = torch.norm(matched_points_flow_lapjv - target_points, dim=-1).mean().item()
-    err_knn = torch.norm(matched_points_knn - target_points, dim=-1).mean().item()
-    err_h = torch.norm(matched_points_h - target_points, dim=-1).mean().item()
-    err_lapjv = torch.norm(matched_points_lapjv - target_points, dim=-1).mean().item()
+def get_matching_methods(
+    source_features, target_features, source_model, target_model, device: str, all_methods: bool = False
+) -> Dict[str, Callable[[], torch.Tensor]]:
+    """Return mapping of strategy names to their compute functions."""
 
-    print(f"> KNN error:            {source} -> {target}: {err_knn:.4f}")
-    print(f"> Hungarian error:      {source} -> {target}: {err_h:.4f}")
-    print(f"> LapJV error:          {source} -> {target}: {err_lapjv:.4f}")
-    print(f"> Flow inversion error: {source} -> {target}: {err_flow:.4f}")
-    print(f"> Flow Hungarian error: {source} -> {target}: {err_flow_h:.4f}")
-    print(f"> Flow LapJV error:     {source} -> {target}: {err_flow_lapjv:.4f}")
+    if all_methods is False:
+        return {
+            "knn": lambda: compute_p2p_with_knn(source_features, target_features),
+            "flow": lambda: compute_p2p_with_flows_composition(
+                source_features, target_features, source_model, target_model, device
+            ),
+        }
+    else:
+        return {
+            "knn": lambda: compute_p2p_with_knn(source_features, target_features),
+            "hungarian": lambda: compute_p2p_with_hungarian(source_features, target_features),
+            "lapjv": lambda: compute_p2p_with_lapjv(source_features, target_features),
 
-    source_points = source_points[:100000]
-    target_points = target_points[:100000]
+            "flow": lambda: compute_p2p_with_flows_composition(
+                source_features, target_features, source_model, target_model, device
+            ),
+            "flow-hungarian": lambda: compute_p2p_with_flows_composition_hungarian(
+                source_features, target_features, source_model, target_model
+            ),
+            "flow-lapjv": lambda: compute_p2p_with_flows_composition_lapjv(
+                source_features, target_features, source_model, target_model
+            ),
+        }
 
-    start_end_subplot(
-        source_points, matched_points_flow,
-        plots_path=str(output_dir),
-        run_name=f'flow-{source}-{target}',
-        show=False,
-        html=plot_html,
-        png=plot_png,
-    )
 
-    start_end_subplot(
-        source_points, matched_points_flow_lapjv,
-        plots_path=str(output_dir),
-        run_name=f'flow-lapjv-{source}-{target}',
-        show=False,
-        html=plot_html,
-        png=plot_png,
-    )
+def run_matching_methods(
+    strategies: Dict[str, Callable[[], torch.Tensor]], target_points: torch.Tensor
+) -> Dict[str, P2PResult]:
+    """Run all P2P strategies and compute matched points + errors."""
+    results = {}
+    for name, func in strategies.items():
+        indices = func()
+        matched_points = target_points[indices]
+        error = torch.norm(matched_points - target_points, dim=-1).mean().item()
+        results[name] = P2PResult(indices=indices, matched_points=matched_points, error=error)
+    return results
 
-    start_end_subplot(
-        source_points, matched_points_flow_h,
-        plots_path=str(output_dir),
-        run_name=f'flow-hungarian-{source}-{target}',
-        show=False,
-        html=plot_html,
-        png=plot_png,
-    )
 
-    start_end_subplot(
-        source_points, matched_points_lapjv,
-        plots_path=str(output_dir),
-        run_name=f'lapjv-{source}-{target}',
-        show=False,
-        html=plot_html,
-        png=plot_png,
-    )
+def log_results(source: str, target: str, results: Dict[str, P2PResult]) -> None:
+    """Print error metrics nicely formatted."""
+    print(f"> Evaluation results for {source} -> {target}:")
+    for name, res in results.items():
+        print(f"  > {name:<20}: {res.error:.4f}")
 
-    start_end_subplot(
-        source_points, matched_points_knn,
-        plots_path=str(output_dir),
-        run_name=f'knn-{source}-{target}',
-        show=False,
-        html=plot_html,
-        png=plot_png,
-    )
 
-    start_end_subplot(
-        source_points, matched_points_h,
-        plots_path=str(output_dir),
-        run_name=f'hungarian-{source}-{target}',
-        show=False,
-        html=plot_html,
-        png=plot_png,
-    )
+def plot_results(
+    source_points: torch.Tensor,
+    source: str,
+    target: str,
+    results: Dict[str, P2PResult],
+    output_dir: str,
+    plot_html: bool,
+    plot_png: bool,
+    max_points: int = 100_000,
+) -> None:
+    """Plot correspondences for each method."""
+    source_points = source_points[:max_points]
+    for name, res in results.items():
+        start_end_subplot(
+            source_points,
+            res.matched_points[:max_points],
+            plots_path=str(output_dir),
+            run_name=f"{name}-{source}-{target}",
+            show=False,
+            html=plot_html,
+            png=plot_png,
+        )
+
+
+def process_pair(
+    source: str,
+    target: str,
+    source_rep: str,
+    target_rep: str,
+    device: str,
+    mesh_baseline: bool,
+    plot_html: bool,
+    plot_png: bool,
+    geo_error: bool,
+    output_dir: str,
+    all_methods: bool = False,
+) -> pd.DataFrame:
+    """
+    Main pipeline to process a source-target pair, evaluate multiple P2P methods,
+    log and plot results, and return a DataFrame of errors.
+    """
+    source_features, source_points, source_model, target_features, target_points, target_model = prepare_elements(source, target, source_rep, target_rep, device, mesh_baseline)
+
+    matching_methods = get_matching_methods(source_features, target_features, source_model, target_model, device, all_methods)
+    results = run_matching_methods(matching_methods, target_points)
+    
+    log_results(source, target, results)
+    plot_results(source_points, source, target, results, output_dir, plot_html, plot_png)
+
+    row = {"source": source, "target": target}
+    row.update({name: res.error for name, res in results.items()})
+    df = pd.DataFrame([row])
 
     if mesh_baseline and geo_error:
         geo = np.loadtxt(Path(FLOWS_VERTEX_PATH, source, 'features.txt'))
@@ -296,8 +332,7 @@ def process_pair(source: str, target: str, source_rep: str, target_rep: str, dev
                 save_path=Path(output_dir, f'geo-comparison-{source}-{target}-{i}')
             )
 
-
-    return err_flow, err_knn, err_flow_h, err_flow_lapjv, err_h, err_lapjv
+    return df
 
 
 def plot_matching_error(err_flow_composition, map_err_knn, output_dir):
@@ -335,54 +370,42 @@ def main(args):
     os.makedirs(output_dir, exist_ok=True)
 
     targets = get_targets()
-    err_flow_composition = {}
-    err_flow_h_composition = {}
-    err_flow_lapjv_composition = {}
-    map_err_knn = {}
-    err_hungarian = {}
-    map_err_lapjv = {}
 
+    results = []
     if args.same:
         for target in targets:
             print(f"Matching the same shape {target} from {args.source_rep} to {args.target_rep}")
-            err_flow, err_knn, err_flow_h, err_flow_lapjv, err_h, err_lapjv = process_pair(target, target, args.source_rep, args.target_rep, device, mesh_baseline, args.plot_html, args.plot_png, args.geo_error, output_dir)
-            err_flow_composition[(target, target)] = err_flow
-            map_err_knn[(target, target)] = err_knn
-            map_err_knn[(target, target)] = err_knn
-            err_flow_h_composition[(target, target)] = err_flow_h
-            err_flow_lapjv_composition[(target, target)] = err_flow_lapjv
-            err_hungarian[(target, target)] = err_h
-            map_err_lapjv[(target, target)] = err_lapjv
+            df = process_pair(
+                target, target,
+                args.source_rep, args.target_rep,
+                device, mesh_baseline,
+                args.plot_html, args.plot_png,
+                args.geo_error, output_dir,
+                args.all_methods
+            )
+            results.append(df)
     else:
         for source in targets:
             for target in targets:
                 if source is not target:
                     print(f"Processing {source} -> {target}")
-                    err_flow, err_knn, err_flow_h, err_flow_lapjv, err_h, err_lapjv = process_pair(source, target, args.source_rep, args.target_rep, device, mesh_baseline, args.plot_html, args.plot_png, args.geo_error, output_dir)
-                    err_flow_composition[(source, target)] = err_flow
-                    map_err_knn[(source, target)] = err_knn
-                    err_flow_h_composition[(source, target)] = err_flow_h
-                    err_flow_lapjv_composition[(source, target)] = err_flow_lapjv
-                    err_hungarian[(source, target)] = err_h
-                    map_err_lapjv[(source, target)] = err_lapjv
+                    df = process_pair(
+                        source, target,
+                        args.source_rep, args.target_rep,
+                        device, mesh_baseline,
+                        args.plot_html, args.plot_png,
+                        args.geo_error, output_dir,
+                        args.all_methods
+                    )
+                    results.append(df)
 
-    print(f"Average KNN error:            {np.mean(list(map_err_knn.values())):.4f}")
-    print(f"Average Hungarian error:      {np.mean(list(err_hungarian.values())):.4f}")
-    print(f"Average LapJV error:          {np.mean(list(map_err_lapjv.values())):.4f}")
-    print(f"Average flow inversion error: {np.mean(list(err_flow_composition.values())):.4f}")
-    print(f"Average flow Hungarian error: {np.mean(list(err_flow_h_composition.values())):.4f}")
-    print(f"Average flow LapJV error:     {np.mean(list(err_flow_lapjv_composition.values())):.4f}")
+    results_df = pd.concat(results, ignore_index=True)
 
-
-    plot_matching_error(err_flow_composition, map_err_knn, output_dir)
-
-    with open(f'{output_dir}/err_flow_composition.csv', 'w+', newline='') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(['source', 'target', 'error_flow', 'error_knn'])
-        for (source, target) in err_flow_composition:
-            err_flow = err_flow_composition[(source, target)]
-            err_knn = map_err_knn[(source, target)]
-            writer.writerow([source, target, err_flow, err_knn])
+    print("Average errors across all pairs:")
+    for col in results_df.columns:
+        if col not in ['source', 'target']:
+            avg_error = results_df[col].mean()
+            print(f"  > {col:<20}: {avg_error:.4f}")
 
 
 if __name__ == "__main__":
@@ -395,7 +418,7 @@ if __name__ == "__main__":
     parser.add_argument('--same', action='store_true', help="Match the same shape with different representations", default=False)
     parser.add_argument('--geo_error', action='store_true', help="If true along side mesh_baseline and source_rep 'sdf', for each landmark plot the difference between the true geodesic distance and the Dijkastra approximation", default=False)
     parser.add_argument('--run_name', type=str, help="Name of the run to append at the end of the output directory", default="")
-
+    parser.add_argument('--all_methods', action='store_true', help="Run all matching methods, default is only knn and flow inversion because the others are too slow", default=False)
 
     args = parser.parse_args()
     if args.run_name == "":
@@ -405,7 +428,5 @@ if __name__ == "__main__":
     for arg in vars(args):
         print(f"{arg}: {getattr(args, arg)}")
     print("------------------------------------------")
-
-    a = 1
 
     main(args)
