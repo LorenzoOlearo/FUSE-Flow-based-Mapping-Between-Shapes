@@ -455,6 +455,8 @@ def train(args, device):
         print(f"  max: {features.max(dim=0).values.tolist()}")
         print(f"  avg: {features.mean(dim=0).tolist()}")
 
+        np.savetxt(os.path.join(args.output_dir, "features.txt"), features.detach().cpu().numpy())
+
         # Interpolate the features over the sampled points
         features = generate_embeddings(
             mesh=mesh,
@@ -463,14 +465,13 @@ def train(args, device):
             features=features,
             device=device,
         )
+
         print("------------------------------------")
         print(f"Features interpolated over the sampled points (shape {list(features.shape)}):")
         print(f"  min: {features.min(dim=0).values.tolist()}")
         print(f"  max: {features.max(dim=0).values.tolist()}")
         print(f"  avg: {features.mean(dim=0).tolist()}")
         print("------------------------------------")
-
-        np.savetxt(os.path.join(args.output_dir, "features.txt"), features.detach().cpu().numpy())
 
     logging.info(f"Start training for {args.epochs} epochs")
     start_time = time.time()
