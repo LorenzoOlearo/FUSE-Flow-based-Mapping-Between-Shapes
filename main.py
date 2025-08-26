@@ -349,18 +349,6 @@ def train_one_epoch(
     header = f"Epoch: [{epoch}]"
     print_freq = 200
 
-    # Interpolate the features over the sampled points to generate embeddings
-    if mesh is not None and embedding_type is not None and features is not None:
-        features = generate_embeddings(
-            mesh=mesh,
-            embedding_type=embedding_type,
-            num_points=data_loader["batch_size"] * data_loader["epoch_size"],
-            features=features,
-            device=device,
-        )
-    elif features is None:
-        exit("Cannot interpolate vertex features, wrong input.")
-
     # Gradient accumulation setup
     accum_iter = args.accum_iter
     optimizer.zero_grad()
@@ -452,12 +440,6 @@ def train(args, device):
         print(f"Ignoring config_file data_path --> loading features from {args.features_path}")
         features = torch.tensor(np.loadtxt(args.features_path).astype(np.float32)).to(device)
         print(f"Loaded features from {args.features_path} | Features shape: {features.shape}")
-        
-        if features.shape[0] > args.num_points_train:
-            print(f"Features has {features.shape[0]} points, random sampling down to {args.num_points_train} points")
-            ind = np.random.default_rng().choice(features.shape[0], args.num_points_train, replace=False)
-            features = features[ind]
-            print(f"Sampled {args.num_points_train} points from features")
     else:
         print(f"Computing {args.features_type} features from mesh...")
 
@@ -478,6 +460,23 @@ def train(args, device):
         np.savetxt(os.path.join(args.output_dir, "features.txt"), features.detach().cpu().numpy())
         print(f"Saved vertex features to {os.path.join(args.output_dir, 'features.txt')}")
         print("------------------------------------")
+
+        # Interpolate the features over the sampled points
+        features = generate_embeddings(
+            mesh=mesh,
+            embedding_type=args.embedding_type,
+            num_points=500000,
+            features=features,
+            device=device,
+        )
+
+        print("------------------------------------")
+        print(f"Features interpolated over the sampled points (shape {list(features.shape)}):")
+        print(f"  min: {features.min(dim=0).values.tolist()}")
+        print(f"  max: {features.max(dim=0).values.tolist()}")
+        print(f"  avg: {features.mean(dim=0).tolist()}")
+        print("------------------------------------")
+
 
     logging.info(f"Start training for {args.epochs} epochs")
     start_time = time.time()
