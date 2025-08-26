@@ -18,17 +18,53 @@ from geomfum.numerics.optimization import ScipyMinimize
 from geomfum.shape import TriangleMesh, PointCloud
 from geomfum.convert import P2pFromFmConverter
 from geomfum.laplacian import LaplacianFinder
-from util.mesh_utils import normalize_mesh
+from util.mesh_utils import normalize_mesh_08 as normalize_mesh
 import ot
 
+from torch_linear_assignment import batch_linear_assignment
+from torch_linear_assignment import assignment_to_indices
+
+from scipy.optimize import linear_sum_assignment
+from lapjv import lapjv
 
 device = "cuda:0"
 torch.cuda.set_device(device)
 
 
-def compute_p2p_with_geomdist(source_input, target_input, source_model, target_model):
+def compute_p2p_with_flows_composition(source_input, target_input, source_model, target_model, device):
     """
     Compute point-to-point maps using flow composition.
+
+    Args:
+        source_input: Source input tensor
+        target_input: Target input tensor
+        source_model: Source model
+        target_model: Target model
+        device: Device to run computations on
+    """
+    source_input = source_input.to(device)
+    target_input = target_input.to(device)
+    source_model = source_model.to(device)
+    target_model = target_model.to(device)
+
+    with torch.no_grad():
+        emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
+        sample = target_model.sample(noise=emb1_pullback, num_steps=64)
+
+    # Move to cpu for sklearn
+    sample_cpu = sample.cpu().numpy()
+    target_input_cpu = target_input.cpu().numpy()
+
+    nbrs = NearestNeighbors(n_neighbors=1, algorithm="auto").fit(target_input_cpu)
+    _, p2p = nbrs.kneighbors(sample_cpu)
+    p2p = p2p[:, 0]
+
+    return p2p
+
+
+def compute_p2p_with_flows_composition_hungarian(source_input, target_input, source_model, target_model):
+    """
+    Compute point-to-point maps using flow composition with Hungarian algorithm.
 
     Args:
         source_input: Source input tensor
@@ -40,12 +76,69 @@ def compute_p2p_with_geomdist(source_input, target_input, source_model, target_m
         emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
         sample = target_model.sample(noise=emb1_pullback, num_steps=64)
 
-    nbrs = NearestNeighbors(n_neighbors=1, algorithm="auto").fit(
-        target_input.cpu().numpy()
-    )
-    _, p2p = nbrs.kneighbors(sample.cpu().numpy())
-    p2p = p2p[:, 0]
+    # Compute the pairwise distances between sample and target_input
+    dists = torch.cdist(sample, target_input)
 
+    
+
+    # Optimal assignment using Hungarian algorithm
+    # assignment = batch_linear_assignment(dists)
+    # row_ind, col_ind = assignment_to_indices(assignment)
+
+    row_ind, col_ind = linear_sum_assignment(dists.cpu().numpy())
+
+    p2p = col_ind[np.argsort(row_ind)]
+
+    return p2p
+
+
+def compute_p2p_with_flows_composition_lapjv(source_input, target_input, source_model, target_model):
+    """
+    Compute point-to-point maps using flow composition with Hungarian algorithm.
+
+    Args:
+        source_input: Source input tensor
+        target_input: Target input tensor
+        source_model: Source model
+        target_model: Target model
+    """
+    with torch.no_grad():
+        emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
+        sample = target_model.sample(noise=emb1_pullback, num_steps=64)
+
+    # Compute the pairwise distances between sample and target_input
+    dists = torch.cdist(sample, target_input)
+
+    row_ind, col_ind, _ = lapjv(dists.cpu().numpy())
+    p2p = col_ind[np.argsort(row_ind)]
+
+    return p2p
+
+
+def compute_p2p_with_flows_composition_hungarian_optimized(source_input, target_input, source_model, target_model):
+    
+    with torch.no_grad():
+        emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
+        sample = target_model.sample(noise=emb1_pullback, num_steps=64)
+
+    dists = torch.cdist(sample, target_input)
+    nearest = torch.argmin(dists, dim=1)
+
+    assigned = set()
+    p2p = torch.empty(len(sample), dtype=torch.long)
+
+    for i, j in sorted(enumerate(nearest), key=lambda x: dists[x[0], x[1]].item()):
+        if j.item() not in assigned:
+            p2p[i] = j
+            assigned.add(j.item())
+        else:
+            # pick next best target not yet assigned
+            candidates = torch.argsort(dists[i])
+            for cand in candidates:
+                if cand.item() not in assigned:
+                    p2p[i] = cand
+                    assigned.add(cand.item())
+                    break
     return p2p
 
 
@@ -78,11 +171,53 @@ def compute_p2p_with_knn(source_input, target_input):
         source_input: Source input tensor
         target_input: Target input tensor
     """
-    nbrs = NearestNeighbors(n_neighbors=1, algorithm="auto").fit(
+    nbrs = NearestNeighbors(n_neighbors=1, algorithm="kd_tree").fit(
         target_input.cpu().numpy()
     )
     _, p2p = nbrs.kneighbors(source_input.cpu().numpy())
     p2p = p2p[:, 0]
+
+    return p2p
+
+
+def compute_p2p_with_hungarian(source_input, target_input):
+    """
+    Compute point-to-point maps using Hungarian algorithm between features.
+    Args:
+        source_input: Source input tensor
+        target_input: Target input tensor
+    """
+    # Compute the pairwise distances between source_input and target_input
+    dists = torch.cdist(source_input, target_input)
+
+    # Optimal assignment using Hungarian algorithm
+    # assignment = batch_linear_assignment(dists)
+    # row_ind, col_ind = assignment_to_indices(assignment)
+    # p2p = col_ind[np.argsort(row_ind)]
+
+    row_ind, col_ind = linear_sum_assignment(dists.cpu().numpy())
+    p2p = col_ind[np.argsort(row_ind)]
+
+    return p2p
+
+
+def compute_p2p_with_lapjv(source_input, target_input):
+    """
+    Compute point-to-point maps using Hungarian algorithm between features.
+    Args:
+        source_input: Source input tensor
+        target_input: Target input tensor
+    """
+    # Compute the pairwise distances between source_input and target_input
+    dists = torch.cdist(source_input, target_input)
+
+    # Optimal assignment using Hungarian algorithm
+    # assignment = batch_linear_assignment(dists)
+    # row_ind, col_ind = assignment_to_indices(assignment)
+    # p2p = col_ind[np.argsort(row_ind)]
+
+    row_ind, col_ind, _ = lapjv(dists.cpu().numpy())
+    p2p = col_ind[np.argsort(row_ind)]
 
     return p2p
 
