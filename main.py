@@ -226,6 +226,13 @@ def get_inline_arg():
             help="Path to the features file"
     )
 
+    parser.add_argument(
+        "--features_normalization",
+        default="none",
+        type=str,
+        help="Normalization to apply to the features: none, min_max, 0_center",
+    )
+
     args = parser.parse_args()
 
     return args
@@ -459,7 +466,6 @@ def train(args, device):
         print(f"  avg: {features.mean(dim=0).tolist()}")
         np.savetxt(os.path.join(args.output_dir, "features.txt"), features.detach().cpu().numpy())
         print(f"Saved vertex features to {os.path.join(args.output_dir, 'features.txt')}")
-        print("------------------------------------")
 
         # Interpolate the features over the sampled points
         features = generate_embeddings(
@@ -476,7 +482,6 @@ def train(args, device):
         print(f"  max: {features.max(dim=0).values.tolist()}")
         print(f"  avg: {features.mean(dim=0).tolist()}")
         print("------------------------------------")
-
 
     logging.info(f"Start training for {args.epochs} epochs")
     start_time = time.time()
