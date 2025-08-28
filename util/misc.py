@@ -251,8 +251,10 @@ def init_distributed_mode(args):
 class NativeScalerWithGradNormCount:
     state_dict_key = "amp_scaler"
 
-    def __init__(self):
-        self._scaler = torch.cuda.amp.GradScaler()
+    def __init__(self, device):
+        self.device = device
+        self._scaler = torch.amp.GradScaler(str(device))
+
 
     def __call__(self, loss, optimizer, clip_grad=None, parameters=None, create_graph=False, update_grad=True):
         self._scaler.scale(loss).backward(create_graph=create_graph)
@@ -310,6 +312,7 @@ def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler):
     else:
         client_state = {'epoch': epoch}
         model.save_checkpoint(save_dir=args.output_dir, tag="checkpoint-%s" % epoch_name, client_state=client_state)
+        print(f'Saved checkpoint to {output_dir / ("checkpoint-%s.pth" % epoch_name)}')
 
 
 def load_model(args, model_without_ddp, optimizer, loss_scaler):

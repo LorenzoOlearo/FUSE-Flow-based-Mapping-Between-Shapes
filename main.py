@@ -13,6 +13,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from tqdm import trange
 
 import numpy as np
 import torch
@@ -22,11 +23,12 @@ from util import misc
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
 from util.train_utils import setup_logging, initialize_device_and_seed
 from util.mesh_utils import (
-    normalize_mesh,
+    normalize_mesh_unit,
+    normalize_mesh_08,
     pc_normalize,
     generate_embeddings,
     compute_features,
-    generate_samples,
+    sample_initial_distribution,
 )
 import util.lr_sched as lr_sched
 
@@ -44,7 +46,7 @@ def get_inline_arg():
         "--config", default=None, type=str, help="Path to the config file"
     )  # Model parameters
     parser.add_argument(
-        "--method", default="FM", type=str, help="Method used for training"
+        "--method", default="FM", type=str, help="Method used for training, either 'FM' for Flow Matching or 'diffusion'"
     )
     parser.add_argument(
         "--network", default="MLP", type=str, help="Network used for training"
@@ -108,7 +110,8 @@ def get_inline_arg():
 
     parser.add_argument(
         "--distribution",
-        default="Gaussian",
+        default="gaussian",
+        choices=["gaussian", "uniform", "sphere"],
         type=str,
     )
 
@@ -156,7 +159,7 @@ def get_inline_arg():
     parser.add_argument("--intermediate", action="store_true")
     parser.add_argument(
         "--output_dir",
-        default="./output/",
+        default="./out/",
         help="path where to save, empty for no saving",
     )
     parser.add_argument(
@@ -193,23 +196,27 @@ def get_inline_arg():
         "--dist_url", default="env://", help="url used to set up distributed training"
     )
 
-    # features parameters
     parser.add_argument(
         "--embedding_dim",
         default=3,
         type=int,
         nargs="+",
-        help="dimension of the features",
+        help="Dimension of the features",
     )
+
     parser.add_argument(
-        "--features",
+        "--embedding_type",
         default=None,
         type=str,
         nargs="+",
-        help="dimension of the features",
+        help="Type of embedding on which the model is trained (e.g., features_only, xyz, features_and_xyz)",
     )
+
     parser.add_argument(
-        "--features_type", default="xyz", type=str, help="path to the features file"
+        "--features_type",
+        default="xyz",
+        type=str,
+        help="The type of features to use for each point"
     )
 
     parser.add_argument(
@@ -217,6 +224,13 @@ def get_inline_arg():
             default=None,
             type=str,
             help="Path to the features file"
+    )
+
+    parser.add_argument(
+        "--features_normalization",
+        default="none",
+        type=str,
+        help="Normalization to apply to the features: none, min_max, 0_center",
     )
 
     args = parser.parse_args()
@@ -245,7 +259,7 @@ def initialize_model_and_optimizer(args, device):
             depth=args.depth,
             network=networks.__dict__[args.network](channels=args.embedding_dim),
         )
-    elif args.method == "Geomdist":
+    elif args.method == "diffusion":
         model = EDMPrecond(
             channels=args.embedding_dim,
             depth=args.depth,
@@ -270,7 +284,7 @@ def initialize_model_and_optimizer(args, device):
     else:
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
 
-    loss_scaler = NativeScaler()
+    loss_scaler = NativeScaler(device)
 
     # Log
     print("base lr: %.2e" % (args.learning_rate * 128 / eff_batch_size))
@@ -281,6 +295,43 @@ def initialize_model_and_optimizer(args, device):
     return model, optimizer, loss_scaler
 
 
+def diffusion_step(model, y, device, args):
+    rnd_normal = torch.randn([y.shape[0]], device=y.device)
+    t = (rnd_normal * 1.2 - 1).exp()
+    weight = (t**2 + 1) / (t**2)
+
+    X_0 = sample_initial_distribution(
+        num_points=y.shape[0],
+        distribution=args.distribution,
+        embedding_dim=args.embedding_dim,
+        device=device,
+    )
+
+    n = X_0 * t[:, None]
+    D_yn = model(y + n, t)
+    loss = (weight[:, None] * ((D_yn - y) ** 2)).mean()
+    return loss
+
+
+def fm_step(model, y, path, device, args):
+    u = torch.rand(y.shape[0], device=device)
+    t = (torch.cos(u * (torch.pi / 2)) ** 2).to(device)
+
+    X_0 = sample_initial_distribution(
+        num_points=y.shape[0],
+        distribution=args.distribution,
+        embedding_dim=args.embedding_dim,
+        device=device,
+    )
+
+    if path is None:
+        raise ValueError("Path object must be provided for FM method.")
+
+    path_sample = path.sample(t=t, x_0=X_0, x_1=y)
+    V_y = model(x=path_sample.x_t, sigma=path_sample.t)
+    loss = torch.mean((V_y - path_sample.dx_t) ** 2)
+    return loss
+
 def train_one_epoch(
     model: torch.nn.Module,
     data_loader,
@@ -288,20 +339,22 @@ def train_one_epoch(
     device: torch.device,
     epoch: int,
     loss_scaler,
+    step_fn,
     max_norm: float = 0,
+    features=None,
+    mesh=None,
+    embedding_type=None,
     log_writer=None,
     args=None,
-    mesh=None,
-    path=None,
 ):
-    """Train the model for one epoch."""
+    """Train the model for one epoch (method-specific logic is injected via step_fn)."""
     model.train(True)
 
     # Initialize metric logger
     metric_logger = misc.MetricLogger(delimiter="  ")
     metric_logger.add_meter("lr", misc.SmoothedValue(window_size=1, fmt="{value:.6f}"))
     header = f"Epoch: [{epoch}]"
-    print_freq = 20
+    print_freq = 200
 
     # Gradient accumulation setup
     accum_iter = args.accum_iter
@@ -310,62 +363,42 @@ def train_one_epoch(
     if isinstance(data_loader, dict):
         batch_size = data_loader["batch_size"]
         data_loader = range(data_loader["epoch_size"])
-        # y = generate_embeddings(mesh, args, device)
-        y = args.features
-
-    if args.verbose:
-        iterator = metric_logger.log_every(data_loader, print_freq, header)
+        y = features 
     else:
-        iterator = data_loader
+        exit("Data loader must be a dictionary with 'batch_size' and 'epoch_size' keys.")
+
+    # Wrap data loader with logger if verbose
+    iterator = (
+        metric_logger.log_every(data_loader, print_freq, header)
+        if args.verbose else data_loader
+    )
+
     for data_iter_step, batch in enumerate(iterator):
+        # Adjust LR during warmup
         if data_iter_step % accum_iter == 0:
             lr_sched.adjust_learning_rate(
                 optimizer, data_iter_step / len(data_loader) + epoch, args
             )
 
+        # Prepare input batch
         if isinstance(batch, int):
             ind = np.random.default_rng().choice(y.shape[0], batch_size, replace=True)
-            y = y[ind]
-            y = y.float().to(device, non_blocking=True)
+            y_batch = y[ind].float().to(device, non_blocking=True)
         else:
-            y = batch.to(device, non_blocking=True)
+            y_batch = batch.to(device, non_blocking=True)
 
-        with torch.amp.autocast(args.device, enabled=False):
-            if args.method == "Geomdist":
-                rnd_normal = torch.randn(
-                    [
-                        y.shape[0],
-                    ],
-                    device=y.device,
-                )
-                t = (rnd_normal * 1.2 - 1).exp()
-                weight = (t**2 + 1) / (t) ** 2
-            else:
-                u = torch.rand(y.shape[0], device=device)
-                t = (torch.cos(u * (torch.pi / 2)) ** 2).to(device)
-
-            X_0 = generate_samples(args, device=device)
-
-            if args.method == "Geomdist":
-                # geomdist training logic
-                n = X_0 * t[:, None]
-                D_yn = model(y + n, t)
-                loss = (weight[:, None] * ((D_yn - y) ** 2)).mean()
-            else:
-                # flowmatching training logic
-                path_sample = path.sample(t=t, x_0=X_0, x_1=y)
-
-                V_y = model(x=path_sample.x_t, sigma=path_sample.t)
-                loss = torch.mean((V_y - path_sample.dx_t) ** 2)
+        # Forward + loss
+        with torch.amp.autocast(str(device), enabled=False):
+            loss = step_fn(model, y_batch, device)
 
         loss_value = loss.item()
 
-        # Handle invalid loss values
+        # Handle invalid loss
         if not math.isfinite(loss_value):
             print(f"Loss is {loss_value}, stopping training")
             sys.exit(1)
 
-        # Backward pass and gradient update
+        # Backward pass and optimization
         loss /= accum_iter
         loss_scaler(
             loss,
@@ -384,15 +417,13 @@ def train_one_epoch(
         metric_logger.update(loss=loss_value)
 
         # Track learning rate
-        min_lr = 10.0
-        max_lr = 0.0
+        min_lr, max_lr = 10.0, 0.0
         for group in optimizer.param_groups:
             min_lr = min(min_lr, group["lr"])
             max_lr = max(max_lr, group["lr"])
-
         metric_logger.update(lr=max_lr)
 
-        # Log metrics to TensorBoard
+        # TensorBoard logging
         loss_value_reduce = misc.all_reduce_mean(loss_value)
         if log_writer is not None and (data_iter_step + 1) % accum_iter == 0:
             epoch_1000x = int((data_iter_step / len(data_loader) + epoch) * 1000)
@@ -406,62 +437,80 @@ def train_one_epoch(
 
 
 def train(args, device):
-    """Main training loop."""
-
     data_loader_train = setup_data_loader(args)
     model, optimizer, loss_scaler = initialize_model_and_optimizer(args, device)
-    misc.load_model(
-        args=args, model_without_ddp=model, optimizer=optimizer, loss_scaler=loss_scaler
-    )
-    # load adn normalize the data
-    mesh = trimesh.load(args.data_path, process=False)
-    if len(mesh.faces) > 0:
-        mesh = normalize_mesh(mesh)
-    else:
-        mesh.vertices = pc_normalize(mesh.vertices)
-    # compute features
-    # if args.features is None:
-    #     args.features = compute_features(mesh, args, device)
-    #     np.savetxt(
-    #         os.path.join(args.output_dir, "features.txt"),
-    #         args.features.detach().cpu().numpy(),
-    #     )
-
+    misc.load_model(args=args, model_without_ddp=model, optimizer=optimizer, loss_scaler=loss_scaler)
+    
+    # Load the mesh and normalize it between [-0.8, 0.8]
+    mesh = None
     if args.features_path is not None:
-        args.features = torch.tensor(
-            np.loadtxt(args.features_path, dtype=np.float32)
-        ).to(device)
+        print(f"Ignoring config_file data_path --> loading features from {args.features_path}")
+        features = torch.tensor(np.loadtxt(args.features_path).astype(np.float32)).to(device)
+        print(f"Loaded features from {args.features_path} | Features shape: {features.shape}")
     else:
-        print("exiting, no features path provided")
-        sys.exit(1)
+        print(f"Computing {args.features_type} features from mesh...")
+
+        mesh = trimesh.load(args.data_path, process=False)
+        if len(mesh.faces) > 0:
+            mesh = normalize_mesh_08(mesh)
+        # else:
+            # TODO: Normalize between [-0.8, 0.8] for point clouds as for meshes; refactor function names
+            # mesh.vertices = pc_normalize(mesh.vertices)
+
+        # Compute features per vertex
+        features = compute_features(mesh, args, device)
+        print("------------------------------------")
+        print(f"Features per vertex (shape {list(features.shape)}):")
+        print(f"  min: {features.min(dim=0).values.tolist()}")
+        print(f"  max: {features.max(dim=0).values.tolist()}")
+        print(f"  avg: {features.mean(dim=0).tolist()}")
+        np.savetxt(os.path.join(args.output_dir, "features.txt"), features.detach().cpu().numpy())
+        print(f"Saved vertex features to {os.path.join(args.output_dir, 'features.txt')}")
+
+        # Interpolate the features over the sampled points
+        features = generate_embeddings(
+            mesh=mesh,
+            embedding_type=args.embedding_type,
+            num_points=500000,
+            features=features,
+            device=device,
+        )
+
+        print("------------------------------------")
+        print(f"Features interpolated over the sampled points (shape {list(features.shape)}):")
+        print(f"  min: {features.min(dim=0).values.tolist()}")
+        print(f"  max: {features.max(dim=0).values.tolist()}")
+        print(f"  avg: {features.mean(dim=0).tolist()}")
+        print("------------------------------------")
 
     logging.info(f"Start training for {args.epochs} epochs")
     start_time = time.time()
 
-    if args.method == "FM":
+    if args.method == "diffusion":
+        step_fn = lambda model, y, device: diffusion_step(model, y, device, args)
+    elif args.method == "FM":
         path = AffineProbPath(scheduler=CondOTScheduler())
+        step_fn = lambda model, y, device: fm_step(model, y, path, device, args)
     else:
-        path = None
+        raise ValueError(f"Unknown method {args.method}")
 
-    for epoch in range(args.start_epoch, args.epochs):
-        # Train for one epoch
+    for epoch in trange(args.start_epoch, args.epochs, desc="Epochs"):
         train_stats = train_one_epoch(
-            model,
-            data_loader_train,
-            optimizer,
-            device,
-            epoch,
-            loss_scaler,
-            args.clip_grad,
-            log_writer=None,
-            args=args,
+            model=model,
+            data_loader=data_loader_train,
+            optimizer=optimizer,
+            device=device,
+            epoch=epoch,
+            loss_scaler=loss_scaler,
+            step_fn=step_fn,
+            max_norm=args.clip_grad,
+            features=features,
             mesh=mesh,
-            path=path,
+            embedding_type=args.embedding_type,
+            args=args,
         )
 
-        # Save checkpoints
         if args.output_dir and (epoch % 100 == 0 or epoch + 1 == args.epochs):
-            # save model
             if epoch + 1 == args.epochs:
                 if args.distributed:
                     misc.save_model(
@@ -506,7 +555,7 @@ def inference(args, device):
             depth=args.depth,
             network=models.__dict__[args.network](channels=args.embedding_dim),
         )
-    elif args.method == "Geomdist":
+    elif args.method == "diffusion":
         model = EDMPrecond(
             channels=args.embedding_dim,
             depth=args.depth,
@@ -522,7 +571,13 @@ def inference(args, device):
         strict=True,
     )
 
-    noise = generate_samples(args, device=device)
+    noise = sample_initial_distribution(
+        num_points=args.num_points_inference,
+        distribution=args.distribution,
+        embedding_dim=args.embedding_dim,
+        device=device,
+    )
+
     with torch.no_grad():
         sample, _ = model.sample(
             noise=noise, num_steps=args.num_steps, intermediate=True

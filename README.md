@@ -73,17 +73,14 @@ Given a mesh file, you can train a neural Signed Distance Function (SDF) model.
 Optionally, if landmark indices are available, the script can also convert mesh
 landmark coordinates to the SDF volume grid.
 
-To train an SDF model from a mesh located in the ```./data directory```, run:
+To train an SDF model from a mesh, run:
 
 ```bash
-python scripts/train_SDF.py --filename <MESH_FILE IN ./data>
+python scripts/train_SDF.py --mesh_path /path/to/mesh/tr_reg_082.ply --eval
 ```
 
-To use a mesh file from a custom path, use the ```--path``` argument:
-
-```bash
-python scripts/train_SDF.py --path /path/to/mesh.ply
-```
+The `--eval` flag will evaluate the SDF model after training and converting the
+mesh landmarks to the SDF volume grid.
 
 Output:
 
@@ -94,6 +91,58 @@ Output:
 ```<FILENAME>-landmark-voxels.ply``` file will also be saved, containing
 landmark coordinates transformed into the SDF volume grid.
 
+
+Alternatively, you can train an SDF model for the entire dataset by running:
+
+```bash
+python scripts/train_SDF.py --mesh_path /path/to/dataset --eval [--test / --all]
+````
+
+By providing the `--test` flag, the script will train an SDF model only for the
+80 to 99 samples in the FAUST dataset. The `--all` flag will train SDFs for all
+meshes in the dataset.
+
+
+#### SDFs Feature Extraction
+We use landmark distances as features, in the case of SDFs, the distances are
+computed by constructing a shortest path between the landmarks in the SDF
+volume grid with Dijkstra's algorithm.
+
+To extract features from the SDFs, run:
+
+```bash
+python scripts/extract_features_SDF.py --target tr_reg_097 --num_points 500000 --mesh_path ./data/MPI-FAUST/training/registrations/tr_reg_097.ply
+```
+
+Or, to extract feature for multiple SDFs in the FAUST dataset, run:
+
+```bash
+python scripts/extract_features_SDF.py --test --mesh_folder ./data/MPI-FAUST/training/registrations --additional_plots --num_points 500000
+```
+
+where `--test` will extract features for the 80 to 99 samples in the FAUST
+dataset, and `--additional_plots` will save additional plots to visualize the
+extracted features.
+
+#### Training a Flow on the computed features
+Once you have trained the SDFs and extracted the features, you can create a
+Flow Matching representation that will be used to solve the correspondence
+problem.
+
+To train a Flow Matching model on the extracted features, run:
+
+```bash
+python scripts/run_faust_SDFs.py --test --overwrite
+```
+
+where `--test` will run the training on the 80 to 99 samples in the FAUST and
+`--overwrite` will overwrite the existing model checkpoints.
+
+#### Let's Match!
+Having trained the Flow Matching model, we can now match SDFs using these
+representations.
+
+TODO
 
 ## 📁 Repository Structure
 

@@ -19,20 +19,20 @@ def get_targets(overwrite, test) -> List[str]:
             f.name for f in SDF_DIR.iterdir() if f.is_dir() and
             any(80 <= int(num) <= 99 for num in re.findall(r'\d+', f.name)) and
             any(child.suffix == '.pth' for child in f.iterdir()) and
-            any(child.name.endswith('sdf-mesh-dists.txt') for child in f.iterdir())
+            any(child.name.endswith('sdf-mesh-dists-projected.txt') for child in f.iterdir())
         ]
     elif overwrite == True:
         targets = [
             f.name for f in SDF_DIR.iterdir() if f.is_dir() and
             any(child.suffix == '.pth' for child in f.iterdir()) and
-            any(child.name.endswith('sdf-mesh-dists.txt') for child in f.iterdir())
+            any(child.name.endswith('sdf-mesh-dists-projected.txt') for child in f.iterdir())
         ]
     elif test == True:
         targets = [
             f.name for f in SDF_DIR.iterdir() if f.is_dir() and
             any(80 <= int(num) <= 99 for num in re.findall(r'\d+', f.name)) and
             any(child.suffix == '.pth' for child in f.iterdir()) and
-            any(child.name.endswith('sdf-mesh-dists.txt') for child in f.iterdir())
+            any(child.name.endswith('sdf-mesh-dists-projected.txt') for child in f.iterdir())
         ]
     else:
         targets = []
@@ -40,7 +40,7 @@ def get_targets(overwrite, test) -> List[str]:
             if not f.is_dir():
                 continue
             has_pth = any(child.suffix == '.pth' for child in f.iterdir())
-            has_sdf = any(child.name.endswith('sdf-mesh-dists.txt') for child in f.iterdir())
+            has_sdf = any(child.name.endswith('sdf-mesh-dists-projected.txt') for child in f.iterdir())
             if not (has_pth and has_sdf):
                 continue
             checkpoint = Path(OUTPUT_DIR, f.name, 'checkpoint-9999.pth')
@@ -68,6 +68,7 @@ def main(args):
         data_path = Path(working_dir, FAUST_DIR, f"{target}.ply")
 
         config = {
+            "device": "cuda:0",
             "blr": 5e-7,
             "output_dir": str(target_dir),
             "log_dir": str(target_dir),
@@ -78,12 +79,12 @@ def main(args):
             "num_steps": 64,
             "method": "FM",
             "network": "MLP",
-            "batch_size": 10000,
-            "num_points_train": 10000,
+            "batch_size": 100000,
+            "num_points_train": 500000,
             "learning_rate": 0.01,
-            "distribution": "Gaussian",
+            "distribution": "gaussian",
             "embedding_dim": 5,
-            "embedding":"features_only",
+            "embedding_type": "features_only",
             "features_type": "landmarks",
             "landmarks": [412, 5891, 6593, 3323, 2119]
         }
@@ -115,7 +116,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    print("SDF Feature Extraction:")
+    print("Training flows on FAUST SDFs features:")
     for arg, value in vars(args).items():
         print(f"  {arg}: {value}")
     print("-----------------------------------------------")

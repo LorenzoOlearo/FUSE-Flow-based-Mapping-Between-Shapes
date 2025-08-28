@@ -27,7 +27,7 @@ from geomfum.laplacian import LaplacianFinder, LaplacianSpectrumFinder
 
 
 ########################FUNCTIONS FOR MESH NORMALIZATION ##########################
-def normalize_mesh(mesh):
+def normalize_mesh_unit(mesh):
     """
     Normalize the mesh by centering and rescaling it.
     Args:
@@ -44,6 +44,18 @@ def normalize_mesh(mesh):
     matrix[:3, :3] /= rescale
     mesh.apply_transform(matrix)
 
+    return mesh
+
+
+def normalize_mesh_08(mesh):
+    centroid = torch.tensor(mesh.centroid, dtype=torch.float32)
+    verts = torch.tensor(mesh.vertices, dtype=torch.float32)
+
+    verts -= centroid
+    verts /= verts.abs().max()
+    verts *= 0.8
+
+    mesh.vertices = verts.numpy()
     return mesh
 
 
@@ -93,7 +105,7 @@ def sample_sphere_volume(radius, center, num_points, device="cuda"):
     return points
 
 
-def generate_samples(args, device="cuda"):
+def sample_initial_distribution(num_points: int, embedding_dim: int, distribution: str, device: str):
     """
     Generate random samples based on the specified distribution.
     Args:
@@ -102,72 +114,92 @@ def generate_samples(args, device="cuda"):
     Returns:
         torch.Tensor: Generated samples of shape (num_points, embedding_dim).
     """
-    if args.distribution == "Gaussian":
-        noise = torch.randn(args.num_points_inference, args.embedding_dim).to(device)
+    if distribution == "gaussian":
+        samples = torch.randn(num_points, embedding_dim).to(device)
 
-    elif args.distribution == "Sphere":
-        if args.embedding_dim == 3:
-            noise = sample_sphere_volume(
+    elif distribution == "sphere":
+        if embedding_dim == 3:
+            samples = sample_sphere_volume(
                 radius=1,
                 center=(0, 0, 0),
-                num_points=args.num_points_inference,
+                num_points=num_points,
                 device=device,
             )
         else:
             raise NotImplementedError(
                 "Sampling from a sphere with dimensions other than 3 is not implemented."
             )
+    else:
+        raise ValueError(f"Unsupported distribution type: {distribution}")
 
-    return noise
+    return samples
 
 
 ############################### FUNCTIONS FOR MESH EMBEDDINGS #############################
-def generate_embeddings(mesh, args, device="cuda"):
+def generate_embeddings(mesh, embedding_type, num_points, features, device: str) -> torch.Tensor:
     """
-    Generate embeddings for the mesh based on the specified embedding type.
+    Generate point embeddings from a mesh using the specified embedding strategy.
+
+    Depending on the `embedding_type` option, this function returns either:
+      - Vertex coordinates only ("xyz")
+      - Features only ("features_only")
+      - Concatenated coordinates + features ("features")
+
+    If the mesh contains faces, embeddings are sampled from the surface;
+    otherwise, embeddings are sampled from vertices.
+
     Args:
-        mesh (trimesh.Trimesh): The input mesh.
-        args (argparse.Namespace): Command-line arguments containing embedding type and other parameters.
-        device (str): Device to use for tensor operations ('cuda' or 'cpu').
+        - mesh (trimesh.Trimesh): The input 3D mesh.
+        - features (torch.Tensor | np.ndarray): Per-vertex features aligned with `mesh.vertices`.
+        - embedding_type (str): One of {"xyz", "features", "features_only"}.
+        - num_points_ (int): Number of points to sample.
+        - device (str): Target device for returned embeddings 
+
     Returns:
-        torch.Tensor: Generated embeddings of shape (num_points, embedding_dim).
+        torch.Tensor: Tensor of shape (num_points, embedding_dim).
     """
 
-    # IF THE SHAPE IS A SHAPE, WE SAMPLE FROM FACES AND INTERPOLATES THE FEATURES
     if len(mesh.faces) > 0:
-        if args.embedding == "features":
-            embedding = get_interpolated_feats(mesh, args, device=device)
-        if args.embedding == "features_only":
-            embedding = get_interpolated_feats(mesh, args, device=device)
-            embedding = embedding[:, 3:]
-        elif args.embedding == "xyz":
-            samples, _ = trimesh.sample.sample_surface(mesh, args.num_points_train)
+        if embedding_type in {"features", "features_only"}:
+            # Interpolated features sampled across faces
+            embedding = get_interpolated_feats(mesh, features, num_points, device=device)
+
+            if embedding_type == "features_only":
+                # Drop XYZ coords, keep only feature channels
+                embedding = embedding[:, 3:]
+
+        elif embedding_type == "xyz":
+            # Sample 3D points directly from mesh surface
+            samples, _ = trimesh.sample.sample_surface(mesh, num_points)
             embedding = torch.tensor(samples, dtype=torch.float32, device=device)
-    # IF NOT WE JUST TAKES VERTICES VALUES
+
+        else:
+            raise ValueError(f"Unsupported embedding type: {embedding_type}")
+
     else:
-        if args.embedding == "xyz":
-            indices = np.random.choice(
-                len(mesh.vertices), args.num_points_train, replace=True
-            )
+        indices = np.random.choice(len(mesh.vertices), num_points, replace=True)
+
+        if embedding_type == "xyz":
             samples = mesh.vertices[indices]
             embedding = torch.tensor(samples, dtype=torch.float32, device=device)
-        elif args.embedding == "features_only":
-            indices = np.random.choice(
-                len(mesh.vertices), args.num_points_train, replace=True
-            )
-            embedding = args.features[indices]
-        elif args.embedding == "features":
-            indices = np.random.choice(
-                len(mesh.vertices), args.num_points_train, replace=True
-            )
-            embedding = args.features
-            samples = mesh.vertices
-            samples = torch.tensor(samples, dtype=torch.float32, device=device)
-            embedding = torch.cat([samples, embedding], -1)[indices]
+
+        elif embedding_type == "features_only":
+            embedding = features[indices]
+
+        elif embedding_type == "features":
+            # Concatenate XYZ coordinates with features
+            samples = torch.tensor(mesh.vertices, dtype=torch.float32, device=device)
+            feat_tensor = features if torch.is_tensor(features) else torch.tensor(features, dtype=torch.float32, device=device)
+            full_embedding = torch.cat([samples, feat_tensor], dim=-1)
+            embedding = full_embedding[indices]
+
+        else:
+            raise ValueError(f"Unsupported embedding type: {embedding_type}")
+
     return embedding
 
 
-def get_interpolated_feats(mesh, args, device=torch.device("cuda:0")):
+def get_interpolated_feats(mesh, features, num_points, device):
     """
     Interpolates features to sampled points on the mesh surface.
 
@@ -186,7 +218,7 @@ def get_interpolated_feats(mesh, args, device=torch.device("cuda:0")):
     """
 
     # Sample points
-    samples, face_indices = trimesh.sample.sample_surface(mesh, args.num_points_train)
+    samples, face_indices = trimesh.sample.sample_surface(mesh, num_points)
     samples = samples.astype(np.float32)
 
     # Convert to tensors
@@ -256,7 +288,7 @@ def get_interpolated_feats(mesh, args, device=torch.device("cuda:0")):
 
     # Get landmark geodesic distances for all vertices in all faces
     # Shape: [num_points, 3, num_landmarks]
-    vertex_feats = args.features[face_idx_tensor]
+    vertex_feats = features[face_idx_tensor]
 
     # Interpolate using barycentric coordinates
     # Multiply each vertex's geodesic distances by its barycentric weight
@@ -290,7 +322,7 @@ def get_interpolated_feats(mesh, args, device=torch.device("cuda:0")):
 
         # Get geodesic distances for nearest vertices
         # Shape: [num_points, num_landmarks]
-        nearest_geodesic = args.features[selected_vertices]
+        nearest_geodesic = features[selected_vertices]
 
         # Use nearest vertex distances for invalid triangles
         invalid_mask_tensor = ~valid_mask_tensor
@@ -302,9 +334,9 @@ def get_interpolated_feats(mesh, args, device=torch.device("cuda:0")):
 ######################## # FUNCTIONS FOR COMPUTING FEATURES ########################
 
 
-def compute_features(mesh, args, device="cuda"):
+def compute_features(mesh, args, device):
     """
-    Compute geodesic distances from each vertex to the landmarks.
+    Compute geodesic distances from each vertex to the landmarks, return them normalized on axis 0.
 
     Parameters:
     -----------
@@ -317,25 +349,27 @@ def compute_features(mesh, args, device="cuda"):
     --------
     torch.Tensor
         Tensor of shape (num_vertices, len(lm)) containing geodesic distances
-        from each vertex to each landmark
+        from each vertex to each landmark vertex, normalized along axis 0.
     """
 
-    if args.embedding == "xyz":
+    features = None
+
+    if args.embedding_type == "xyz":
         return None
     if args.features_type == "landmarks":
         if len(mesh.faces) > 0:
-            return torch.tensor(
+            features = torch.tensor(
                 compute_geodesic_distances(mesh, source_index=np.array(args.landmarks))
             ).T.to(device)
         else:
-            return torch.tensor(
+            features = torch.tensor(
                 compute_geodesic_distances_pointcloud(
                     mesh, source_index=np.array(args.landmarks)
                 )
             ).T.to(device)
-    if args.features_type == "landmarks_exp":
+    elif args.features_type == "landmarks_exp":
         if len(mesh.faces) > 0:
-            return torch.exp(
+            features = torch.exp(
                 -torch.tensor(
                     compute_geodesic_distances(
                         mesh, source_index=np.array(args.landmarks)
@@ -343,20 +377,20 @@ def compute_features(mesh, args, device="cuda"):
                 ).T.to(device)
             )
         else:
-            return torch.exp(
+            features = torch.exp(
                 -torch.tensor(
                     compute_geodesic_distances_pointcloud(
                         mesh, source_index=np.array(args.landmarks)
                     )
                 ).T.to(device)
             )
-    if args.features_type == "landmarks_biharmonic":
-        return torch.tensor(
+    elif args.features_type == "landmarks_biharmonic":
+        features = torch.tensor(
             compute_biharmonic_distances(mesh, source_index=np.array(args.landmarks))
         ).T.to(device)
-    if args.features_type == "wks":
-        return torch.tensor(compute_wks(mesh)).to(device)
-    if args.features_type == "wks_plus_ldmk":
+    elif args.features_type == "wks":
+        features = torch.tensor(compute_wks(mesh)).to(device)
+    elif args.features_type == "wks_plus_ldmk":
         if len(mesh.faces) > 0:
             ldmk = torch.tensor(
                 compute_geodesic_distances(mesh, source_index=np.array(args.landmarks))
@@ -369,9 +403,8 @@ def compute_features(mesh, args, device="cuda"):
                 )
             ).T.to(device)
             geodesic = torch.tensor(compute_wks(mesh)).to(device)
-        return torch.cat([geodesic, ldmk], -1)
-
-    if args.features_type == "wks_plus_ldmk_exp":
+        features = torch.cat([geodesic, ldmk], -1)
+    elif args.features_type == "wks_plus_ldmk_exp":
         if len(mesh.faces) > 0:
             ldmk = torch.tensor(
                 compute_geodesic_distances(mesh, source_index=np.array(args.landmarks))
@@ -384,14 +417,27 @@ def compute_features(mesh, args, device="cuda"):
                 )
             ).T.to(device)
             geodesic = torch.exp(-torch.tensor(compute_wks(mesh)).to(device))
-        return torch.cat([geodesic, ldmk], -1)
-
-    if args.features_type == "mds":
-        # Get the mds embedding
+        features = torch.cat([geodesic, ldmk], -1)
+    elif args.features_type == "mds":
         print("Computing MDS embedding")
-        return torch.tensor(
-            compute_mds(mesh.vertices, mesh.faces, k=args.embedding_dim - 3)
+        features = torch.tensor(
+            compute_mds(mesh.vertices, mesh.faces, k=args.embedding_type_dim - 3)
         ).to(device)
+
+    if args.features_normalization == "0_center" and features is not None:
+        print("0-centering features")
+        features = (features - features.mean(dim=0)) / (features.std(dim=0) + 1e-8)
+    elif args.features_normalization == "min_max" and features is not None:
+        print("Min-max normalizing features")
+        min_vals, _ = features.min(dim=0, keepdim=True)
+        max_vals, _ = features.max(dim=0, keepdim=True)
+        features = (features - min_vals) / (max_vals - min_vals + 1e-8)
+    elif args.features_normalization == "none" and features is not None:
+        pass
+    else:
+        raise ValueError(f"Unsupported normalization type: {args.features_normalization} or features is None")
+
+    return features
 
 
 def compute_geodesic_distmat(verts, faces):
