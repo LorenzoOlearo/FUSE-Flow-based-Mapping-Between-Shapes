@@ -16,7 +16,8 @@ from util.matching_utils import (
     compute_p2p_with_flows_composition,
     compute_p2p_with_flows_composition_hungarian,
     compute_p2p_with_flows_composition_lapjv,
-    compute_p2p_with_knn_gauss,
+    compute_p2p_with_inverted_flows_in_gauss,
+    compute_p2p_with_inverted_flows_in_gauss_uniformed,
     compute_p2p_with_knn,
     compute_p2p_with_lapjv,
     compute_p2p_with_fmaps,
@@ -34,8 +35,9 @@ from util.plot import plot_points
 SDFs_PATH = Path('./out/SDFs')
 FAUST_PATH = Path('./data/MPI-FAUST/training/registrations/')
 N_LANDMARKS = 5
-FLOWS_PATH = Path('./out/flows')
-FLOWS_VERTEX_PATH = Path('./out/flows_vertex')
+# FLOWS_PATH = Path('./out/flows')
+FLOWS_VERTEX_PATH = Path('./out/flows_vertex_0_1_normalization')
+FLOWS_SDF_PATH = Path('./out/flows_vertex_SDFs/')
 
 
 def plot_geodesic_comparison(vertices, faces, true_dists, dijkstra_dists, save_path):
@@ -173,7 +175,7 @@ def process_element(element: str, representation: str, device: str, mesh_baselin
             features_path = Path(SDFs_PATH, element, f'{element}-sdf-mesh-dists-projected-interpolated.txt')
             points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
         features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
-        model.load_state_dict(torch.load(Path(FLOWS_PATH, element, 'checkpoint-9999.pth'), weights_only=False)['model'], strict=True)
+        model.load_state_dict(torch.load(Path(FLOWS_SDF_PATH, element, 'checkpoint-9999.pth'), weights_only=False)['model'], strict=True)
 
     model.to(device)
     model.eval()
@@ -200,18 +202,35 @@ def prepare_elements(
 
 
 def get_matching_methods(
-    source_features, target_features, source_model, target_model, device: str, all_methods: bool = False
+    source_features, target_features, source_model, target_model, device: str, matching_methods: str
 ) -> Dict[str, Callable[[], torch.Tensor]]:
     """Return mapping of strategy names to their compute functions."""
 
-    if all_methods is False:
+    if matching_methods == "fast":
         return {
             "knn": lambda: compute_p2p_with_knn(source_features, target_features),
             "flow": lambda: compute_p2p_with_flows_composition(
                 source_features, target_features, source_model, target_model, device
             ),
+            "flow-inverse": lambda: compute_p2p_with_inverted_flows_in_gauss(
+                source_features, target_features, source_model, target_model
+            ),
+            "flow-inverse-uniform": lambda: compute_p2p_with_inverted_flows_in_gauss_uniformed(
+                source_features, target_features, source_model, target_model
+            ),
         }
-    else:
+    elif matching_methods == "hugarian":
+        return {
+            "knn": lambda: compute_p2p_with_knn(source_features, target_features),
+            "hungarian": lambda: compute_p2p_with_hungarian(source_features, target_features),
+            "flow": lambda: compute_p2p_with_flows_composition(
+                source_features, target_features, source_model, target_model, device
+            ),
+            "flow-hungarian": lambda: compute_p2p_with_flows_composition_hungarian(
+                source_features, target_features, source_model, target_model
+            ),
+        }
+    elif matching_methods == "all":
         return {
             "knn": lambda: compute_p2p_with_knn(source_features, target_features),
             "hungarian": lambda: compute_p2p_with_hungarian(source_features, target_features),
@@ -227,6 +246,8 @@ def get_matching_methods(
                 source_features, target_features, source_model, target_model
             ),
         }
+    else:
+        raise ValueError(f"Unknown matching methods option: {matching_methods}")
 
 
 def run_matching_methods(
@@ -381,7 +402,7 @@ def main(args):
                 device, mesh_baseline,
                 args.plot_html, args.plot_png,
                 args.geo_error, output_dir,
-                args.all_methods
+                args.matching_methods
             )
             results.append(df)
     else:
@@ -395,7 +416,7 @@ def main(args):
                         device, mesh_baseline,
                         args.plot_html, args.plot_png,
                         args.geo_error, output_dir,
-                        args.all_methods
+                        args.matching_methods
                     )
                     results.append(df)
 
@@ -418,7 +439,7 @@ if __name__ == "__main__":
     parser.add_argument('--same', action='store_true', help="Match the same shape with different representations", default=False)
     parser.add_argument('--geo_error', action='store_true', help="If true along side mesh_baseline and source_rep 'sdf', for each landmark plot the difference between the true geodesic distance and the Dijkastra approximation", default=False)
     parser.add_argument('--run_name', type=str, help="Name of the run to append at the end of the output directory", default="")
-    parser.add_argument('--all_methods', action='store_true', help="Run all matching methods, default is only knn and flow inversion because the others are too slow", default=False)
+    parser.add_argument('--matching_methods', type=str, default='fast', help="Which matching methods to use: 'fast' (knn, flow), 'hugarian' (knn, hungarian, flow, flow-hungarian), 'all' (knn, hungarian, lapjv, flow, flow-hungarian, flow-lapjv)")
 
     args = parser.parse_args()
     if args.run_name == "":
