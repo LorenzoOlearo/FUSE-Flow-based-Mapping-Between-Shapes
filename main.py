@@ -332,6 +332,7 @@ def fm_step(model, y, path, device, args):
     loss = torch.mean((V_y - path_sample.dx_t) ** 2)
     return loss
 
+
 def train_one_epoch(
     model: torch.nn.Module,
     data_loader,
@@ -445,7 +446,14 @@ def train(args, device):
     mesh = None
     if args.features_path is not None:
         print(f"Ignoring config_file data_path --> loading features from {args.features_path}")
-        features = torch.tensor(np.loadtxt(args.features_path).astype(np.float32)).to(device)
+
+        ext = os.path.splitext(args.features_path)[1]
+        if ext not in [".txt", ".npy"]:
+            raise ValueError(f"Features file must be .txt or .npy, got {ext}")
+        elif ext == ".txt":
+            features = torch.tensor(np.loadtxt(args.features_path).astype(np.float32)).to(device)
+        elif ext == ".npy":
+            features = torch.tensor(np.load(args.features_path).astype(np.float32)).to(device)
         print(f"Loaded features from {args.features_path} | Features shape: {features.shape}")
     else:
         print(f"Computing {args.features_type} features from mesh...")
