@@ -233,6 +233,13 @@ def get_inline_arg():
         help="Normalization to apply to the features: none, min_max, 0_center",
     )
 
+    parser.add_argument(
+        "--features_interpolation",
+        type=int,
+        default=-1,
+        help="Number of points to sample for interpolating the features. If -1, no interpolation is performed and the features are used as they are.",
+    )
+
     args = parser.parse_args()
 
     return args
@@ -443,7 +450,13 @@ def train(args, device):
     misc.load_model(args=args, model_without_ddp=model, optimizer=optimizer, loss_scaler=loss_scaler)
     
     # Load the mesh and normalize it between [-0.8, 0.8]
-    mesh = None
+    mesh = trimesh.load(args.data_path, process=False)
+    if len(mesh.faces) > 0:
+        mesh = normalize_mesh_08(mesh)
+    # else:
+        # TODO: Normalize between [-0.8, 0.8] for point clouds as for meshes; refactor function names
+        # mesh.vertices = pc_normalize(mesh.vertices)
+
     if args.features_path is not None:
         print(f"Ignoring config_file data_path --> loading features from {args.features_path}")
 
@@ -455,15 +468,21 @@ def train(args, device):
         elif ext == ".npy":
             features = torch.tensor(np.load(args.features_path).astype(np.float32)).to(device)
         print(f"Loaded features from {args.features_path} | Features shape: {features.shape}")
+
+        if args.features_interpolation > 0 and mesh is not None:
+            features = generate_embeddings(
+                mesh=mesh,
+                embedding_type=args.embedding_type,
+                num_points=args.features_interpolation,
+                features=features,
+                device=device,
+            )
+            print(f"Interpolated features over {args.features_interpolation} points | New features shape: {features.shape}")
+            np.savetxt(os.path.join(args.output_dir, "features.txt"), features.detach().cpu().numpy())
+            print(f"Saved vertex features to {os.path.join(args.output_dir, 'features.txt')}")
+
     else:
         print(f"Computing {args.features_type} features from mesh...")
-
-        mesh = trimesh.load(args.data_path, process=False)
-        if len(mesh.faces) > 0:
-            mesh = normalize_mesh_08(mesh)
-        # else:
-            # TODO: Normalize between [-0.8, 0.8] for point clouds as for meshes; refactor function names
-            # mesh.vertices = pc_normalize(mesh.vertices)
 
         # Compute features per vertex
         features = compute_features(mesh, args, device)
