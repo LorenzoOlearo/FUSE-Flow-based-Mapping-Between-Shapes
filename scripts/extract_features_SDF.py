@@ -12,7 +12,8 @@ import torch
 import trimesh
 
 from igl import signed_distance
-from mcubes import marching_cubes
+import mcubes 
+import pymeshlab
 
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
@@ -27,7 +28,7 @@ from sklearn.neighbors import NearestNeighbors
 from train_SDF import MLP, MLPConfig, make_volume, evaluate_model, NeuralSDF, NeuralSDFConfig
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from util.mesh_utils import normalize_mesh_08
+from util.mesh_utils import normalize_mesh_08, compute_geodesic_distances
 
 
 def load_sdf_volume(path: Path, device: str):
@@ -485,8 +486,8 @@ def load_target_data(target: str, eps: float, device: str, args) -> Tuple[np.nda
     return landmarks, surface_mask, sdf_model, mesh
 
 
-def get_surface_mask_from_IGL_SDF(mesh, eps):
-    """ Extracts the surface mask from the mesh using IGL signed distance. """
+def get_surface_mask_from_IGL_SDF(mesh, eps, landmark_indices: list):
+    """ Extracts the surface mask from the mesh using IGL signed distance and maps landmarks to the remeshed mesh using KNN. """
     volume = make_volume('cpu')
     
     print(f"Extracting surface mask using IGL signed distance over a {volume.shape} grid...")
@@ -494,9 +495,26 @@ def get_surface_mask_from_IGL_SDF(mesh, eps):
     sdf_volume = sdf.reshape(512, 512, 512)
     
     surface_mask = np.argwhere(np.abs(sdf_volume) <= eps)
-    extracted_mesh = marching_cubes(sdf_volume, eps)
+    verts, faces = mcubes.marching_cubes(sdf_volume, eps)
+
+    ms = pymeshlab.MeshSet()
+    ms.add_mesh(pymeshlab.Mesh(verts, faces))
+    ms.meshing_isotropic_explicit_remeshing()
+    mesh_isotropic = ms.current_mesh()
+    mesh_isotropic = trimesh.Trimesh(vertices=mesh_isotropic.vertex_matrix(), faces=mesh_isotropic.face_matrix())
+    mesh_isotropic = normalize_mesh_08(mesh_isotropic)
+
+    # Map landmark indices from original mesh to closest vertices on mesh_isotropic using KNN
+    orig_vertices = np.asarray(mesh.vertices)
+    iso_vertices = np.asarray(mesh_isotropic.vertices)
+    lm_idx = np.asarray(landmark_indices, dtype=int)
+    lm_points = orig_vertices[lm_idx]
+
+    tree = cKDTree(iso_vertices)
+    _, nearest_idx = tree.query(lm_points, k=1)
+    new_landmark_indices = nearest_idx.tolist()
     
-    return surface_mask, extracted_mesh
+    return surface_mask, mesh_isotropic, new_landmark_indices
 
 
 def points_dist_in_grid_interpolated_IDW(surface_points, surface_mask, dists, target: str, resolution, min_coord, max_coord, additional_plots=False, k_neighbors=8, idw_power=2):
@@ -749,7 +767,7 @@ def save_outputs(target, surface_points, dists_surface_points, dists_surface_poi
 
 
 def main(args):
-    device = "cuda:1"
+    device = "cuda:0"
     resolution = 512
     min_coord = -1.0
     max_coord = 1.0
@@ -766,8 +784,20 @@ def main(args):
         # 1. Load data (landmark voxels, surface voxel mask, trained SDF model)
         landmarks, surface_mask, sdf_model, mesh = load_target_data(target, eps, device, args)
         if args.igl_sdf:
-            surface_mask, extracted_mesh = get_surface_mask_from_IGL_SDF(mesh, eps)
+            surface_mask, extracted_mesh, new_landmark_indices = get_surface_mask_from_IGL_SDF(mesh, eps, landmark_indices)
             print(f"Using IGL SDF for surface mask, found {surface_mask.shape[1]} surface voxels.")
+
+            # Compute the true geodesic distances on the extracted mesh
+            mesh_dists = []
+            for i, landmark_idx in enumerate(new_landmark_indices):
+                print(f"Computing true geodesic distances on extracted mesh for landmark {i} (vertex index {landmark_idx})...")
+                true_dists = compute_geodesic_distances(extracted_mesh, landmark_idx)
+                mesh_dists.append(true_dists)
+                max_dist = max(np.max(dist) for dist in mesh_dists)
+                mesh_dists = [dist / max_dist for dist in mesh_dists]
+                print(f"Landmark {i} true distances: min={np.min(true_dists)}, max={np.max(true_dists)}, mean={np.mean(true_dists)}")
+            mesh_dists = np.stack(mesh_dists, axis=1)
+            np.savetxt(f"out/SDFs/{target}/{target}-sdf-extracted-mesh-dists.txt", mesh_dists, fmt='%.6f')
 
         # 2. Sample points on zero level set of SDF
         surface_points = sample_zero_level_set(
@@ -822,7 +852,7 @@ def main(args):
             max_coord=max_coord,
             device=device,
         )
-        
+
         # 7. Save the results
         save_outputs(
             target=target,
