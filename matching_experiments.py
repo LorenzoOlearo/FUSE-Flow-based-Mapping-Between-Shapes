@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import trimesh
 import matplotlib.colors as mcolors
-
+import time
 from typing import Callable, Dict
 from dataclasses import dataclass
 import pandas as pd
@@ -23,6 +23,9 @@ from util.matching_utils import (
     compute_p2p_with_fmaps,
     compute_p2p_with_hungarian,
 )
+
+from util.metrics import compute_dirichlet_energy, compute_coverage
+
 from model.models import FMCond
 from model.networks import MLP
 from util.plot import start_end_subplot
@@ -32,12 +35,11 @@ from plotly.subplots import make_subplots
 
 from util.plot import plot_points
 
-SDFs_PATH = Path('./out/SDFs')
-FAUST_PATH = Path('./data/MPI-FAUST/training/registrations/')
 N_LANDMARKS = 5
-# FLOWS_PATH = Path('./out/flows')
-FLOWS_VERTEX_PATH = Path('./out/flows_vertex_0_1_normalization')
+FAUST_PATH = Path('./data/MPI-FAUST/training/registrations/')
+FLOWS_PATH = Path('./out/flows_vertex_0_1_normalization/')
 FLOWS_SDF_PATH = Path('./out/flows_vertex_SDFs/')
+SDFs_PATH = Path('./out/SDFs')
 
 
 def plot_geodesic_comparison(vertices, faces, true_dists, dijkstra_dists, save_path):
@@ -160,10 +162,10 @@ def process_element(element: str, representation: str, device: str, mesh_baselin
     model = FMCond(channels=N_LANDMARKS, network=MLP(channels=N_LANDMARKS).to(device))
 
     if representation == 'mesh':
-        features_path = Path(FLOWS_VERTEX_PATH, element, f'features.txt')
+        features_path = Path(FLOWS_PATH, element, f'features.txt')
         points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
         features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
-        model.load_state_dict(torch.load(Path(FLOWS_VERTEX_PATH, element, 'checkpoint-9999.pth'), weights_only=False)['model'], strict=True)
+        model.load_state_dict(torch.load(Path(FLOWS_PATH, element, 'checkpoint-9999.pth'), weights_only=False)['model'], strict=True)
     elif representation == 'sdf':
         print(f"Processing {element} with SDF representation")
         if mesh_baseline is False:
@@ -173,6 +175,7 @@ def process_element(element: str, representation: str, device: str, mesh_baselin
         else:
             print(f"Using mesh baseline for {element}")
             features_path = Path(SDFs_PATH, element, f'{element}-sdf-mesh-dists-projected-interpolated.txt')
+            # features_path = Path(SDFs_PATH, element, f'{element}-sdf-extracted-mesh-dists.txt')   # Analitic SDF features
             points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
         features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
         model.load_state_dict(torch.load(Path(FLOWS_SDF_PATH, element, 'checkpoint-9999.pth'), weights_only=False)['model'], strict=True)
@@ -180,25 +183,18 @@ def process_element(element: str, representation: str, device: str, mesh_baselin
     model.to(device)
     model.eval()
 
-    return features, points, model
+    return features, points, model, mesh
 
 
 @dataclass
-class P2PResult:
+class MatchingResult:
     """Holds the output of a P2P method."""
     indices: torch.Tensor
     matched_points: torch.Tensor
-    error: float
-
-
-def prepare_elements(
-    source: str, target: str, source_rep: str, target_rep: str, device: str, mesh_baseline: bool
-):
-    """Extract features, points, and models for source and target."""
-    source_features, source_points, source_model = process_element(source, source_rep, device, mesh_baseline)
-    target_features, target_points, target_model = process_element(target, target_rep, device, mesh_baseline)
-
-    return source_features, source_points, source_model, target_features, target_points, target_model
+    euclidean_error: float
+    dirichlet_energy: float
+    coverage: float
+    elapsed: float
 
 
 def get_matching_methods(
@@ -212,14 +208,8 @@ def get_matching_methods(
             "flow": lambda: compute_p2p_with_flows_composition(
                 source_features, target_features, source_model, target_model, device
             ),
-            "flow-inverse": lambda: compute_p2p_with_inverted_flows_in_gauss(
-                source_features, target_features, source_model, target_model
-            ),
-            "flow-inverse-uniform": lambda: compute_p2p_with_inverted_flows_in_gauss_uniformed(
-                source_features, target_features, source_model, target_model
-            ),
         }
-    elif matching_methods == "hugarian":
+    elif matching_methods == "hungarian":
         return {
             "knn": lambda: compute_p2p_with_knn(source_features, target_features),
             "hungarian": lambda: compute_p2p_with_hungarian(source_features, target_features),
@@ -227,7 +217,7 @@ def get_matching_methods(
                 source_features, target_features, source_model, target_model, device
             ),
             "flow-hungarian": lambda: compute_p2p_with_flows_composition_hungarian(
-                source_features, target_features, source_model, target_model
+                source_features, target_features, source_model, target_mode
             ),
         }
     elif matching_methods == "all":
@@ -251,30 +241,51 @@ def get_matching_methods(
 
 
 def run_matching_methods(
-    strategies: Dict[str, Callable[[], torch.Tensor]], target_points: torch.Tensor
-) -> Dict[str, P2PResult]:
+    strategies: Dict[str, Callable[[], torch.Tensor]],
+    target_points: torch.Tensor,
+    source_mesh: trimesh.Trimesh,
+    target_mesh: trimesh.Trimesh,
+) -> Dict[str, MatchingResult]:
     """Run all P2P strategies and compute matched points + errors."""
     results = {}
     for name, func in strategies.items():
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        t0 = time.perf_counter()
         indices = func()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        elapsed = time.perf_counter() - t0
+
         matched_points = target_points[indices]
-        error = torch.norm(matched_points - target_points, dim=-1).mean().item()
-        results[name] = P2PResult(indices=indices, matched_points=matched_points, error=error)
+        euclidean_error = torch.norm(matched_points - target_points, dim=-1).mean().item()
+        dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, indices)
+        coverage = compute_coverage(indices, len(target_mesh.vertices))
+
+        results[name] = MatchingResult(
+            indices=indices,
+            matched_points=matched_points,
+            euclidean_error=euclidean_error,
+            dirichlet_energy=dirichlet_energy,
+            coverage=coverage,
+            elapsed=elapsed,
+        )
+
     return results
 
 
-def log_results(source: str, target: str, results: Dict[str, P2PResult]) -> None:
+def log_results(source: str, target: str, results: Dict[str, MatchingResult]) -> None:
     """Print error metrics nicely formatted."""
     print(f"> Evaluation results for {source} -> {target}:")
     for name, res in results.items():
-        print(f"  > {name:<20}: {res.error:.4f}")
+        print(f"  > {name:<20}: euclidean_error {res.euclidean_error:.4f} | dirichlet_energy={res.dirichlet_energy:.4f} | coverage={res.coverage:.4f} | elapsed={res.elapsed:.2f}s")
 
 
 def plot_results(
     source_points: torch.Tensor,
     source: str,
     target: str,
-    results: Dict[str, P2PResult],
+    results: Dict[str, MatchingResult],
     output_dir: str,
     plot_html: bool,
     plot_png: bool,
@@ -311,20 +322,31 @@ def process_pair(
     Main pipeline to process a source-target pair, evaluate multiple P2P methods,
     log and plot results, and return a DataFrame of errors.
     """
-    source_features, source_points, source_model, target_features, target_points, target_model = prepare_elements(source, target, source_rep, target_rep, device, mesh_baseline)
+
+    source_features, source_points, source_model, source_mesh = process_element(source, source_rep, device, mesh_baseline)
+    target_features, target_points, target_model, target_mesh = process_element(target, target_rep, device, mesh_baseline)
 
     matching_methods = get_matching_methods(source_features, target_features, source_model, target_model, device, all_methods)
-    results = run_matching_methods(matching_methods, target_points)
+    results = run_matching_methods(matching_methods, target_points, source_mesh, target_mesh)
     
     log_results(source, target, results)
     plot_results(source_points, source, target, results, output_dir, plot_html, plot_png)
 
-    row = {"source": source, "target": target}
-    row.update({name: res.error for name, res in results.items()})
-    df = pd.DataFrame([row])
+    rows = []
+    for name, res in results.items():
+        rows.append({
+            "source": source,
+            "target": target,
+            "method": name,
+            "euclidean_error": res.euclidean_error,
+            "dirichlet": res.dirichlet_energy,
+            "coverage": res.coverage,
+            "elapsed": res.elapsed,
+        })
+    df = pd.DataFrame(rows)
 
     if mesh_baseline and geo_error:
-        geo = np.loadtxt(Path(FLOWS_VERTEX_PATH, source, 'features.txt'))
+        geo = np.loadtxt(Path(FLOWS_PATH, source, 'features.txt'))
         mesh = trimesh.load(Path(FAUST_PATH, source + '.ply'), process=False)
         mesh = normalize_mesh(mesh)
         # err_geo = np.linalg.norm(geo - source_features.cpu().numpy(), axis=1)
@@ -383,7 +405,7 @@ def plot_matching_error(err_flow_composition, map_err_knn, output_dir):
 
 
 def main(args):
-    device = 'cuda:1'
+    device = 'cuda:0'
     torch.cuda.set_device(device)
     mesh_baseline = args.mesh_baseline
 
@@ -421,12 +443,11 @@ def main(args):
                     results.append(df)
 
     results_df = pd.concat(results, ignore_index=True)
+    results_df.to_csv(Path(output_dir, 'matching_results.csv'), index=False)
 
     print("Average errors across all pairs:")
-    for col in results_df.columns:
-        if col not in ['source', 'target']:
-            avg_error = results_df[col].mean()
-            print(f"  > {col:<20}: {avg_error:.4f}")
+    avg_metrics = df.groupby('method')[['euclidean_error', 'dirichlet', 'coverage']].mean()
+    print(avg_metrics)
 
 
 if __name__ == "__main__":
@@ -439,7 +460,7 @@ if __name__ == "__main__":
     parser.add_argument('--same', action='store_true', help="Match the same shape with different representations", default=False)
     parser.add_argument('--geo_error', action='store_true', help="If true along side mesh_baseline and source_rep 'sdf', for each landmark plot the difference between the true geodesic distance and the Dijkastra approximation", default=False)
     parser.add_argument('--run_name', type=str, help="Name of the run to append at the end of the output directory", default="")
-    parser.add_argument('--matching_methods', type=str, default='fast', help="Which matching methods to use: 'fast' (knn, flow), 'hugarian' (knn, hungarian, flow, flow-hungarian), 'all' (knn, hungarian, lapjv, flow, flow-hungarian, flow-lapjv)")
+    parser.add_argument('--matching_methods', type=str, default='fast', help="Which matching methods to use: 'fast' (knn, flow), 'hungarian' (knn, hungarian, flow, flow-hungarian), 'all' (knn, hungarian, lapjv, flow, flow-hungarian, flow-lapjv)")
 
     args = parser.parse_args()
     if args.run_name == "":
