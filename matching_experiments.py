@@ -37,7 +37,7 @@ from util.plot import plot_points
 
 N_LANDMARKS = 5
 FAUST_PATH = Path('./data/MPI-FAUST/training/registrations/')
-FLOWS_PATH = Path('./out/flows_vertex_0_1_normalization/')
+FLOWS_PATH = Path('./out/flows/faust/faust-norm-0-1-indipendent/')
 FLOWS_SDF_PATH = Path('./out/flows_vertex_SDFs/')
 SDFs_PATH = Path('./out/SDFs')
 
@@ -129,6 +129,18 @@ def normalize_mesh(mesh):
     return mesh
 
 
+def normalize_mesh_08(mesh):
+    centroid = torch.tensor(mesh.centroid, dtype=torch.float32)
+    verts = torch.tensor(mesh.vertices, dtype=torch.float32)
+
+    verts -= centroid
+    verts /= verts.abs().max()
+    verts *= 0.8
+
+    mesh.vertices = verts.numpy()
+    return mesh
+
+
 def is_in_range(name):
     try:
         num = int(''.join(filter(str.isdigit, name)))
@@ -137,7 +149,7 @@ def is_in_range(name):
         return False
 
 
-def get_targets() -> List[str]:
+def get_targets(args) -> List[str]:
     """Determine which targets to process."""
     # targets = [
     #     f.name for f in SDFs_PATH.iterdir() if f.is_dir() and
@@ -148,6 +160,10 @@ def get_targets() -> List[str]:
 
     targets = []
     for i in range(80, 100):
+        if args.source_rep == 'sdf' or args.target_rep == 'sdf':
+            if i == 86 or i == 87 or i == 96 or i == 97:
+                print(f"Skipping topologically incorrect shape tr_reg_{i:03d}")
+                continue
         target = f"tr_reg_{i:03d}"
         targets.append(target)
 
@@ -155,30 +171,71 @@ def get_targets() -> List[str]:
     return targets
 
 
-def process_element(element: str, representation: str, device: str, mesh_baseline: bool):
+def normalize_features(features, method):
+    """Normalize features based on the specified method."""
+    if method == "none":
+        print("No normalization applied to features.")
+        return features
+    elif method == "0_1_indipendent":
+        # Normalize each feature channel to [0, 1]
+        min_vals = features.min(dim=0).values
+        max_vals = features.max(dim=0).values
+        normalized = (features - min_vals) / (max_vals - min_vals + 1e-8)
+        print(f"Feature normalization (0_1_indipendent): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+        return normalized
+    elif method == "0_1_global":
+        # Normalize all features to [0, 1] based on global min and max
+        min_val = features.min()
+        max_val = features.max()
+        normalized = (features - min_val) / (max_val - min_val + 1e-8)
+        print(f"Feature normalization (0_1_global): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+        return normalized
+    elif method == "0_center_indipendent":
+        # Center each feature channel around 0 and scale to [-1, 1]
+        mean_vals = features.mean(dim=0)
+        max_devs = torch.max(torch.abs(features - mean_vals), dim=0).values
+        normalized = (features - mean_vals) / (max_devs + 1e-8)
+        print(f"Feature normalization (0_center_indipendent): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+        return normalized
+    elif method == "0_center_global":
+        # Center all features around 0 and scale to [-1, 1] based on global max deviation
+        mean_val = features.mean()
+        max_dev = torch.max(torch.abs(features - mean_val))
+        normalized = (features - mean_val) / (max_dev + 1e-8)
+        print(f"Feature normalization (0_center_global): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+        return normalized
+    else:
+        raise ValueError(f"Unknown normalization method: {method}")
+
+
+def process_element(element: str, representation: str, device: str, mesh_baseline: bool, features_normalization: str):
     mesh_path = Path(FAUST_PATH, element + '.ply')
     mesh = trimesh.load(mesh_path, process=False)
-    mesh = normalize_mesh(mesh)
+    mesh = normalize_mesh_08(mesh)
     model = FMCond(channels=N_LANDMARKS, network=MLP(channels=N_LANDMARKS).to(device))
 
     if representation == 'mesh':
-        features_path = Path(FLOWS_PATH, element, f'features.txt')
+        features_path = Path(FLOWS_PATH, element, f'vertex-geodesics.txt')
         points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
         features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
         model.load_state_dict(torch.load(Path(FLOWS_PATH, element, 'checkpoint-9999.pth'), weights_only=False)['model'], strict=True)
     elif representation == 'sdf':
         print(f"Processing {element} with SDF representation")
-        if mesh_baseline is False:
-            features_path = Path(SDFs_PATH, element, f'{element}-sdf-dijkstra-features.txt')
-            points_path = Path(SDFs_PATH, element, f'{element}-sdf-sampled-points.txt')
-            points = torch.tensor(np.loadtxt(points_path).astype(np.float32)).to(device)
-        else:
-            print(f"Using mesh baseline for {element}")
-            features_path = Path(SDFs_PATH, element, f'{element}-sdf-mesh-dists-projected-interpolated.txt')
-            # features_path = Path(SDFs_PATH, element, f'{element}-sdf-extracted-mesh-dists.txt')   # Analitic SDF features
-            points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
+        features_path = Path(SDFs_PATH, element, f'{element}-sdf-projected-vertex-dists.txt')
+        points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
+        # if mesh_baseline is False:
+        #     features_path = Path(SDFs_PATH, element, f'{element}-sdf-dijkstra-features.txt')
+        #     points_path = Path(SDFs_PATH, element, f'{element}-sdf-sampled-points.txt')
+        #     points = torch.tensor(np.loadtxt(points_path).astype(np.float32)).to(device)
+        # else:
+        #     print(f"Using mesh baseline for {element}")
+        #     features_path = Path(SDFs_PATH, element, f'{element}-sdf-mesh-dists-projected-interpolated.txt')
+        #     # features_path = Path(SDFs_PATH, element, f'{element}-sdf-extracted-mesh-dists.txt')   # Analitic SDF features
+        #     points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
         features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
         model.load_state_dict(torch.load(Path(FLOWS_SDF_PATH, element, 'checkpoint-9999.pth'), weights_only=False)['model'], strict=True)
+
+    features = normalize_features(features, features_normalization)
 
     model.to(device)
     model.eval()
@@ -316,15 +373,16 @@ def process_pair(
     plot_png: bool,
     geo_error: bool,
     output_dir: str,
-    all_methods: bool = False,
+    all_methods: bool,
+    features_normalization: str
 ) -> pd.DataFrame:
     """
     Main pipeline to process a source-target pair, evaluate multiple P2P methods,
     log and plot results, and return a DataFrame of errors.
     """
 
-    source_features, source_points, source_model, source_mesh = process_element(source, source_rep, device, mesh_baseline)
-    target_features, target_points, target_model, target_mesh = process_element(target, target_rep, device, mesh_baseline)
+    source_features, source_points, source_model, source_mesh = process_element(source, source_rep, device, mesh_baseline, features_normalization)
+    target_features, target_points, target_model, target_mesh = process_element(target, target_rep, device, mesh_baseline, features_normalization)
 
     matching_methods = get_matching_methods(source_features, target_features, source_model, target_model, device, all_methods)
     results = run_matching_methods(matching_methods, target_points, source_mesh, target_mesh)
@@ -346,9 +404,9 @@ def process_pair(
     df = pd.DataFrame(rows)
 
     if mesh_baseline and geo_error:
-        geo = np.loadtxt(Path(FLOWS_PATH, source, 'features.txt'))
         mesh = trimesh.load(Path(FAUST_PATH, source + '.ply'), process=False)
-        mesh = normalize_mesh(mesh)
+        mesh = normalize_mesh_08(mesh)
+        vertex_geodesics = np.loadtxt(Path(FLOWS_PATH, source, 'features.txt'))
         # err_geo = np.linalg.norm(geo - source_features.cpu().numpy(), axis=1)
 
         err_geo = np.abs(geo - source_features.cpu().numpy())
@@ -412,7 +470,7 @@ def main(args):
     output_dir = Path(f'./out/matching/matching-{args.source_rep}-{args.target_rep}-{args.run_name}')
     os.makedirs(output_dir, exist_ok=True)
 
-    targets = get_targets()
+    targets = get_targets(args)
 
     results = []
     if args.same:
@@ -424,7 +482,8 @@ def main(args):
                 device, mesh_baseline,
                 args.plot_html, args.plot_png,
                 args.geo_error, output_dir,
-                args.matching_methods
+                args.matching_methods,
+                features_normalization=args.features_normalization
             )
             results.append(df)
     else:
@@ -438,7 +497,8 @@ def main(args):
                         device, mesh_baseline,
                         args.plot_html, args.plot_png,
                         args.geo_error, output_dir,
-                        args.matching_methods
+                        args.matching_methods,
+                        features_normalization=args.features_normalization
                     )
                     results.append(df)
 
@@ -461,6 +521,7 @@ if __name__ == "__main__":
     parser.add_argument('--geo_error', action='store_true', help="If true along side mesh_baseline and source_rep 'sdf', for each landmark plot the difference between the true geodesic distance and the Dijkastra approximation", default=False)
     parser.add_argument('--run_name', type=str, help="Name of the run to append at the end of the output directory", default="")
     parser.add_argument('--matching_methods', type=str, default='fast', help="Which matching methods to use: 'fast' (knn, flow), 'hungarian' (knn, hungarian, flow, flow-hungarian), 'all' (knn, hungarian, lapjv, flow, flow-hungarian, flow-lapjv)")
+    parser.add_argument("--features_normalization", default="none", type=str, help="Normalization to apply to the features: none, 0_1_indipendent, 0_1_global, 0_center_indipendent, 0_center_global")
 
     args = parser.parse_args()
     if args.run_name == "":
