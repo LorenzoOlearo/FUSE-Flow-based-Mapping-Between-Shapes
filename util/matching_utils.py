@@ -26,6 +26,7 @@ from torch_linear_assignment import assignment_to_indices
 
 from scipy.optimize import linear_sum_assignment
 from lapjv import lapjv
+from torch.distributions import Normal
 
 device = "cuda:0"
 torch.cuda.set_device(device)
@@ -78,8 +79,6 @@ def compute_p2p_with_flows_composition_hungarian(source_input, target_input, sou
 
     # Compute the pairwise distances between sample and target_input
     dists = torch.cdist(sample, target_input)
-
-    
 
     # Optimal assignment using Hungarian algorithm
     # assignment = batch_linear_assignment(dists)
@@ -142,7 +141,7 @@ def compute_p2p_with_flows_composition_hungarian_optimized(source_input, target_
     return p2p
 
 
-def compute_p2p_with_knn_gauss(source_input, target_input, source_model, target_model):
+def compute_p2p_with_inverted_flows_in_gauss(source_input, target_input, source_model, target_model):
     """
     Compute point-to-point maps using nearest neighbor between the gaussians.
     Args:
@@ -159,6 +158,32 @@ def compute_p2p_with_knn_gauss(source_input, target_input, source_model, target_
         emb2_pullback.cpu().numpy()
     )
     _, p2p = nbrs.kneighbors(emb1_pullback.cpu().numpy())
+    p2p = p2p[:, 0]
+
+    return p2p
+
+
+def compute_p2p_with_inverted_flows_in_gauss_uniformed(source_input, target_input, source_model, target_model):
+    """
+    Compute point-to-point maps using nearest neighbor between the gaussians.
+    Args:
+        source_input: Source input tensor
+        target_input: Target input tensor
+        source_model: Source model
+        target_model: Target model
+    """
+    with torch.no_grad():
+        emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
+        emb2_pullback = target_model.inverse(samples=target_input, num_steps=64)
+
+    normal = Normal(0, 1)
+    emb1_pullback_uniform = normal.cdf(emb1_pullback)
+    emb2_pullback_uniform = normal.cdf(emb2_pullback)
+
+    nbrs = NearestNeighbors(n_neighbors=1, algorithm="auto").fit(
+        emb2_pullback_uniform.cpu().numpy()
+    )
+    _, p2p = nbrs.kneighbors(emb1_pullback_uniform.cpu().numpy())
     p2p = p2p[:, 0]
 
     return p2p
