@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = Path('./out/flows_vertex')
+OUTPUT_DIR = Path('./out/flows/faust/faust-norm-0-1-indipendent')
 FAUST_DIR = Path('./data/MPI-FAUST/training/registrations')
 
 
@@ -41,9 +41,10 @@ def main(args):
 
         working_dir = Path(str(Path(__file__).resolve()).split('/scripts')[0])
         data_path = Path(working_dir, FAUST_DIR, f"{target}.ply")
+        features_path = Path(working_dir, 'data', 'FAUST_features_pca_20', f"{target}_features.npy")
 
         config = {
-            "device": "cuda:1",
+            "device": "cuda:0",
             "blr": 5e-7,
             "output_dir": str(target_dir),
             "log_dir": str(target_dir),
@@ -54,24 +55,33 @@ def main(args):
             "num_steps": 64,
             "method": "FM",
             "network": "MLP",
-            "batch_size": 100000,
-            "num_points_train": 500000,
+            "batch_size": 50000,
+            "num_points_train": 50000,
             "learning_rate": 0.01,
             "distribution": "gaussian",
             "embedding_dim": 5,
             "embedding_type": "features_only",
             "features_type": "landmarks",
+            "features_normalization": "0_1_indipendent",
             "landmarks": [412, 5891, 6593, 3323, 2119]
         }
 
         config_path = os.path.join(target_dir, "config.json")
-        with open(config_path, "w") as f:
+        with open(config_path, 'w') as f:
             json.dump(config, f, indent=4)
 
-        command = [
-            "python", "main.py",
-            "--config", config_path,
-        ]
+        if args.external is True:
+            command = [
+                "python", "main.py",
+                "--config", config_path,
+                "--features_path", str(features_path),
+                "--features_interpolation", str(500000),
+            ]
+        else:
+            command = [
+                "python", "main.py",
+                "--config", config_path
+            ]
 
         command_str = " ".join(command)
         print(f"Running command: {command_str}")
@@ -83,9 +93,11 @@ def main(args):
             print(f"Error processing {target}: {e}")
 
 
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train a flow on all FAUST SDFs features")
+    parser = argparse.ArgumentParser(description="Train a flow on all FAUST meshes")
     parser.add_argument('--overwrite', action='store_true', help="Overwrite if an existing flow model \"checkpoint-9999.pth\" is found", default='False')
+    parser.add_argument('--external', action='store_true', help="Use external precomputed features", default='False')
 
     args = parser.parse_args()
 

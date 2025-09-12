@@ -230,7 +230,7 @@ def get_inline_arg():
         "--features_normalization",
         default="none",
         type=str,
-        help="Normalization to apply to the features: none, min_max, 0_center",
+        help="Normalization to apply to the features: none, 0_1_indipendent, 0_1_global, 0_center_indipendent, 0_center_global",
     )
 
     parser.add_argument(
@@ -254,6 +254,43 @@ def setup_data_loader(args):
     }
     print(f"Data path: {args.data_path}")
     return data_loader_train
+
+
+def normalize_features(features, method):
+    """Normalize features based on the specified method."""
+    if method == "none":
+        print("No normalization applied to features.")
+        return features
+    elif method == "0_1_indipendent":
+        # Normalize each feature channel to [0, 1]
+        min_vals = features.min(dim=0).values
+        max_vals = features.max(dim=0).values
+        normalized = (features - min_vals) / (max_vals - min_vals + 1e-8)
+        print(f"Feature normalization (0_1_indipendent): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+        return normalized
+    elif method == "0_1_global":
+        # Normalize all features to [0, 1] based on global min and max
+        min_val = features.min()
+        max_val = features.max()
+        normalized = (features - min_val) / (max_val - min_val + 1e-8)
+        print(f"Feature normalization (0_1_global): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+        return normalized
+    elif method == "0_center_indipendent":
+        # Center each feature channel around 0 and scale to [-1, 1]
+        mean_vals = features.mean(dim=0)
+        max_devs = torch.max(torch.abs(features - mean_vals), dim=0).values
+        normalized = (features - mean_vals) / (max_devs + 1e-8)
+        print(f"Feature normalization (0_center_indipendent): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+        return normalized
+    elif method == "0_center_global":
+        # Center all features around 0 and scale to [-1, 1] based on global max deviation
+        mean_val = features.mean()
+        max_dev = torch.max(torch.abs(features - mean_val))
+        normalized = (features - mean_val) / (max_dev + 1e-8)
+        print(f"Feature normalization (0_center_global): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+        return normalized
+    else:
+        raise ValueError(f"Unknown normalization method: {method}")
 
 
 def initialize_model_and_optimizer(args, device):
@@ -293,7 +330,6 @@ def initialize_model_and_optimizer(args, device):
 
     loss_scaler = NativeScaler(device)
 
-    # Log
     print("base lr: %.2e" % (args.learning_rate * 128 / eff_batch_size))
     print("actual lr: %.2e" % args.learning_rate)
     print("accumulate grad iterations: %d" % args.accum_iter)
@@ -468,6 +504,8 @@ def train(args, device):
         elif ext == ".npy":
             features = torch.tensor(np.load(args.features_path).astype(np.float32)).to(device)
         print(f"Loaded features from {args.features_path} | Features shape: {features.shape}")
+        np.savetxt(os.path.join(args.output_dir, "features.txt"), features.detach().cpu().numpy())
+        print(f"Saved features to {os.path.join(args.output_dir, 'features.txt')}")
 
         if args.features_interpolation > 0 and mesh is not None:
             features = generate_embeddings(
@@ -478,21 +516,19 @@ def train(args, device):
                 device=device,
             )
             print(f"Interpolated features over {args.features_interpolation} points | New features shape: {features.shape}")
-            np.savetxt(os.path.join(args.output_dir, "features.txt"), features.detach().cpu().numpy())
-            print(f"Saved vertex features to {os.path.join(args.output_dir, 'features.txt')}")
+            np.savetxt(os.path.join(args.output_dir, "features-interpolated.txt"), features.detach().cpu().numpy())
+            print(f"Saved interpolated features to {os.path.join(args.output_dir, 'features-interpolated.txt')}")
 
     else:
         print(f"Computing {args.features_type} features from mesh...")
-
-        # Compute features per vertex
         features = compute_features(mesh, args, device)
         print("------------------------------------")
         print(f"Features per vertex (shape {list(features.shape)}):")
         print(f"  min: {features.min(dim=0).values.tolist()}")
         print(f"  max: {features.max(dim=0).values.tolist()}")
         print(f"  avg: {features.mean(dim=0).tolist()}")
-        np.savetxt(os.path.join(args.output_dir, "features.txt"), features.detach().cpu().numpy())
-        print(f"Saved vertex features to {os.path.join(args.output_dir, 'features.txt')}")
+        np.savetxt(os.path.join(args.output_dir, "vertex-geodesics.txt"), features.detach().cpu().numpy())
+        print(f"Saved vertex features to {os.path.join(args.output_dir, 'vertex-geodesics.txt')}")
 
         # Interpolate the features over the sampled points
         features = generate_embeddings(
@@ -509,6 +545,10 @@ def train(args, device):
         print(f"  max: {features.max(dim=0).values.tolist()}")
         print(f"  avg: {features.mean(dim=0).tolist()}")
         print("------------------------------------")
+        np.savetxt(os.path.join(args.output_dir, "vertex-geodesics-interpolated.txt"), features.detach().cpu().numpy())
+        print(f"Saved interpolated features to {os.path.join(args.output_dir, 'vertex-geodesics-interpolated.txt')}")
+
+    features = normalize_features(features, args.features_normalization)
 
     logging.info(f"Start training for {args.epochs} epochs")
     start_time = time.time()
