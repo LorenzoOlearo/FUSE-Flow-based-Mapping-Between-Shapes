@@ -580,8 +580,7 @@ def points_dist_in_grid(surface_points, surface_mask, dists, target: str, resolu
     query_grid_coords = normalized * (np.array(resolution) - 1)
 
     # IDW interpolation in grid space
-    dists_idw = idw(surface_mask_arr, dists, query_grid_coords,
-                    k=k_neighbors, p=idw_power)
+    dists_idw = idw(surface_mask_arr, dists, query_grid_coords, k=k_neighbors, p=idw_power)
 
     if additional_plots:
         plot_points(surface_mask, distances=dists[0], title="Dijkstra Geodesic Distances on surface voxels", save_path=f"out/SDFs/{target}/{target}-dijkstra-on-voxels")
@@ -758,12 +757,12 @@ def get_fractional_offset_correction(surface_points, h, min_coord, max_coord, re
 def save_outputs(target, surface_points, dists_surface_points, dists_surface_points_idw, mesh_dists, mesh_dists_idw, verts_projection):
     out_dir = Path(f"out/SDFs/{target}")
     out_dir.mkdir(exist_ok=True)
-    np.savetxt(out_dir / f"{target}-sdf-dijkstra-features.txt", dists_surface_points, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-sdf-dijkstra-features-idw.txt", dists_surface_points_idw, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-sdf-sampled-points.txt", surface_points, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-sdf-mesh-dists-projected.txt", mesh_dists, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-sdf-mesh-dists-projected-interpolated.txt", mesh_dists_idw, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-mesh-vertices-projected.txt", verts_projection, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-sdf-dijkstra-surface-points.txt", dists_surface_points, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-sdf-dijkstra-surface-points-idw.txt", dists_surface_points_idw, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-sdf-sampled-surface-points.txt", surface_points, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-sdf-projected-vertex-dists.txt", mesh_dists, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-sdf-projected-vertex-dists-idw.txt", mesh_dists_idw, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-mesh-vertex-surface-projection.txt", verts_projection, fmt='%.6f')
 
 
 def main(args):
@@ -787,7 +786,7 @@ def main(args):
             surface_mask, extracted_mesh, new_landmark_indices = get_surface_mask_from_IGL_SDF(mesh, eps, landmark_indices)
             print(f"Using IGL SDF for surface mask, found {surface_mask.shape[1]} surface voxels.")
 
-            # Compute the true geodesic distances on the extracted mesh
+            # Compute the true geodesic distances on the remeshed mesh extracted from IGL analytcal SDF
             mesh_dists = []
             for i, landmark_idx in enumerate(new_landmark_indices):
                 print(f"Computing true geodesic distances on extracted mesh for landmark {i} (vertex index {landmark_idx})...")
@@ -797,7 +796,7 @@ def main(args):
                 mesh_dists = [dist / max_dist for dist in mesh_dists]
                 print(f"Landmark {i} true distances: min={np.min(true_dists)}, max={np.max(true_dists)}, mean={np.mean(true_dists)}")
             mesh_dists = np.stack(mesh_dists, axis=1)
-            np.savetxt(f"out/SDFs/{target}/{target}-sdf-extracted-mesh-dists.txt", mesh_dists, fmt='%.6f')
+            np.savetxt(f"out/SDFs/{target}/{target}-sdf-mcubes-mesh-dists.txt", mesh_dists, fmt='%.6f')
 
         # 2. Sample points on zero level set of SDF
         surface_points = sample_zero_level_set(
