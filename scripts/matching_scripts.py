@@ -11,14 +11,9 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from model.models import FMCond
 from model.networks import MLP
-from util.matching_utils import (
-    compute_p2p_with_geomdist,
-    compute_p2p_with_knn_gauss,
-    compute_p2p_with_knn,
-    compute_p2p_with_fmaps,
-    compute_p2p_with_ot,
-)
-from util.mesh_utils import normalize_mesh, pc_normalize
+from util.matching_utils import *
+from util.mesh_utils import normalize_mesh_08 as normalize_mesh
+from util.mesh_utils import pc_normalize
 from util.metrics import (
     compute_geodesic_error,
     compute_dirichlet_energy,
@@ -49,7 +44,7 @@ def parse_arguments():
         "--methods",
         type=str,
         default="all",
-        help="Comma-separated list of methods to run: geomdist,knn,knn_gauss,fmaps,ot",
+        help="Comma-separated list of methods to run: geomdist,knn,knn_gauss,fmaps,ot,flows_composition_zoomout,knn_neural_zoomout,fmap_neural_zoomout,ndp_landmarks,fmap_zoomout,knn_zoomout,fmaps_wks",
     )
     parser.add_argument(
         "--metrics",
@@ -81,12 +76,14 @@ def run_matching_experiments(config, args):
         corr_dir = dataset_config.get(
             "correspondence_dir", "./data/kinect/corres_clean/"
         )
+
         file_extension = dataset_config.get("file_extension", ".off")
         corr_extension = dataset_config.get("correspondence_extension", ".vts")
 
         # Check for landmark offset (needed for some datasets like SMAL)
         landmark_offset = dataset_config.get("landmark_offset", 0)
 
+        landmarks = dataset_config.get("landmarks", None)
         # Extract output and checkpoint directory from output section
         base_dir = config.get("output", {}).get("base_dir", "./experiments/results/")
         out_dir = (
@@ -117,6 +114,8 @@ def run_matching_experiments(config, args):
             if args.output_dir
             else config.get("output_dir", "./experiments/results/")
         )
+        landmarks = dataset_config.get("landmarks", None)
+
         corr_dir = config.get("correspondence_dir", "./data/kinect/corres_clean/")
         checkpoint_dir = config.get("checkpoint_dir", "./experiments/")
         file_extension = config.get("file_extension", ".off")
@@ -152,6 +151,16 @@ def run_matching_experiments(config, args):
         "knn_gauss": methods_arg == "all" or "knn_gauss" in methods_arg,
         "fmaps": methods_arg == "all" or "fmaps" in methods_arg,
         "ot": methods_arg == "all" or "ot" in methods_arg,
+        "flows_composition_zoomout": methods_arg == "all"
+        or "flows_composition_zoomout" in methods_arg,
+        "knn_neural_zoomout": methods_arg == "all"
+        or "knn_neural_zoomout" in methods_arg,
+        "fmap_neural_zoomout": methods_arg == "all"
+        or "fmap_neural_zoomout" in methods_arg,
+        "ndp_landmarks": methods_arg == "all" or "ndp_landmarks" in methods_arg,
+        "fmap_zoomout": methods_arg == "all" or "fmap_zoomout" in methods_arg,
+        "knn_zoomout": methods_arg == "all" or "knn_zoomout" in methods_arg,
+        "fmaps_wks": methods_arg == "all" or "fmaps_wks" in methods_arg,
     }
 
     # Parse metrics to calculate
@@ -230,7 +239,7 @@ def run_matching_experiments(config, args):
                 dist = np.load(dist_cache_path)
             else:
                 mesh_gf = TriangleMesh(np.array(mesh2.vertices), np.array(mesh2.faces))
-                heat = HeatDistanceMetric(mesh_gf)
+                heat = HeatDistanceMetric.from_registry(mesh_gf)
                 dist = heat.dist_matrix()
                 np.save(dist_cache_path, dist)
         else:
@@ -319,11 +328,13 @@ def run_matching_experiments(config, args):
         source_idx = file_names.index(source)
         target_idx = file_names.index(target)
 
+        source_landmarks = corr_a[landmarks]
+        target_landmarks = corr_b[landmarks]
         # Compute correspondences with different methods and evaluate with different metrics
 
         # 1. Geometric distance (Flow Composition)
         if methods["geomdist"]:
-            p2p = compute_p2p_with_geomdist(
+            p2p = compute_p2p_with_flows_composition(
                 source_features, target_features, source_model, target_model
             )
 
@@ -352,7 +363,7 @@ def run_matching_experiments(config, args):
 
         # 2. KNN in Gaussian space
         if methods["knn_gauss"]:
-            p2p = compute_p2p_with_knn_gauss(
+            p2p = compute_p2p_with_inverted_flows_in_gauss(
                 source_features, target_features, source_model, target_model
             )
 
@@ -463,6 +474,267 @@ def run_matching_experiments(config, args):
                 cov = compute_coverage(p2p, len(mesh2.vertices))
                 results["ot"]["coverage"][source_idx, target_idx] = cov
                 print(f"OPTIMAL TRANSPORT - Coverage: {cov:.6f}")
+
+        # 6. Flow Composition with ZoomOut
+        if methods["flows_composition_zoomout"]:
+            p2p = compute_p2p_with_flows_composition_zoomout(
+                mesh1_path,
+                mesh2_path,
+                source_features,
+                target_features,
+                source_model,
+                target_model,
+                device,
+            )
+
+            # Evaluate with different metrics
+            if metrics["euclidean"]:
+                eucl_error = torch.mean(
+                    torch.norm(v2.cpu()[p2p][corr_a] - v2.cpu()[corr_b], dim=-1)
+                ).item()
+                results["flows_composition_zoomout"]["euclidean"][
+                    source_idx, target_idx
+                ] = eucl_error
+                print(f"FLOWS COMPOSITION ZOOMOUT - Euclidean: {eucl_error:.6f}")
+
+            if metrics["geodesic"]:
+                geo_error = compute_geodesic_error(dist, p2p, corr_a, corr_b)
+                results["flows_composition_zoomout"]["geodesic"][
+                    source_idx, target_idx
+                ] = geo_error
+                print(f"FLOWS COMPOSITION ZOOMOUT - Geodesic: {geo_error:.6f}")
+
+            if metrics["dirichlet"]:
+                dirichlet = compute_dirichlet_energy(mesh1, mesh2, p2p)
+                results["flows_composition_zoomout"]["dirichlet"][
+                    source_idx, target_idx
+                ] = dirichlet
+                print(f"FLOWS COMPOSITION ZOOMOUT - Dirichlet: {dirichlet:.6f}")
+
+            if metrics["coverage"]:
+                cov = compute_coverage(p2p, len(mesh2.vertices))
+                results["flows_composition_zoomout"]["coverage"][
+                    source_idx, target_idx
+                ] = cov
+                print(f"FLOWS COMPOSITION ZOOMOUT - Coverage: {cov:.6f}")
+
+        # 7. KNN with Neural ZoomOut
+        if methods["knn_neural_zoomout"]:
+            p2p = compute_p2p_with_knn_neural_zoomout(
+                mesh1_path,
+                mesh2_path,
+                source_features,
+                target_features,
+            )
+
+            # Evaluate with different metrics
+            if metrics["euclidean"]:
+                eucl_error = torch.mean(
+                    torch.norm(v2.cpu()[p2p][corr_a] - v2.cpu()[corr_b], dim=-1)
+                ).item()
+                results["knn_neural_zoomout"]["euclidean"][source_idx, target_idx] = (
+                    eucl_error
+                )
+                print(f"KNN NEURAL ZOOMOUT - Euclidean: {eucl_error:.6f}")
+
+            if metrics["geodesic"]:
+                geo_error = compute_geodesic_error(dist, p2p, corr_a, corr_b)
+                results["knn_neural_zoomout"]["geodesic"][source_idx, target_idx] = (
+                    geo_error
+                )
+                print(f"KNN NEURAL ZOOMOUT - Geodesic: {geo_error:.6f}")
+
+            if metrics["dirichlet"]:
+                dirichlet = compute_dirichlet_energy(mesh1, mesh2, p2p)
+                results["knn_neural_zoomout"]["dirichlet"][source_idx, target_idx] = (
+                    dirichlet
+                )
+                print(f"KNN NEURAL ZOOMOUT - Dirichlet: {dirichlet:.6f}")
+
+            if metrics["coverage"]:
+                cov = compute_coverage(p2p, len(mesh2.vertices))
+                results["knn_neural_zoomout"]["coverage"][source_idx, target_idx] = cov
+                print(f"KNN NEURAL ZOOMOUT - Coverage: {cov:.6f}")
+
+        # 8. Functional Maps with Neural ZoomOut
+        if methods["fmap_neural_zoomout"]:
+            p2p = compute_p2p_with_fmap_neural_zoomout(
+                mesh1_path,
+                mesh2_path,
+                source_features,
+                target_features,
+            )
+
+            # Evaluate with different metrics
+            if metrics["euclidean"]:
+                eucl_error = torch.mean(
+                    torch.norm(v2.cpu()[p2p][corr_a] - v2.cpu()[corr_b], dim=-1)
+                ).item()
+                results["fmap_neural_zoomout"]["euclidean"][source_idx, target_idx] = (
+                    eucl_error
+                )
+                print(f"FMAP NEURAL ZOOMOUT - Euclidean: {eucl_error:.6f}")
+
+            if metrics["geodesic"]:
+                geo_error = compute_geodesic_error(dist, p2p, corr_a, corr_b)
+                results["fmap_neural_zoomout"]["geodesic"][source_idx, target_idx] = (
+                    geo_error
+                )
+                print(f"FMAP NEURAL ZOOMOUT - Geodesic: {geo_error:.6f}")
+
+            if metrics["dirichlet"]:
+                dirichlet = compute_dirichlet_energy(mesh1, mesh2, p2p)
+                results["fmap_neural_zoomout"]["dirichlet"][source_idx, target_idx] = (
+                    dirichlet
+                )
+                print(f"FMAP NEURAL ZOOMOUT - Dirichlet: {dirichlet:.6f}")
+
+            if metrics["coverage"]:
+                cov = compute_coverage(p2p, len(mesh2.vertices))
+                results["fmap_neural_zoomout"]["coverage"][source_idx, target_idx] = cov
+                print(f"FMAP NEURAL ZOOMOUT - Coverage: {cov:.6f}")
+
+        # 9. Neural Deformation Pyramid with Landmarks
+        if methods["ndp_landmarks"]:
+            # Create TriangleMesh objects for NDP
+            if len(mesh1.faces) > 0 and len(mesh2.faces) > 0:
+                source_shape = TriangleMesh(
+                    np.array(mesh1.vertices), np.array(mesh1.faces)
+                )
+                target_shape = TriangleMesh(
+                    np.array(mesh2.vertices), np.array(mesh2.faces)
+                )
+
+                p2p = ndp_with_ldmks(
+                    source_shape,
+                    target_shape,
+                    source_landmarks,
+                    target_landmarks,
+                )
+
+                # Evaluate with different metrics
+                if metrics["euclidean"]:
+                    eucl_error = torch.mean(
+                        torch.norm(v2.cpu()[p2p][corr_a] - v2.cpu()[corr_b], dim=-1)
+                    ).item()
+                    results["ndp_landmarks"]["euclidean"][source_idx, target_idx] = (
+                        eucl_error
+                    )
+                    print(f"NDP LANDMARKS - Euclidean: {eucl_error:.6f}")
+
+                if metrics["geodesic"]:
+                    geo_error = compute_geodesic_error(dist, p2p, corr_a, corr_b)
+                    results["ndp_landmarks"]["geodesic"][source_idx, target_idx] = (
+                        geo_error
+                    )
+                    print(f"NDP LANDMARKS - Geodesic: {geo_error:.6f}")
+
+                if metrics["dirichlet"]:
+                    dirichlet = compute_dirichlet_energy(mesh1, mesh2, p2p)
+                    results["ndp_landmarks"]["dirichlet"][source_idx, target_idx] = (
+                        dirichlet
+                    )
+                    print(f"NDP LANDMARKS - Dirichlet: {dirichlet:.6f}")
+
+                if metrics["coverage"]:
+                    cov = compute_coverage(p2p, len(mesh2.vertices))
+                    results["ndp_landmarks"]["coverage"][source_idx, target_idx] = cov
+                    print(f"NDP LANDMARKS - Coverage: {cov:.6f}")
+            else:
+                print(
+                    "Warning: NDP method requires mesh faces, skipping for point clouds."
+                )
+
+        # 10. Functional Maps with ZoomOut
+        if methods["fmap_zoomout"]:
+            p2p = compute_p2p_with_fmap_zoomout(
+                mesh1_path, mesh2_path, source_features, target_features
+            )
+
+            # Evaluate with different metrics
+            if metrics["euclidean"]:
+                eucl_error = torch.mean(
+                    torch.norm(v2.cpu()[p2p][corr_a] - v2.cpu()[corr_b], dim=-1)
+                ).item()
+                results["fmap_zoomout"]["euclidean"][source_idx, target_idx] = (
+                    eucl_error
+                )
+                print(f"FMAP ZOOMOUT - Euclidean: {eucl_error:.6f}")
+
+            if metrics["geodesic"]:
+                geo_error = compute_geodesic_error(dist, p2p, corr_a, corr_b)
+                results["fmap_zoomout"]["geodesic"][source_idx, target_idx] = geo_error
+                print(f"FMAP ZOOMOUT - Geodesic: {geo_error:.6f}")
+
+            if metrics["dirichlet"]:
+                dirichlet = compute_dirichlet_energy(mesh1, mesh2, p2p)
+                results["fmap_zoomout"]["dirichlet"][source_idx, target_idx] = dirichlet
+                print(f"FMAP ZOOMOUT - Dirichlet: {dirichlet:.6f}")
+
+            if metrics["coverage"]:
+                cov = compute_coverage(p2p, len(mesh2.vertices))
+                results["fmap_zoomout"]["coverage"][source_idx, target_idx] = cov
+                print(f"FMAP ZOOMOUT - Coverage: {cov:.6f}")
+
+        # 11. KNN with ZoomOut
+        if methods["knn_zoomout"]:
+            p2p = compute_p2p_with_knn_zoomout(
+                mesh1_path, mesh2_path, source_features, target_features
+            )
+
+            # Evaluate with different metrics
+            if metrics["euclidean"]:
+                eucl_error = torch.mean(
+                    torch.norm(v2.cpu()[p2p][corr_a] - v2.cpu()[corr_b], dim=-1)
+                ).item()
+                results["knn_zoomout"]["euclidean"][source_idx, target_idx] = eucl_error
+                print(f"KNN ZOOMOUT - Euclidean: {eucl_error:.6f}")
+
+            if metrics["geodesic"]:
+                geo_error = compute_geodesic_error(dist, p2p, corr_a, corr_b)
+                results["knn_zoomout"]["geodesic"][source_idx, target_idx] = geo_error
+                print(f"KNN ZOOMOUT - Geodesic: {geo_error:.6f}")
+
+            if metrics["dirichlet"]:
+                dirichlet = compute_dirichlet_energy(mesh1, mesh2, p2p)
+                results["knn_zoomout"]["dirichlet"][source_idx, target_idx] = dirichlet
+                print(f"KNN ZOOMOUT - Dirichlet: {dirichlet:.6f}")
+
+            if metrics["coverage"]:
+                cov = compute_coverage(p2p, len(mesh2.vertices))
+                results["knn_zoomout"]["coverage"][source_idx, target_idx] = cov
+                print(f"KNN ZOOMOUT - Coverage: {cov:.6f}")
+
+        # 12. Functional Maps with WKS
+        if methods["fmaps_wks"]:
+            # Use correspondence points as landmarks for WKS
+
+            p2p = compute_p2p_with_fmaps_wks(
+                mesh1_path, mesh2_path, source_landmarks, target_landmarks
+            )
+
+            # Evaluate with different metrics
+            if metrics["euclidean"]:
+                eucl_error = torch.mean(
+                    torch.norm(v2.cpu()[p2p][corr_a] - v2.cpu()[corr_b], dim=-1)
+                ).item()
+                results["fmaps_wks"]["euclidean"][source_idx, target_idx] = eucl_error
+                print(f"FMAPS WKS - Euclidean: {eucl_error:.6f}")
+
+            if metrics["geodesic"]:
+                geo_error = compute_geodesic_error(dist, p2p, corr_a, corr_b)
+                results["fmaps_wks"]["geodesic"][source_idx, target_idx] = geo_error
+                print(f"FMAPS WKS - Geodesic: {geo_error:.6f}")
+
+            if metrics["dirichlet"]:
+                dirichlet = compute_dirichlet_energy(mesh1, mesh2, p2p)
+                results["fmaps_wks"]["dirichlet"][source_idx, target_idx] = dirichlet
+                print(f"FMAPS WKS - Dirichlet: {dirichlet:.6f}")
+
+            if metrics["coverage"]:
+                cov = compute_coverage(p2p, len(mesh2.vertices))
+                results["fmaps_wks"]["coverage"][source_idx, target_idx] = cov
+                print(f"FMAPS WKS - Coverage: {cov:.6f}")
 
     # Print mean results
     print("\n--- FINAL RESULTS ---")

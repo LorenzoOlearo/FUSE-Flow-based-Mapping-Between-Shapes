@@ -20,9 +20,20 @@ from geomfum.convert import P2pFromFmConverter
 from geomfum.laplacian import LaplacianFinder
 from util.mesh_utils import normalize_mesh_08 as normalize_mesh
 import ot
+from geomfum.refine import ZoomOut, NeuralZoomOut
+from geomfum.convert import FmFromP2pConverter, NamFromP2pConverter, P2pFromNamConverter
 
-from torch_linear_assignment import batch_linear_assignment
-from torch_linear_assignment import assignment_to_indices
+
+from geomfum.descriptor.spectral import (
+    WaveKernelSignature,
+    LandmarkWaveKernelSignature,
+)
+from geomfum.descriptor.pipeline import (
+    DescriptorPipeline,
+    ArangeSubsampler,
+    L2InnerNormalizer,
+)
+
 
 from scipy.optimize import linear_sum_assignment
 from lapjv import lapjv
@@ -36,7 +47,7 @@ torch.cuda.set_device(device)
 
 
 def compute_p2p_with_flows_composition(
-    source_input, target_input, source_model, target_model, device
+    source_input, target_input, source_model, target_model, device="cuda:1"
 ):
     """
     Compute point-to-point maps using flow composition.
@@ -203,6 +214,88 @@ def compute_p2p_with_inverted_flows_in_gauss_uniformed(
     return p2p
 
 
+def compute_p2p_with_flows_composition_zoomout(
+    source_path,
+    target_path,
+    source_input,
+    target_input,
+    source_model,
+    target_model,
+    device,
+):
+    """
+    Compute point-to-point maps using flow composition and zoomout
+
+    Args:
+        source_path: Path to the source mesh
+        target_path: Path to the target mesh
+        source_input: Source input tensor
+        target_input: Target input tensor
+        source_model: Source model
+        target_model: Target model
+        device: Device to run computations on
+    """
+    source_input = source_input.to(device)
+    target_input = target_input.to(device)
+    source_model = source_model.to(device)
+    target_model = target_model.to(device)
+
+    with torch.no_grad():
+        emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
+        sample = target_model.sample(noise=emb1_pullback, num_steps=64)
+
+    # Move to cpu for sklearn
+    sample_cpu = sample
+    target_input_cpu = target_input
+
+    p2p = compute_p2p_with_knn_zoomout(
+        source_path, target_path, sample_cpu, target_input_cpu
+    )
+
+    return p2p
+
+
+def compute_p2p_with_flows_composition_neural_zoomout(
+    source_path,
+    target_path,
+    source_input,
+    target_input,
+    source_model,
+    target_model,
+    device,
+):
+    """
+    Compute point-to-point maps using flow composition and zoomout
+
+    Args:
+        source_path: Path to the source mesh
+        target_path: Path to the target mesh
+        source_input: Source input tensor
+        target_input: Target input tensor
+        source_model: Source model
+        target_model: Target model
+        device: Device to run computations on
+    """
+    source_input = source_input.to(device)
+    target_input = target_input.to(device)
+    source_model = source_model.to(device)
+    target_model = target_model.to(device)
+
+    with torch.no_grad():
+        emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
+        sample = target_model.sample(noise=emb1_pullback, num_steps=64)
+
+    # Move to cpu for sklearn
+    sample_cpu = sample
+    target_input_cpu = target_input
+
+    p2p = compute_p2p_with_knn_neural_zoomout(
+        source_path, target_path, sample_cpu, target_input_cpu
+    )
+
+    return p2p
+
+
 ################ KNN #######################
 
 
@@ -341,17 +434,6 @@ def compute_p2p_with_fmaps(source_path, target_path, source_features, target_fea
     return p2p
 
 
-from geomfum.descriptor.spectral import (
-    WaveKernelSignature,
-    LandmarkWaveKernelSignature,
-)
-from geomfum.descriptor.pipeline import (
-    DescriptorPipeline,
-    ArangeSubsampler,
-    L2InnerNormalizer,
-)
-
-
 def compute_p2p_with_fmaps_wks(source_path, target_path, source_ldm, target_landmark):
     """
     Compute point-to-point maps using functional maps.
@@ -440,10 +522,6 @@ def compute_p2p_with_fmaps_wks(source_path, target_path, source_ldm, target_land
     return p2p
 
 
-from geomfum.refine import ZoomOut, NeuralZoomOut
-from geomfum.convert import FmFromP2pConverter
-
-
 def compute_p2p_with_knn_zoomout(source_path, target_path, source_input, target_input):
     """
     knn + zoomout
@@ -518,8 +596,8 @@ def compute_p2p_with_fmap_zoomout(source_path, target_path, source_input, target
     mesh_a.laplacian.laplacian_finder = LaplacianFinder.from_registry(which="robust")
     mesh_b.laplacian.laplacian_finder = LaplacianFinder.from_registry(which="robust")
 
-    mesh_a.laplacian.find_spectrum(spectrum_size=20)
-    mesh_b.laplacian.find_spectrum(spectrum_size=20)
+    mesh_a.laplacian.find_spectrum(spectrum_size=200)
+    mesh_b.laplacian.find_spectrum(spectrum_size=200)
     mesh_b.basis.use_k = 20
     mesh_a.basis.use_k = 20
 
@@ -558,10 +636,61 @@ def compute_p2p_with_fmap_zoomout(source_path, target_path, source_input, target
     fmap = res.x.reshape(x0.shape)
 
     fmap.shape
-
+    mesh_a.basis.use_k = 200
+    mesh_b.basis.use_k = 200
     zoomout = ZoomOut(nit=20, step=5)
     fmap = zoomout(fmap, mesh_b.basis, mesh_a.basis)
     converter = P2pFromFmConverter()
+    p2p = converter(fmap, mesh_b.basis, mesh_a.basis)
+
+    return p2p
+
+
+def compute_p2p_with_knn_neural_zoomout(
+    source_path, target_path, source_input, target_input
+):
+    """
+    knn + zoomout
+    Compute point-to-point maps using functional maps optimized on initial features.
+    Args:
+        source_path: Path to the source mesh
+        target_path: Path to the target mesh
+        source_input: Source features (N, D)
+        target_input: Target features (M, D)
+    """
+    nbrs = NearestNeighbors(n_neighbors=1, algorithm="kd_tree").fit(
+        target_input.cpu().numpy()
+    )
+    _, p2p = nbrs.kneighbors(source_input.cpu().numpy())
+    p2p = p2p[:, 0]
+
+    mesh = trimesh.load(source_path, process=False)
+    mesh2 = trimesh.load(target_path, process=False)
+
+    if len(mesh.faces) > 0:
+        mesh = normalize_mesh(trimesh.load(source_path, process=False))
+        mesh2 = normalize_mesh(trimesh.load(target_path, process=False))
+
+        mesh_a = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
+        mesh_b = TriangleMesh(np.array(mesh2.vertices), np.array(mesh2.faces))
+    else:
+        mesh_a = PointCloud(np.array(mesh.vertices))
+        mesh_b = PointCloud(np.array(mesh2.vertices))
+
+    mesh_a.laplacian.laplacian_finder = LaplacianFinder.from_registry(which="robust")
+    mesh_b.laplacian.laplacian_finder = LaplacianFinder.from_registry(which="robust")
+
+    mesh_a.laplacian.find_spectrum(spectrum_size=200)
+    mesh_b.laplacian.find_spectrum(spectrum_size=200)
+    mesh_b.basis.use_k = 20
+    mesh_a.basis.use_k = 20
+
+    p2p_to_fm = NamFromP2pConverter()
+    fmap_ini = p2p_to_fm(p2p, mesh_b.basis, mesh_a.basis)
+
+    zoomout = NeuralZoomOut(nit=20, step=5, device="cuda:0")
+    fmap = zoomout(fmap_ini, mesh_b.basis, mesh_a.basis)
+    converter = P2pFromNamConverter()
     p2p = converter(fmap, mesh_b.basis, mesh_a.basis)
 
     return p2p
@@ -595,8 +724,8 @@ def compute_p2p_with_fmap_neural_zoomout(
     mesh_a.laplacian.laplacian_finder = LaplacianFinder.from_registry(which="robust")
     mesh_b.laplacian.laplacian_finder = LaplacianFinder.from_registry(which="robust")
 
-    mesh_a.laplacian.find_spectrum(spectrum_size=20)
-    mesh_b.laplacian.find_spectrum(spectrum_size=20)
+    mesh_a.laplacian.find_spectrum(spectrum_size=200)
+    mesh_b.laplacian.find_spectrum(spectrum_size=200)
     mesh_b.basis.use_k = 20
     mesh_a.basis.use_k = 20
 
@@ -635,10 +764,15 @@ def compute_p2p_with_fmap_neural_zoomout(
     fmap = res.x.reshape(x0.shape)
 
     fmap.shape
-
+    p2p_from_fmap = P2pFromFmConverter()
+    p2p = p2p_from_fmap(fmap, mesh_b.basis, mesh_a.basis)
+    nam_from_p2p = NamFromP2pConverter()
+    fmap = nam_from_p2p(p2p, mesh_b.basis, mesh_a.basis)
+    mesh_a.basis.use_k = 200
+    mesh_b.basis.use_k = 200
     zoomout = NeuralZoomOut(nit=20, step=5, device="cuda:0")
     fmap = zoomout(fmap, mesh_b.basis, mesh_a.basis)
-    converter = P2pFromFmConverter()
+    converter = P2pFromNamConverter()
     p2p = converter(fmap, mesh_b.basis, mesh_a.basis)
 
     return p2p
@@ -647,12 +781,14 @@ def compute_p2p_with_fmap_neural_zoomout(
 ################ Neural Deformation Pyramid #######################
 import sys
 
-sys.path.append("/home/giulio_vigano/SM-baseline/DeformationPyramid/")
+sys.path.append(
+    "/home/ubuntu/giulio_vigano/SM-baselines/Shape_Matching_Baseline_wrapper/DeformationPyramid/"
+)
 import torch
-from model.registration import Registration
+from models.registration import Registration
 import yaml
 from easydict import EasyDict as edict
-from model.tiktok import Timers
+from models.tiktok import Timers
 
 
 def ndp_with_ldmks(source_shape, target_shape, source_landmarks, target_landmarks):
@@ -671,7 +807,7 @@ def ndp_with_ldmks(source_shape, target_shape, source_landmarks, target_landmark
     target_shape.landmark_indices = target_landmarks
 
     with open(
-        "DeformationPyramid/config/NDP.yaml",
+        "/home/ubuntu/giulio_vigano/SM-baselines/Shape_Matching_Baseline_wrapper/DeformationPyramid/config/NDP.yaml",
         "r",
     ) as f:
         config = yaml.load(f, Loader=yaml.Loader)
