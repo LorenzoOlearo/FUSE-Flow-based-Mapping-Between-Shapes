@@ -13,19 +13,9 @@ from dataclasses import dataclass
 import pandas as pd
 import json
 
-from util.matching_utils import (
-    compute_p2p_with_flows_composition,
-    compute_p2p_with_flows_composition_hungarian,
-    compute_p2p_with_flows_composition_lapjv,
-    compute_p2p_with_inverted_flows_in_gauss,
-    compute_p2p_with_inverted_flows_in_gauss_uniformed,
-    compute_p2p_with_knn,
-    compute_p2p_with_lapjv,
-    compute_p2p_with_fmaps,
-    compute_p2p_with_hungarian,
-)
+from util.matching_utils import *
 
-from util.metrics import compute_dirichlet_energy, compute_coverage
+from util.metrics import compute_dirichlet_energy, compute_coverage, compute_geodesic_error
 
 from model.models import FMCond
 from model.networks import MLP
@@ -201,8 +191,11 @@ def process_element(element: str, representation: str, device: str, mesh_baselin
     points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
     if representation == 'mesh':
         print(f"Loading {element} with {representation} representation")
-        features_path = Path(data_path.flows_path, element, f'vertex-geodesics-interpolated-vnorm.txt')
-        vertex_features_path = Path(data_path.flows_path, element, f'vertex-geodesics-vnorm.txt')
+        # features_path = Path(data_path.flows_path, element, f'vertex-geodesics-interpolated-vnorm.txt')
+        # vertex_features_path = Path(data_path.flows_path, element, f'vertex-geodesics-vnorm.txt')
+
+        features_path = Path(data_path.flows_path, element, f'vertex-geodesics-interpolated.txt')
+        vertex_features_path = Path(data_path.flows_path, element, f'vertex-geodesics.txt')
        
         
         features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
@@ -248,7 +241,14 @@ class MatchingResult:
 
 
 def get_matching_methods(
-    source_features, target_features, source_model, target_model, device: str, matching_methods: str
+    source_features,
+    target_features,
+    source_path,
+    target_path,
+    source_model,
+    target_model,
+    device: str,
+    matching_methods: str
 ) -> Dict[str, Callable[[], torch.Tensor]]:
     """Return mapping of strategy names to their compute functions."""
 
@@ -259,6 +259,51 @@ def get_matching_methods(
                 source_features, target_features, source_model, target_model, device
             ),
         }
+
+    elif matching_methods == "baselines":
+    # TODO: Make matching methods signature uniform
+        return {
+            "knn": lambda: compute_p2p_with_knn(source_features, target_features),
+            "flow": lambda: compute_p2p_with_flows_composition(
+                source_features, target_features, source_model, target_model, device
+            ),
+            "fmaps": lambda: compute_p2p_with_fmaps(
+                source_path, target_path, source_features, target_features
+            ),
+            "ot": lambda: compute_p2p_with_ot(source_features, target_features),
+            "fmap-zoomout": lambda: compute_p2p_with_fmap_zoomout(
+                source_path, target_path, source_features, target_features
+            ),
+            # "fmap-neural-zoomout": lambda: compute_p2p_with_fmap_neural_zoomout(
+            #     source_path, target_path, source_features, target_features
+            # ),
+            "flow-zoomout": lambda: compute_p2p_with_flows_composition_zoomout(
+                source_path, target_path,
+                source_features, target_features,
+                source_model, target_model,
+                device
+            ),
+            "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
+                source_features, target_features, source_model, target_model
+            ),
+            "knn-zoomout": lambda: compute_p2p_with_knn_zoomout(
+                source_path, target_path, source_features, target_features
+            ),
+            
+            # "knn-neural-zoomout": lambda: compute_p2p_with_knn_neural_zoomout(
+            #     source_path, target_path, source_features, target_features
+            # ),
+            # TODO: PROVIDE LANDMARKS
+            # "ndp-landmarks": lambda: ndp_with_ldmks(
+            #     source_mesh, target_mesh, <SOURCE_LANDMARKS>, <TARGET_LANDMARKS>
+            # )
+            
+            # "fmap-wks": lambda: compute_p2p_with_fmaps_wks(
+            #     source_path, target_path, <SOURCE_LANDMARKS>, <TARGET_LANDMARKS>
+            # ),
+        }
+
+
     elif matching_methods == "hungarian":
         return {
             "knn": lambda: compute_p2p_with_knn(source_features, target_features),
@@ -267,7 +312,7 @@ def get_matching_methods(
                 source_features, target_features, source_model, target_model, device
             ),
             "flow-hungarian": lambda: compute_p2p_with_flows_composition_hungarian(
-                source_features, target_features, source_model, target_mode
+                source_features, target_features, source_model, target_model
             ),
         }
     elif matching_methods == "all":
@@ -275,7 +320,7 @@ def get_matching_methods(
             "knn": lambda: compute_p2p_with_knn(source_features, target_features),
             "hungarian": lambda: compute_p2p_with_hungarian(source_features, target_features),
             "lapjv": lambda: compute_p2p_with_lapjv(source_features, target_features),
-
+            "ot": lambda: compute_p2p_with_ot(source_features, target_features),
             "flow": lambda: compute_p2p_with_flows_composition(
                 source_features, target_features, source_model, target_model, device
             ),
@@ -284,6 +329,27 @@ def get_matching_methods(
             ),
             "flow-lapjv": lambda: compute_p2p_with_flows_composition_lapjv(
                 source_features, target_features, source_model, target_model
+            ),
+            "flow-zoomout": lambda: compute_p2p_with_flows_composition_zoomout(
+                source_path, target_path,
+                source_features, target_features,
+                source_model, target_model,
+                device
+            ),
+            "fmaps": lambda: compute_p2p_with_fmaps(
+                source_path, target_path, source_features, target_features
+            ),
+            "fmap-zoomout": lambda: compute_p2p_with_fmap_zoomout(
+                source_path, target_path, source_features, target_features
+            ),
+            # "fmap-neural-zoomout": lambda: compute_p2p_with_fmap_neural_zoomout(
+            #     source_path, target_path, source_features, target_features
+            # ),
+            "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
+                source_features, target_features, source_model, target_model
+            ),
+            "knn-zoomout": lambda: compute_p2p_with_knn_zoomout(
+                source_path, target_path, source_features, target_features
             ),
         }
     else:
@@ -379,7 +445,7 @@ def process_pair(
     plot_png: bool,
     geo_error: bool,
     output_dir: str,
-    all_methods: bool,
+    all_methods: str,
     features_normalization: str,
     data_path: DataPath,
 ) -> pd.DataFrame:
@@ -391,7 +457,14 @@ def process_pair(
     source_features, source_points, source_model, source_mesh = process_element(source, source_rep, device, mesh_baseline, features_normalization, data_path)
     target_features, target_points, target_model, target_mesh = process_element(target, target_rep, device, mesh_baseline, features_normalization, data_path)
 
-    matching_methods = get_matching_methods(source_features, target_features, source_model, target_model, device, all_methods)
+    matching_methods = get_matching_methods(
+        source_features=source_features, target_features=target_features,
+        source_path=Path(data_path.dataset_path, source + data_path.dataset_extension),
+        target_path=Path(data_path.dataset_path, target + data_path.dataset_extension),
+        source_model=source_model, target_model=target_model,
+        device=device,
+        matching_methods=all_methods
+    )
 
     if data_path.corr_path is not None:
         source_corr = np.loadtxt(Path(data_path.corr_path, source + '.vts')).astype(int) - 1
@@ -519,7 +592,7 @@ def main(args):
     results_df.to_csv(Path(output_dir, 'matching_results.csv'), index=False)
 
     print("Average errors across all pairs:")
-    avg_metrics = df.groupby('method')[['euclidean_error', 'dirichlet', 'coverage']].mean()
+    avg_metrics = df.groupby('method')[['euclidean_error', 'dirichlet', 'coverage', 'elapsed']].mean()
     print(avg_metrics)
 
 

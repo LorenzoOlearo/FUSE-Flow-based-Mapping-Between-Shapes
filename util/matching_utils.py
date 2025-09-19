@@ -18,7 +18,7 @@ from geomfum.numerics.optimization import ScipyMinimize
 from geomfum.shape import TriangleMesh, PointCloud
 from geomfum.convert import P2pFromFmConverter
 from geomfum.laplacian import LaplacianFinder
-from util.mesh_utils import normalize_mesh_08 as normalize_mesh
+from util.mesh_utils import normalize_mesh_08
 import ot
 from geomfum.refine import ZoomOut, NeuralZoomOut
 from geomfum.convert import FmFromP2pConverter, NamFromP2pConverter, P2pFromNamConverter
@@ -360,7 +360,6 @@ def compute_p2p_with_lapjv(source_input, target_input):
 
 ################ FUNCTIONAL MAPS #######################
 
-
 def compute_p2p_with_fmaps(source_path, target_path, source_features, target_features):
     """
     Compute point-to-point maps using functional maps optimized on initial features.
@@ -374,8 +373,8 @@ def compute_p2p_with_fmaps(source_path, target_path, source_features, target_fea
     mesh2 = trimesh.load(target_path, process=False)
 
     if len(mesh.faces) > 0:
-        mesh = normalize_mesh(trimesh.load(source_path, process=False))
-        mesh2 = normalize_mesh(trimesh.load(target_path, process=False))
+        mesh = normalize_mesh_08(trimesh.load(source_path, process=False))
+        mesh2 = normalize_mesh_08(trimesh.load(target_path, process=False))
 
         mesh_a = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
         mesh_b = TriangleMesh(np.array(mesh2.vertices), np.array(mesh2.faces))
@@ -447,8 +446,8 @@ def compute_p2p_with_fmaps_wks(source_path, target_path, source_ldm, target_land
     mesh2 = trimesh.load(target_path, process=False)
 
     if len(mesh.faces) > 0:
-        mesh = normalize_mesh(trimesh.load(source_path, process=False))
-        mesh2 = normalize_mesh(trimesh.load(target_path, process=False))
+        mesh = normalize_mesh_08(trimesh.load(source_path, process=False))
+        mesh2 = normalize_mesh_08(trimesh.load(target_path, process=False))
 
         mesh_a = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
         mesh_b = TriangleMesh(np.array(mesh2.vertices), np.array(mesh2.faces))
@@ -542,8 +541,8 @@ def compute_p2p_with_knn_zoomout(source_path, target_path, source_input, target_
     mesh2 = trimesh.load(target_path, process=False)
 
     if len(mesh.faces) > 0:
-        mesh = normalize_mesh(trimesh.load(source_path, process=False))
-        mesh2 = normalize_mesh(trimesh.load(target_path, process=False))
+        mesh = normalize_mesh_08(trimesh.load(source_path, process=False))
+        mesh2 = normalize_mesh_08(trimesh.load(target_path, process=False))
 
         mesh_a = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
         mesh_b = TriangleMesh(np.array(mesh2.vertices), np.array(mesh2.faces))
@@ -584,8 +583,8 @@ def compute_p2p_with_fmap_zoomout(source_path, target_path, source_input, target
     mesh2 = trimesh.load(target_path, process=False)
 
     if len(mesh.faces) > 0:
-        mesh = normalize_mesh(trimesh.load(source_path, process=False))
-        mesh2 = normalize_mesh(trimesh.load(target_path, process=False))
+        mesh = normalize_mesh_08(trimesh.load(source_path, process=False))
+        mesh2 = normalize_mesh_08(trimesh.load(target_path, process=False))
 
         mesh_a = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
         mesh_b = TriangleMesh(np.array(mesh2.vertices), np.array(mesh2.faces))
@@ -668,8 +667,8 @@ def compute_p2p_with_knn_neural_zoomout(
     mesh2 = trimesh.load(target_path, process=False)
 
     if len(mesh.faces) > 0:
-        mesh = normalize_mesh(trimesh.load(source_path, process=False))
-        mesh2 = normalize_mesh(trimesh.load(target_path, process=False))
+        mesh = normalize_mesh_08(trimesh.load(source_path, process=False))
+        mesh2 = normalize_mesh_08(trimesh.load(target_path, process=False))
 
         mesh_a = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
         mesh_b = TriangleMesh(np.array(mesh2.vertices), np.array(mesh2.faces))
@@ -708,12 +707,15 @@ def compute_p2p_with_fmap_neural_zoomout(
         source_input: Source features (N, D)
         target_input: Target features (M, D)
     """
+    source_input = source_input.cpu().numpy()
+    target_input = target_input.cpu().numpy()
+    
     mesh = trimesh.load(source_path, process=False)
     mesh2 = trimesh.load(target_path, process=False)
 
     if len(mesh.faces) > 0:
-        mesh = normalize_mesh(trimesh.load(source_path, process=False))
-        mesh2 = normalize_mesh(trimesh.load(target_path, process=False))
+        mesh = normalize_mesh_08(trimesh.load(source_path, process=False))
+        mesh2 = normalize_mesh_08(trimesh.load(target_path, process=False))
 
         mesh_a = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
         mesh_b = TriangleMesh(np.array(mesh2.vertices), np.array(mesh2.faces))
@@ -729,8 +731,8 @@ def compute_p2p_with_fmap_neural_zoomout(
     mesh_b.basis.use_k = 20
     mesh_a.basis.use_k = 20
 
-    descr_a = source_input.cpu().numpy().astype(np.float32).T
-    descr_b = target_input.cpu().numpy().astype(np.float32).T
+    descr_a = source_input.T
+    descr_b = target_input.T
 
     factors = [
         SpectralDescriptorPreservation(
@@ -766,7 +768,7 @@ def compute_p2p_with_fmap_neural_zoomout(
     fmap.shape
     p2p_from_fmap = P2pFromFmConverter()
     p2p = p2p_from_fmap(fmap, mesh_b.basis, mesh_a.basis)
-    nam_from_p2p = NamFromP2pConverter()
+    nam_from_p2p = NamFromP2pConverter(device="cuda:0")
     fmap = nam_from_p2p(p2p, mesh_b.basis, mesh_a.basis)
     mesh_a.basis.use_k = 200
     mesh_b.basis.use_k = 200
@@ -779,16 +781,16 @@ def compute_p2p_with_fmap_neural_zoomout(
 
 
 ################ Neural Deformation Pyramid #######################
-import sys
+# import sys
 
-sys.path.append(
-    "/home/ubuntu/giulio_vigano/SM-baselines/Shape_Matching_Baseline_wrapper/DeformationPyramid/"
-)
-import torch
-from models.registration import Registration
-import yaml
-from easydict import EasyDict as edict
-from models.tiktok import Timers
+# sys.path.append(
+#     "/home/ubuntu/giulio_vigano/SM-baselines/Shape_Matching_Baseline_wrapper/DeformationPyramid/"
+# )
+# import torch
+# from models.registration import Registration
+# import yaml
+# from easydict import EasyDict as edict
+# from models.tiktok import Timers
 
 
 def ndp_with_ldmks(source_shape, target_shape, source_landmarks, target_landmarks):
@@ -802,6 +804,13 @@ def ndp_with_ldmks(source_shape, target_shape, source_landmarks, target_landmark
     Returns:
         p2p: Point-to-point maps (source_n_points)
     """
+    
+    source_shape = TriangleMesh(
+        np.array(source_shape.vertices), np.array(source_shape.faces)
+    )
+    target_shape = TriangleMesh(
+        np.array(target_shape.vertices), np.array(target_shape.faces)
+    )
 
     source_shape.landmark_indices = source_landmarks
     target_shape.landmark_indices = target_landmarks
@@ -854,7 +863,7 @@ def compute_p2p_with_ot(source_features, target_features):
         target_features: Target features (M, D)
     """
 
-    M = np.exp(-ot.dist(source_features, target_features))
+    M = np.exp(-ot.dist(source_features.cpu().numpy(), target_features.cpu().numpy()))
 
     n, m = M.shape
     a = np.ones(n) / n
