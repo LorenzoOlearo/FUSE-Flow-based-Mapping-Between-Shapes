@@ -11,6 +11,7 @@ import time
 from typing import Callable, Dict
 from dataclasses import dataclass
 import pandas as pd
+import json
 
 from util.matching_utils import (
     compute_p2p_with_flows_composition,
@@ -35,11 +36,16 @@ from plotly.subplots import make_subplots
 
 from util.plot import plot_points
 
-N_LANDMARKS = 5
-FAUST_PATH = Path('./data/MPI-FAUST/training/registrations/')
-FLOWS_PATH = Path('./out/flows/faust/faust-norm-0-1-indipendent/')
-FLOWS_SDF_PATH = Path('./out/flows_vertex_SDFs/')
-SDFs_PATH = Path('./out/SDFs')
+
+@dataclass
+class DataPath:
+    landmarks: List[int]
+    dataset_path: Path
+    dataset_extension: str
+    flows_path: Path
+    flows_SDFs_path: Path
+    sdf_path: Path
+    corr_path: Path = None
 
 
 def plot_geodesic_comparison(vertices, faces, true_dists, dijkstra_dists, save_path):
@@ -171,58 +177,43 @@ def get_targets(args) -> List[str]:
     return targets
 
 
-def normalize_features(features, method):
-    """Normalize features based on the specified method."""
-    if method == "none":
-        print("No normalization applied to features.")
-        return features
-    elif method == "0_1_indipendent":
-        # Normalize each feature channel to [0, 1]
-        min_vals = features.min(dim=0).values
-        max_vals = features.max(dim=0).values
-        normalized = (features - min_vals) / (max_vals - min_vals + 1e-8)
-        print(f"Feature normalization (0_1_indipendent): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
-        return normalized
-    elif method == "0_1_global":
-        # Normalize all features to [0, 1] based on global min and max
-        min_val = features.min()
-        max_val = features.max()
-        normalized = (features - min_val) / (max_val - min_val + 1e-8)
-        print(f"Feature normalization (0_1_global): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
-        return normalized
-    elif method == "0_center_indipendent":
-        # Center each feature channel around 0 and scale to [-1, 1]
-        mean_vals = features.mean(dim=0)
-        max_devs = torch.max(torch.abs(features - mean_vals), dim=0).values
-        normalized = (features - mean_vals) / (max_devs + 1e-8)
-        print(f"Feature normalization (0_center_indipendent): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
-        return normalized
-    elif method == "0_center_global":
-        # Center all features around 0 and scale to [-1, 1] based on global max deviation
-        mean_val = features.mean()
-        max_dev = torch.max(torch.abs(features - mean_val))
-        normalized = (features - mean_val) / (max_dev + 1e-8)
-        print(f"Feature normalization (0_center_global): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
-        return normalized
-    else:
-        raise ValueError(f"Unknown normalization method: {method}")
+def get_targets_smal(args, data_path) -> List[str]:
+    """Determine which targets to process."""
+    # Only load cougar, hippo and horse
+    targets = [
+        f.name
+        for f in data_path.flows_path.iterdir()
+        if f.is_dir()
+        and f.name.startswith(("cougar", "hippo", "horse"))
+        and f.name != "horse_09"
+    ]
+
+    print(f"Processing all targets: {targets}")
+    return targets
 
 
-def process_element(element: str, representation: str, device: str, mesh_baseline: bool, features_normalization: str):
-    mesh_path = Path(FAUST_PATH, element + '.ply')
+def process_element(element: str, representation: str, device: str, mesh_baseline: bool, features_normalization: str, data_path: DataPath):
+    mesh_path = Path(data_path.dataset_path, element + data_path.dataset_extension)
     mesh = trimesh.load(mesh_path, process=False)
     mesh = normalize_mesh_08(mesh)
-    model = FMCond(channels=N_LANDMARKS, network=MLP(channels=N_LANDMARKS).to(device))
+    model = FMCond(channels=len(data_path.landmarks), network=MLP(channels=len(data_path.landmarks)).to(device))
 
+    points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
     if representation == 'mesh':
-        features_path = Path(FLOWS_PATH, element, f'vertex-geodesics.txt')
-        points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
+        print(f"Loading {element} with {representation} representation")
+        features_path = Path(data_path.flows_path, element, f'vertex-geodesics-interpolated-vnorm.txt')
+        vertex_features_path = Path(data_path.flows_path, element, f'vertex-geodesics-vnorm.txt')
+       
+        
         features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
-        model.load_state_dict(torch.load(Path(FLOWS_PATH, element, 'checkpoint-9999.pth'), weights_only=False)['model'], strict=True)
+        vertex_features = torch.tensor(np.loadtxt(vertex_features_path).astype(np.float32)).to(device)
+
+        model.load_state_dict(torch.load(Path(data_path.flows_path, element, 'checkpoint-9999.pth'), weights_only=False)['model'], strict=True)
+
     elif representation == 'sdf':
-        print(f"Processing {element} with SDF representation")
-        features_path = Path(SDFs_PATH, element, f'{element}-sdf-projected-vertex-dists.txt')
-        points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
+        print(f"Loading {element} with {representation} representation")
+        features_path = Path(data_path.flows_SDFs_path, element, f'vertex-geodesics-interpolated-vnorm.txt')
+        vertex_features_path = Path(data_path.flows_SDFs_path, element, f'vertex-geodesics-vnorm.txt')
         # if mesh_baseline is False:
         #     features_path = Path(SDFs_PATH, element, f'{element}-sdf-dijkstra-features.txt')
         #     points_path = Path(SDFs_PATH, element, f'{element}-sdf-sampled-points.txt')
@@ -233,14 +224,16 @@ def process_element(element: str, representation: str, device: str, mesh_baselin
         #     # features_path = Path(SDFs_PATH, element, f'{element}-sdf-extracted-mesh-dists.txt')   # Analitic SDF features
         #     points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
         features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
-        model.load_state_dict(torch.load(Path(FLOWS_SDF_PATH, element, 'checkpoint-9999.pth'), weights_only=False)['model'], strict=True)
+        vertex_features = torch.tensor(np.loadtxt(vertex_features_path).astype(np.float32)).to(device)
+        model.load_state_dict(torch.load(Path(data_path.flows_SDFs_path, element, 'checkpoint-9999.pth'), weights_only=False)['model'], strict=True)
 
-    features = normalize_features(features, features_normalization)
+    else:
+        raise ValueError(f"Invalid representation: {representation}")
 
     model.to(device)
     model.eval()
 
-    return features, points, model, mesh
+    return vertex_features, points, model, mesh
 
 
 @dataclass
@@ -297,15 +290,18 @@ def get_matching_methods(
         raise ValueError(f"Unknown matching methods option: {matching_methods}")
 
 
+
 def run_matching_methods(
-    strategies: Dict[str, Callable[[], torch.Tensor]],
+    matching_methods: Dict[str, Callable[[], torch.Tensor]],
     target_points: torch.Tensor,
     source_mesh: trimesh.Trimesh,
     target_mesh: trimesh.Trimesh,
+    source_corr=None,
+    target_corr=None
 ) -> Dict[str, MatchingResult]:
     """Run all P2P strategies and compute matched points + errors."""
     results = {}
-    for name, func in strategies.items():
+    for name, func in matching_methods.items():
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         t0 = time.perf_counter()
@@ -314,10 +310,20 @@ def run_matching_methods(
             torch.cuda.synchronize()
         elapsed = time.perf_counter() - t0
 
-        matched_points = target_points[indices]
-        euclidean_error = torch.norm(matched_points - target_points, dim=-1).mean().item()
-        dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, indices)
-        coverage = compute_coverage(indices, len(target_mesh.vertices))
+        if source_corr is None and target_corr is None:
+            matched_points = target_points[indices]
+            euclidean_error = torch.norm(matched_points - target_points, dim=-1).mean().item()
+            dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, indices)
+            coverage = compute_coverage(indices, len(target_mesh.vertices))
+        else:
+            print(f"Applying correspondences alignment for {name}")
+            matched_points = target_points[indices]
+            target_points_corr = target_points
+            matched_points = matched_points[source_corr]
+            target_points_corr = target_points_corr[target_corr]
+            euclidean_error = torch.norm(matched_points - target_points_corr, dim=-1).mean().item()
+            dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, indices)
+            coverage = compute_coverage(indices, len(target_mesh.vertices))
 
         results[name] = MatchingResult(
             indices=indices,
@@ -374,19 +380,27 @@ def process_pair(
     geo_error: bool,
     output_dir: str,
     all_methods: bool,
-    features_normalization: str
+    features_normalization: str,
+    data_path: DataPath,
 ) -> pd.DataFrame:
     """
     Main pipeline to process a source-target pair, evaluate multiple P2P methods,
     log and plot results, and return a DataFrame of errors.
     """
 
-    source_features, source_points, source_model, source_mesh = process_element(source, source_rep, device, mesh_baseline, features_normalization)
-    target_features, target_points, target_model, target_mesh = process_element(target, target_rep, device, mesh_baseline, features_normalization)
+    source_features, source_points, source_model, source_mesh = process_element(source, source_rep, device, mesh_baseline, features_normalization, data_path)
+    target_features, target_points, target_model, target_mesh = process_element(target, target_rep, device, mesh_baseline, features_normalization, data_path)
 
     matching_methods = get_matching_methods(source_features, target_features, source_model, target_model, device, all_methods)
-    results = run_matching_methods(matching_methods, target_points, source_mesh, target_mesh)
-    
+
+    if data_path.corr_path is not None:
+        source_corr = np.loadtxt(Path(data_path.corr_path, source + '.vts')).astype(int) - 1
+        target_corr = np.loadtxt(Path(data_path.corr_path, target + '.vts')).astype(int) - 1
+        results = run_matching_methods(matching_methods, target_points, source_mesh, target_mesh, source_corr, target_corr)
+    else:
+        print("No correspondence path provided")
+        results = run_matching_methods(matching_methods, target_points, source_mesh, target_mesh)
+
     log_results(source, target, results)
     plot_results(source_points, source, target, results, output_dir, plot_html, plot_png)
 
@@ -402,36 +416,6 @@ def process_pair(
             "elapsed": res.elapsed,
         })
     df = pd.DataFrame(rows)
-
-    if mesh_baseline and geo_error:
-        mesh = trimesh.load(Path(FAUST_PATH, source + '.ply'), process=False)
-        mesh = normalize_mesh_08(mesh)
-        vertex_geodesics = np.loadtxt(Path(FLOWS_PATH, source, 'features.txt'))
-        # err_geo = np.linalg.norm(geo - source_features.cpu().numpy(), axis=1)
-
-        err_geo = np.abs(geo - source_features.cpu().numpy())
-        err_geo /= err_geo.max()
-
-        for i in range(geo.shape[1]):
-            plot_points(
-                source_points.cpu().numpy(),
-                distances=err_geo[:, i],
-                title=f"landmark {i} at {source}: geo - sdf_geo",
-                save_path=Path(output_dir, f'err-geo-{source}-{target}-{i}'),
-                save_html=True,
-                save_png=True,
-                colorbar_title='geo_err',
-                colormap='hot',
-                range=(0, 1),
-            )
-
-            plot_geodesic_comparison(
-                mesh.vertices,
-                mesh.faces,
-                true_dists=geo[:, i],
-                dijkstra_dists= source_features[:, i].cpu().numpy(),
-                save_path=Path(output_dir, f'geo-comparison-{source}-{target}-{i}')
-            )
 
     return df
 
@@ -463,14 +447,41 @@ def plot_matching_error(err_flow_composition, map_err_knn, output_dir):
 
 
 def main(args):
-    device = 'cuda:0'
+    with open(args.config, "r") as f:
+        config = json.load(f)
+    
+    device = config['device']
     torch.cuda.set_device(device)
     mesh_baseline = args.mesh_baseline
+   
+    if args.faust:
+        print("Running FAUST experiments")
+        data_path = DataPath(
+            landmarks=config['matching_config']['FAUST']['landmarks'],
+            dataset_path=Path(config['matching_config']['FAUST']['dataset_path']),
+            dataset_extension=config['matching_config']['FAUST']['dataset_extension'],
+            flows_path=Path(config['matching_config']['FAUST']['flows_path']),
+            flows_SDFs_path=Path(config['matching_config']['FAUST']['flows_SDFs_path']),
+            sdf_path=Path(config['matching_config']['FAUST']['SDFs_path']),
+            corr_path=None,
+        )
+        targets = get_targets(args)
+    elif args.smal:
+        print("Running SMAL experiments")
+        data_path = DataPath(
+            landmarks=config['matching_config']['SMAL']['landmarks'],
+            dataset_path=Path(config['matching_config']['SMAL']['dataset_path']),
+            dataset_extension=config['matching_config']['SMAL']['dataset_extension'],
+            flows_path=Path(config['matching_config']['SMAL']['flows_path']),
+            flows_SDFs_path=Path(config['matching_config']['SMAL']['flows_SDFs_path']),
+            sdf_path=Path(config['matching_config']['SMAL']['SDFs_path']),
+            corr_path=Path(config['matching_config']['SMAL']['corr_path']),
+        )
+        targets = get_targets_smal(args, data_path)
 
+    print(f"Found {len(targets)} targets: {targets}")
     output_dir = Path(f'./out/matching/matching-{args.source_rep}-{args.target_rep}-{args.run_name}')
     os.makedirs(output_dir, exist_ok=True)
-
-    targets = get_targets(args)
 
     results = []
     if args.same:
@@ -483,7 +494,8 @@ def main(args):
                 args.plot_html, args.plot_png,
                 args.geo_error, output_dir,
                 args.matching_methods,
-                features_normalization=args.features_normalization
+                features_normalization=args.features_normalization,
+                data_path=data_path
             )
             results.append(df)
     else:
@@ -498,7 +510,8 @@ def main(args):
                         args.plot_html, args.plot_png,
                         args.geo_error, output_dir,
                         args.matching_methods,
-                        features_normalization=args.features_normalization
+                        features_normalization=args.features_normalization,
+                        data_path=data_path
                     )
                     results.append(df)
 
@@ -512,6 +525,10 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Matching experiments for SDFs and meshes")
+    parser.add_argument('--device', type=str, default='cuda:0', help="Device to use (e.g., 'cpu', 'cuda:0, 'cuda:1')")
+    parser.add_argument('--config', type=str, help="Path to the config file", required=True, default='config.json')
+    parser.add_argument('--faust', action='store_true', help="Run matching methods on FAUST dataset", default=False)
+    parser.add_argument('--smal', action='store_true', help="Run matching methods on SMAL dataset", default=False)
     parser.add_argument('--mesh_baseline', action='store_true', help="Use the mesh vertices features instead of randomly sampled points", default=False)
     parser.add_argument('--plot_png', action='store_true', help="Save a PNG plot of the matching", default=False)
     parser.add_argument('--plot_html', action='store_true', help="Save an HTML plot of the matching", default=False)
@@ -524,8 +541,17 @@ if __name__ == "__main__":
     parser.add_argument("--features_normalization", default="none", type=str, help="Normalization to apply to the features: none, 0_1_indipendent, 0_1_global, 0_center_indipendent, 0_center_global")
 
     args = parser.parse_args()
+    
     if args.run_name == "":
         args.run_name = input("Enter a run name: ")
+
+    if args.config:
+        with open(args.config, "r") as f:
+            config = json.load(f)
+        for key, value in config.items():
+            if not hasattr(args, key):
+                continue
+            setattr(args, key, value)
 
     print("------------------------------------------")
     for arg in vars(args):
