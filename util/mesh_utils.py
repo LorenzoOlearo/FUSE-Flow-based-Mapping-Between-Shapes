@@ -424,19 +424,6 @@ def compute_features(mesh, args, device):
             compute_mds(mesh.vertices, mesh.faces, k=args.embedding_type_dim - 3)
         ).to(device)
 
-    if args.features_normalization == "0_center" and features is not None:
-        print("0-centering features")
-        features = (features - features.mean(dim=0)) / (features.std(dim=0) + 1e-8)
-    elif args.features_normalization == "min_max" and features is not None:
-        print("Min-max normalizing features")
-        min_vals, _ = features.min(dim=0, keepdim=True)
-        max_vals, _ = features.max(dim=0, keepdim=True)
-        features = (features - min_vals) / (max_vals - min_vals + 1e-8)
-    elif args.features_normalization == "none" and features is not None:
-        pass
-    else:
-        raise ValueError(f"Unsupported normalization type: {args.features_normalization} or features is None")
-
     return features
 
 
