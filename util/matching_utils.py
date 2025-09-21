@@ -360,6 +360,7 @@ def compute_p2p_with_lapjv(source_input, target_input):
 
 ################ FUNCTIONAL MAPS #######################
 
+
 def compute_p2p_with_fmaps(source_path, target_path, source_features, target_features):
     """
     Compute point-to-point maps using functional maps optimized on initial features.
@@ -433,7 +434,9 @@ def compute_p2p_with_fmaps(source_path, target_path, source_features, target_fea
     return p2p
 
 
-def compute_p2p_with_fmaps_wks(source_path, target_path, source_ldm, target_landmark):
+def compute_p2p_with_fmaps_wks(
+    source_path, target_path, source_landmarks, target_landmarks
+):
     """
     Compute point-to-point maps using functional maps.
     Args:
@@ -463,8 +466,8 @@ def compute_p2p_with_fmaps_wks(source_path, target_path, source_ldm, target_land
     mesh_b.basis.use_k = 200
     mesh_a.basis.use_k = 200
 
-    mesh_a.landmark_indices = source_ldm
-    mesh_b.landmark_indices = target_landmark
+    mesh_a.landmark_indices = source_landmarks
+    mesh_b.landmark_indices = target_landmarks
 
     steps = [
         WaveKernelSignature(n_domain=200, k=200),
@@ -646,7 +649,7 @@ def compute_p2p_with_fmap_zoomout(source_path, target_path, source_input, target
 
 
 def compute_p2p_with_knn_neural_zoomout(
-    source_path, target_path, source_input, target_input
+    source_path, target_path, source_input, target_input, device="cuda:0"
 ):
     """
     knn + zoomout
@@ -684,10 +687,10 @@ def compute_p2p_with_knn_neural_zoomout(
     mesh_b.basis.use_k = 20
     mesh_a.basis.use_k = 20
 
-    p2p_to_fm = NamFromP2pConverter()
+    p2p_to_fm = NamFromP2pConverter(device=device)
     fmap_ini = p2p_to_fm(p2p, mesh_b.basis, mesh_a.basis)
 
-    zoomout = NeuralZoomOut(nit=20, step=5, device="cuda:0")
+    zoomout = NeuralZoomOut(nit=20, step=5, device=device)
     fmap = zoomout(fmap_ini, mesh_b.basis, mesh_a.basis)
     converter = P2pFromNamConverter()
     p2p = converter(fmap, mesh_b.basis, mesh_a.basis)
@@ -696,7 +699,7 @@ def compute_p2p_with_knn_neural_zoomout(
 
 
 def compute_p2p_with_fmap_neural_zoomout(
-    source_path, target_path, source_input, target_input
+    source_path, target_path, source_input, target_input, device="cuda:0"
 ):
     """
     knn + neural_zoomout
@@ -709,7 +712,7 @@ def compute_p2p_with_fmap_neural_zoomout(
     """
     source_input = source_input.cpu().numpy()
     target_input = target_input.cpu().numpy()
-    
+
     mesh = trimesh.load(source_path, process=False)
     mesh2 = trimesh.load(target_path, process=False)
 
@@ -768,11 +771,11 @@ def compute_p2p_with_fmap_neural_zoomout(
     fmap.shape
     p2p_from_fmap = P2pFromFmConverter()
     p2p = p2p_from_fmap(fmap, mesh_b.basis, mesh_a.basis)
-    nam_from_p2p = NamFromP2pConverter(device="cuda:0")
+    nam_from_p2p = NamFromP2pConverter(device=device)
     fmap = nam_from_p2p(p2p, mesh_b.basis, mesh_a.basis)
     mesh_a.basis.use_k = 200
     mesh_b.basis.use_k = 200
-    zoomout = NeuralZoomOut(nit=20, step=5, device="cuda:0")
+    zoomout = NeuralZoomOut(nit=20, step=5, device=device)
     fmap = zoomout(fmap, mesh_b.basis, mesh_a.basis)
     converter = P2pFromNamConverter()
     p2p = converter(fmap, mesh_b.basis, mesh_a.basis)
@@ -781,19 +784,19 @@ def compute_p2p_with_fmap_neural_zoomout(
 
 
 ################ Neural Deformation Pyramid #######################
-# import sys
+import sys
 
-# sys.path.append(
-#     "/home/ubuntu/giulio_vigano/SM-baselines/Shape_Matching_Baseline_wrapper/DeformationPyramid/"
-# )
-# import torch
-# from models.registration import Registration
-# import yaml
-# from easydict import EasyDict as edict
-# from models.tiktok import Timers
+sys.path.append(
+    "/home/ubuntu/giulio_vigano/SM-baselines/Shape_Matching_Baseline_wrapper/DeformationPyramid/"
+)
+import torch
+from models.registration import Registration
+import yaml
+from easydict import EasyDict as edict
+from models.tiktok import Timers
 
 
-def ndp_with_ldmks(source_shape, target_shape, source_landmarks, target_landmarks):
+def ndp_with_ldmks(source_path, target_path, source_landmarks, target_landmarks):
     """
     Compute point-to-point maps using neural deformation pyramids.
     Args:
@@ -804,16 +807,22 @@ def ndp_with_ldmks(source_shape, target_shape, source_landmarks, target_landmark
     Returns:
         p2p: Point-to-point maps (source_n_points)
     """
-    
-    source_shape = TriangleMesh(
-        np.array(source_shape.vertices), np.array(source_shape.faces)
-    )
-    target_shape = TriangleMesh(
-        np.array(target_shape.vertices), np.array(target_shape.faces)
-    )
 
-    source_shape.landmark_indices = source_landmarks
-    target_shape.landmark_indices = target_landmarks
+    mesh = trimesh.load(source_path, process=False)
+    mesh2 = trimesh.load(target_path, process=False)
+
+    if len(mesh.faces) > 0:
+        mesh = normalize_mesh_08(trimesh.load(source_path, process=False))
+        mesh2 = normalize_mesh_08(trimesh.load(target_path, process=False))
+
+        mesh_a = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
+        mesh_b = TriangleMesh(np.array(mesh2.vertices), np.array(mesh2.faces))
+    else:
+        mesh_a = PointCloud(np.array(mesh.vertices))
+        mesh_b = PointCloud(np.array(mesh2.vertices))
+
+    mesh_a.landmark_indices = source_landmarks
+    mesh_b.landmark_indices = target_landmarks
 
     with open(
         "/home/ubuntu/giulio_vigano/SM-baselines/Shape_Matching_Baseline_wrapper/DeformationPyramid/config/NDP.yaml",
@@ -832,13 +841,11 @@ def ndp_with_ldmks(source_shape, target_shape, source_landmarks, target_landmark
     model = Registration(config)
     timer = Timers()
     x, y = (
-        torch.tensor(source_shape.vertices).float().to("cuda"),
-        torch.tensor(target_shape.vertices).float().to("cuda"),
+        torch.tensor(mesh_a.vertices).float().to("cuda"),
+        torch.tensor(mesh_b.vertices).float().to("cuda"),
     )
 
-    model.load_pcds(
-        x, y, [x[source_shape.landmark_indices], y[target_shape.landmark_indices]]
-    )
+    model.load_pcds(x, y, [x[mesh_a.landmark_indices], y[mesh_b.landmark_indices]])
 
     timer.tic("registration")
     warped_pcd, iter_cnt, timer = model.register(timer=timer)
