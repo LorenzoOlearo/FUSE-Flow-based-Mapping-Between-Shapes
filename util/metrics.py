@@ -10,21 +10,24 @@ import potpourri3d as pp3d
 from geomfum.laplacian import LaplacianFinder
 
 
-def compute_geodesic_error(dist, p2p, corr_a, corr_b):
+def compute_geodesic_error(dists, p2p, corr_a=None, corr_b=None):
     """
     Compute geodesic distance error between ground truth and predicted correspondences.
 
     Args:
-        dist: Target mesh
-        p2p: Point-to-point correspondence map
+        dist: Geodesic distance matrix on the target shape
+        p2p: Point-to-point correspondence map between reconstructed and target shape
         corr_a: Source correspondence indices
         corr_b: Target correspondence indices
 
     Returns:
         Average geodesic distance error
     """
-
-    return dist[p2p[corr_a], corr_b].mean()
+    if corr_a is None or corr_b is None:
+        p2p_gt = np.arange(len(p2p))
+        return dists[p2p, p2p_gt].mean()
+    else:
+        return dists[p2p[corr_a], corr_b].mean()
 
 
 def compute_dirichlet_energy(mesh, mesh_target, p2p):

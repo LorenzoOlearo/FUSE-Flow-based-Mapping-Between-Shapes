@@ -13,28 +13,31 @@ from dataclasses import dataclass
 import pandas as pd
 import json
 
-from util.matching_utils import *
 
+from model.models import FMCond
+from model.networks import MLP
+import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+from geomfum.shape.mesh import TriangleMesh
+from geomfum.metric.mesh import HeatDistanceMetric
+import potpourri3d as pp3d
+
+
+from util.matching_utils import *
 from util.metrics import (
     compute_dirichlet_energy,
     compute_coverage,
     compute_geodesic_error,
 )
-
-from model.models import FMCond
-from model.networks import MLP
-from util.plot import start_end_subplot
-import matplotlib.pyplot as plt
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-
-from util.plot import plot_points
-
+from util.plot import plot_points, start_end_subplot
 
 @dataclass
 class DataPath:
     landmarks: List[int]
     dataset_path: Path
+    dists_path: Path
     dataset_extension: str
     flows_path: Path
     flows_SDFs_path: Path
@@ -291,6 +294,7 @@ class MatchingResult:
     indices: torch.Tensor
     matched_points: torch.Tensor
     euclidean_error: float
+    geodesic_error: float
     dirichlet_energy: float
     coverage: float
     elapsed: float
@@ -317,80 +321,7 @@ def get_matching_methods(
                 source_features, target_features, source_model, target_model, device
             ),
         }
-
-    elif matching_methods == "baselines":
-        # TODO: Make matching methods signature uniform
-        return {
-            "knn": lambda: compute_p2p_with_knn(source_features, target_features),
-            "flow": lambda: compute_p2p_with_flows_composition(
-                source_features, target_features, source_model, target_model, device
-            ),
-            "fmaps": lambda: compute_p2p_with_fmaps(
-                source_path, target_path, source_features, target_features
-            ),
-            "ot": lambda: compute_p2p_with_ot(source_features, target_features),
-            "fmap-zoomout": lambda: compute_p2p_with_fmap_zoomout(
-                source_path, target_path, source_features, target_features
-            ),
-            "fmap-neural-zoomout": lambda: compute_p2p_with_fmap_neural_zoomout(
-                source_path, target_path, source_features, target_features
-            ),
-            "flow-zoomout": lambda: compute_p2p_with_flows_composition_zoomout(
-                source_path,
-                target_path,
-                source_features,
-                target_features,
-                source_model,
-                target_model,
-                device,
-            ),
-            "flow-neural-zoomout": lambda: compute_p2p_with_flows_composition_neural_zoomout(
-                source_path,
-                target_path,
-                source_features,
-                target_features,
-                source_model,
-                target_model,
-                device,
-            ),
-            "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
-                source_features, target_features, source_model, target_model
-            ),
-            "knn-zoomout": lambda: compute_p2p_with_knn_zoomout(
-                source_path, target_path, source_features, target_features
-            ),
-            "knn-neural-zoomout": lambda: compute_p2p_with_knn_neural_zoomout(
-                source_path, target_path, source_features, target_features
-            ),
-            # TODO: PROVIDE LANDMARKS
-            "ndp-landmarks": lambda: ndp_with_ldmks(
-                source_path,
-                target_path,
-                source_landmarks=source_landmarks,
-                target_landmarks=target_landmarks,
-            ),
-            "fmap-wks": lambda: compute_p2p_with_fmaps_wks(
-                source_path,
-                target_path,
-                source_landmarks=source_landmarks,
-                target_landmarks=target_landmarks,
-            ),
-        }
-
-    elif matching_methods == "hungarian":
-        return {
-            "knn": lambda: compute_p2p_with_knn(source_features, target_features),
-            "hungarian": lambda: compute_p2p_with_hungarian(
-                source_features, target_features
-            ),
-            "flow": lambda: compute_p2p_with_flows_composition(
-                source_features, target_features, source_model, target_model, device
-            ),
-            "flow-hungarian": lambda: compute_p2p_with_flows_composition_hungarian(
-                source_features, target_features, source_model, target_model
-            ),
-        }
-    elif matching_methods == "all":
+    elif matching_methods == "mesh_baselines":
         return {
             "knn": lambda: compute_p2p_with_knn(source_features, target_features),
             "hungarian": lambda: compute_p2p_with_hungarian(
@@ -443,7 +374,6 @@ def get_matching_methods(
             "knn-neural-zoomout": lambda: compute_p2p_with_knn_neural_zoomout(
                 source_path, target_path, source_features, target_features
             ),
-            # TODO: PROVIDE LANDMARKS
             "ndp-landmarks": lambda: ndp_with_ldmks(
                 source_path,
                 target_path,
@@ -461,11 +391,38 @@ def get_matching_methods(
         raise ValueError(f"Unknown matching methods option: {matching_methods}")
 
 
+def compute_geodesic_distance(
+    source_mesh: trimesh.Trimesh,
+    target_mesh: trimesh.Trimesh,
+    data_path: DataPath,
+) -> np.ndarray:
+    os.makedirs(data_path.dists_path, exist_ok=True)
+    dist_cache_path = os.path.join(data_path.dists_path, f"{target}_dists.npy")
+
+    if os.path.exists(dist_cache_path):
+        dist = np.load(dist_cache_path)
+    else:
+        if len(target_mesh.faces) > 0:
+            mesh_gf = TriangleMesh(target_mesh.vertices, np.array(target_mesh.faces))
+            heat = HeatDistanceMetric.from_registry(mesh_gf)
+            dist = heat.dist_matrix()
+        else:
+            solver = pp3d.PointCloudHeatSolver(vertices)
+            distances = []
+            for idx in range(len(vertices)):
+                distances.append(solver.compute_distance(idx))
+            dist = np.array(distances)
+        np.save(dist_cache_path, dist)
+
+    return dist
+
+
 def run_matching_methods(
     matching_methods: Dict[str, Callable[[], torch.Tensor]],
     target_points: torch.Tensor,
     source_mesh: trimesh.Trimesh,
     target_mesh: trimesh.Trimesh,
+    dists: np.ndarray,
     source_corr=None,
     target_corr=None,
 ) -> Dict[str, MatchingResult]:
@@ -475,39 +432,35 @@ def run_matching_methods(
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         t0 = time.perf_counter()
-        indices = func()
+        p2p = func()
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         elapsed = time.perf_counter() - t0
 
         if source_corr is None and target_corr is None:
-            matched_points = target_points[indices]
-            euclidean_error = (
-                torch.norm(matched_points - target_points, dim=-1).mean().item()
-            )
-            dirichlet_energy = compute_dirichlet_energy(
-                source_mesh, target_mesh, indices
-            )
-            coverage = compute_coverage(indices, len(target_mesh.vertices))
+            matched_points = target_points[p2p]
+            euclidean_error = torch.norm(matched_points - target_points, dim=-1).mean().item()
+            geodesic_error = compute_geodesic_error(dists, p2p, None, None)
+            dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p)
+            coverage = compute_coverage(p2p, len(target_mesh.vertices))
 
         else:
             print(f"Applying correspondences alignment for {name}")
-            matched_points = target_points[indices]
+            matched_points = target_points[p2p]
             target_points_corr = target_points
             matched_points = matched_points[source_corr]
             target_points_corr = target_points_corr[target_corr]
-            euclidean_error = (
-                torch.norm(matched_points - target_points_corr, dim=-1).mean().item()
-            )
-            dirichlet_energy = compute_dirichlet_energy(
-                source_mesh, target_mesh, indices
-            )
-            coverage = compute_coverage(indices, len(target_mesh.vertices))
+
+            euclidean_error = torch.norm(matched_points - target_points_corr, dim=-1).mean().item()
+            geodesic_error = compute_geodesic_error(dists, p2p, source_corr, target_corr)
+            dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p)
+            coverage = compute_coverage(p2p, len(target_mesh.vertices))
 
         results[name] = MatchingResult(
-            indices=indices,
+            indices=p2p,
             matched_points=matched_points,
             euclidean_error=euclidean_error,
+            geodesic_error=geodesic_error,
             dirichlet_energy=dirichlet_energy,
             coverage=coverage,
             elapsed=elapsed,
@@ -521,7 +474,7 @@ def log_results(source: str, target: str, results: Dict[str, MatchingResult]) ->
     print(f"> Evaluation results for {source} -> {target}:")
     for name, res in results.items():
         print(
-            f"  > {name:<20}: euclidean_error {res.euclidean_error:.4f} | dirichlet_energy={res.dirichlet_energy:.4f} | coverage={res.coverage:.4f} | elapsed={res.elapsed:.2f}s"
+            f"  > {name:<20}: euclidean_error {res.euclidean_error:.4f} | geodesic_error {res.geodesic_error:.4f} | dirichlet_energy={res.dirichlet_energy:.4f} | coverage={res.coverage:.4f} | elapsed={res.elapsed:.2f}s"
         )
 
 
@@ -547,6 +500,42 @@ def plot_results(
             html=plot_html,
             png=plot_png,
         )
+
+
+def get_geodesic_dists(
+    mesh: trimesh.Trimesh,
+    target: str,
+    data_path: DataPath
+) -> np.ndarray:
+    """
+    Compute or load geodesic distance matrix for a target mesh.
+
+    Args:
+        mesh (trimesh.Trimesh): The mesh to compute distances on.
+        target_name (str): Identifier for caching (e.g. filename stem).
+        data_path (DataPath): Dataclass containing paths for caching.
+    Returns:
+        np.ndarray: Geodesic distance matrix of shape (n_vertices, n_vertices).
+    """
+    os.makedirs(data_path.dists_path, exist_ok=True)
+    dist_cache_path = os.path.join(data_path.dists_path, f"{target}_dists.npy")
+
+    if os.path.exists(dist_cache_path):
+        dist = np.load(dist_cache_path)
+    else:
+        if len(mesh.faces) > 0:
+            mesh_gf = TriangleMesh(mesh.vertices, np.array(mesh.faces))
+            heat = HeatDistanceMetric.from_registry(mesh_gf)
+            dist = heat.dist_matrix()
+        else:
+            solver = pp3d.PointCloudHeatSolver(mesh.vertices)
+            distances = []
+            for idx in range(len(mesh.vertices)):
+                distances.append(solver.compute_distance(idx))
+            dist = np.array(distances)
+        np.save(dist_cache_path, dist)
+
+    return dist
 
 
 def process_pair(
@@ -575,6 +564,9 @@ def process_pair(
     target_features, target_points, target_model, target_mesh = process_element(
         target, target_rep, device, mesh_baseline, features_normalization, data_path
     )
+    
+    # Compute or load geodesic distances for the target mesh
+    target_geo_dists = get_geodesic_dists(target_mesh, target, data_path)
 
     if data_path.corr_path is not None:
         source_corr = (
@@ -586,8 +578,11 @@ def process_pair(
     else:
         source_corr = np.arange(len(source_mesh.vertices))
         target_corr = np.arange(len(target_mesh.vertices))
+
     source_landmarks = source_corr[data_path.landmarks]
     target_landmarks = target_corr[data_path.landmarks]
+
+    # TODO: Move target and source in dataclasses
     matching_methods = get_matching_methods(
         source_features=source_features,
         target_features=target_features,
@@ -602,24 +597,27 @@ def process_pair(
     )
 
     if data_path.corr_path is not None:
-        source_corr = (
-            np.loadtxt(Path(data_path.corr_path, source + ".vts")).astype(int) - 1
-        )
-        target_corr = (
-            np.loadtxt(Path(data_path.corr_path, target + ".vts")).astype(int) - 1
-        )
+        source_corr = np.loadtxt(Path(data_path.corr_path, source + ".vts")).astype(int) - 1
+        target_corr = np.loadtxt(Path(data_path.corr_path, target + ".vts")).astype(int) - 1
         results = run_matching_methods(
-            matching_methods,
-            target_points,
-            source_mesh,
-            target_mesh,
-            source_corr,
-            target_corr,
+            matching_methods=matching_methods,
+            target_points=target_points,
+            source_mesh=source_mesh,
+            target_mesh=target_mesh,
+            dists=target_geo_dists,
+            source_corr=source_corr,
+            target_corr=target_corr,
         )
     else:
         print("No correspondence path provided")
         results = run_matching_methods(
-            matching_methods, target_points, source_mesh, target_mesh
+            matching_methods=matching_methods,
+            target_points=target_points,
+            source_mesh=source_mesh,
+            target_mesh=target_mesh,
+            dists=target_geo_dists,
+            source_corr=None,
+            target_corr=None,
         )
 
     log_results(source, target, results)
@@ -689,6 +687,45 @@ def plot_matching_error(err_flow_composition, map_err_knn, output_dir):
     plt.close()
 
 
+def get_geodesic_dists(
+    mesh: trimesh.Trimesh,
+    target: str,
+    data_path: DataPath
+) -> np.ndarray:
+    """
+    Compute or load geodesic distance matrix for a target mesh.
+
+    Args:
+        mesh (trimesh.Trimesh): The mesh to compute distances on.
+        target_name (str): Identifier for caching (e.g. filename stem).
+        cache_dir (str): Directory where cached distance matrices are stored.
+        device (str): Torch device ("cpu" or "cuda").
+
+    Returns:
+        np.ndarray: Geodesic distance matrix of shape (n_vertices, n_vertices).
+    """
+    os.makedirs(data_path.dists_path, exist_ok=True)
+    dist_cache_path = os.path.join(data_path.dists_path, f"{target}_dists.npy")
+
+    if os.path.exists(dist_cache_path):
+        dist = np.load(dist_cache_path)
+    else:
+        vertices = np.array(mesh.vertices)
+        if len(mesh.faces) > 0:
+            mesh_gf = TriangleMesh(vertices, np.array(mesh.faces))
+            heat = HeatDistanceMetric.from_registry(mesh_gf)
+            dist = heat.dist_matrix()
+        else:
+            solver = pp3d.PointCloudHeatSolver(vertices)
+            distances = []
+            for idx in range(len(vertices)):
+                distances.append(solver.compute_distance(idx))
+            dist = np.array(distances)
+        np.save(dist_cache_path, dist)
+
+    return dist
+
+
 def main(args):
     with open(args.config, "r") as f:
         config = json.load(f)
@@ -702,6 +739,7 @@ def main(args):
         data_path = DataPath(
             landmarks=config["matching_config"]["FAUST"]["landmarks"],
             dataset_path=Path(config["matching_config"]["FAUST"]["dataset_path"]),
+            dists_path=Path(config["matching_config"]["FAUST"]["dists_path"]),
             dataset_extension=config["matching_config"]["FAUST"]["dataset_extension"],
             flows_path=Path(config["matching_config"]["FAUST"]["flows_path"]),
             flows_SDFs_path=Path(config["matching_config"]["FAUST"]["flows_SDFs_path"]),
@@ -714,6 +752,7 @@ def main(args):
         data_path = DataPath(
             landmarks=config["matching_config"]["SMAL"]["landmarks"],
             dataset_path=Path(config["matching_config"]["SMAL"]["dataset_path"]),
+            dists_path=Path(config["matching_config"]["SMAL"]["dists_path"]),
             dataset_extension=config["matching_config"]["SMAL"]["dataset_extension"],
             flows_path=Path(config["matching_config"]["SMAL"]["flows_path"]),
             flows_SDFs_path=Path(config["matching_config"]["SMAL"]["flows_SDFs_path"]),
@@ -723,17 +762,13 @@ def main(args):
         targets = get_targets_smal(args, data_path)
 
     print(f"Found {len(targets)} targets: {targets}")
-    output_dir = Path(
-        f"./out/matching/matching-{args.source_rep}-{args.target_rep}-{args.run_name}"
-    )
+    output_dir = Path(f"./out/matching/matching-{args.source_rep}-{args.target_rep}-{args.run_name}")
     os.makedirs(output_dir, exist_ok=True)
 
     results = []
     if args.same:
         for target in targets:
-            print(
-                f"Matching the same shape {target} from {args.source_rep} to {args.target_rep}"
-            )
+            print(f"Matching the same shape {target} from {args.source_rep} to {args.target_rep}")
             df = process_pair(
                 target,
                 target,
@@ -777,7 +812,7 @@ def main(args):
 
     print("Average errors across all pairs:")
     avg_metrics = df.groupby("method")[
-        ["euclidean_error", "dirichlet", "coverage", "elapsed"]
+        ["euclidean_error", "geodesic_error", "dirichlet", "coverage", "elapsed"]
     ].mean()
     print(avg_metrics)
 
