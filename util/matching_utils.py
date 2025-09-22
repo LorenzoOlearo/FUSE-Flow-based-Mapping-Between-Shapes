@@ -1,7 +1,11 @@
 """Matching utils for computing point-to-point distances between two point clouds or meshes."""
 
 import torch
+import os
 import sys
+import torch
+import yaml
+from easydict import EasyDict as edict
 
 sys.path.append("..")
 import numpy as np
@@ -784,15 +788,12 @@ def compute_p2p_with_fmap_neural_zoomout(
 
 
 ################ Neural Deformation Pyramid #######################
-import sys
+# TODO: Make Shape_Matching_Baseline_wrapper a package to install via pip
+_base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_ndp_dir = os.path.normpath( os.path.join(_base_dir, "..", "Shape_Matching_Baseline_wrapper", "DeformationPyramid"))
+sys.path.append(_ndp_dir)
 
-sys.path.append(
-    "/home/ubuntu/giulio_vigano/SM-baselines/Shape_Matching_Baseline_wrapper/DeformationPyramid/"
-)
-import torch
 from models.registration import Registration
-import yaml
-from easydict import EasyDict as edict
 from models.tiktok import Timers
 
 
@@ -825,7 +826,7 @@ def ndp_with_ldmks(source_path, target_path, source_landmarks, target_landmarks)
     mesh_b.landmark_indices = target_landmarks
 
     with open(
-        "/home/ubuntu/giulio_vigano/SM-baselines/Shape_Matching_Baseline_wrapper/DeformationPyramid/config/NDP.yaml",
+        f"{_ndp_dir}/config/NDP.yaml",
         "r",
     ) as f:
         config = yaml.load(f, Loader=yaml.Loader)
