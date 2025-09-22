@@ -12,7 +12,7 @@ from typing import Callable, Dict
 from dataclasses import dataclass
 import pandas as pd
 import json
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from model.models import FMCond
 from model.networks import MLP
@@ -324,19 +324,9 @@ def get_matching_methods(
     elif matching_methods == "mesh_baselines":
         return {
             "knn": lambda: compute_p2p_with_knn(source_features, target_features),
-            "hungarian": lambda: compute_p2p_with_hungarian(
-                source_features, target_features
-            ),
-            "lapjv": lambda: compute_p2p_with_lapjv(source_features, target_features),
             "ot": lambda: compute_p2p_with_ot(source_features, target_features),
             "flow": lambda: compute_p2p_with_flows_composition(
                 source_features, target_features, source_model, target_model, device
-            ),
-            "flow-hungarian": lambda: compute_p2p_with_flows_composition_hungarian(
-                source_features, target_features, source_model, target_model
-            ),
-            "flow-lapjv": lambda: compute_p2p_with_flows_composition_lapjv(
-                source_features, target_features, source_model, target_model
             ),
             "flow-zoomout": lambda: compute_p2p_with_flows_composition_zoomout(
                 source_path,
@@ -416,6 +406,39 @@ def compute_geodesic_distance(
 
     return dist
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+def run_matching_methods_parallel(
+    matching_methods,
+    target_points,
+    source_mesh,
+    target_mesh,
+    dists,
+    source_corr=None,
+    target_corr=None,
+    max_workers=4,
+):
+    results = {}
+
+    def wrapper(name, fn):
+        return name, run_matching_methods(
+            {name: fn},
+            target_points,
+            source_mesh,
+            target_mesh,
+            dists,
+            source_corr,
+            target_corr,
+        )[name]
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(wrapper, name, fn): name for name, fn in matching_methods.items()}
+        for future in as_completed(futures):
+            name, res = future.result()
+            results[name] = res
+
+    return results
+
 
 def run_matching_methods(
     matching_methods: Dict[str, Callable[[], torch.Tensor]],
@@ -431,11 +454,7 @@ def run_matching_methods(
     for name, func in matching_methods.items():
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-        t0 = time.perf_counter()
-        p2p = func()
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        elapsed = time.perf_counter() - t0
+        p2p, elapsed = func()
 
         if source_corr is None and target_corr is None:
             matched_points = target_points[p2p]
@@ -599,7 +618,7 @@ def process_pair(
     if data_path.corr_path is not None:
         source_corr = np.loadtxt(Path(data_path.corr_path, source + ".vts")).astype(int) - 1
         target_corr = np.loadtxt(Path(data_path.corr_path, target + ".vts")).astype(int) - 1
-        results = run_matching_methods(
+        results = run_matching_methods_parallel(
             matching_methods=matching_methods,
             target_points=target_points,
             source_mesh=source_mesh,
@@ -607,10 +626,11 @@ def process_pair(
             dists=target_geo_dists,
             source_corr=source_corr,
             target_corr=target_corr,
+            max_workers=10,
         )
     else:
         print("No correspondence path provided")
-        results = run_matching_methods(
+        results = run_matching_methods_parallel(
             matching_methods=matching_methods,
             target_points=target_points,
             source_mesh=source_mesh,
@@ -618,6 +638,7 @@ def process_pair(
             dists=target_geo_dists,
             source_corr=None,
             target_corr=None,
+            max_workers=10,
         )
 
     log_results(source, target, results)
@@ -633,6 +654,7 @@ def process_pair(
                 "target": target,
                 "method": name,
                 "euclidean_error": res.euclidean_error,
+                "geodesic_error": res.geodesic_error,
                 "dirichlet": res.dirichlet_energy,
                 "coverage": res.coverage,
                 "elapsed": res.elapsed,
@@ -766,9 +788,12 @@ def main(args):
     os.makedirs(output_dir, exist_ok=True)
 
     results = []
+    times = []
+
     if args.same:
         for target in targets:
             print(f"Matching the same shape {target} from {args.source_rep} to {args.target_rep}")
+            start_time = time.perf_counter()
             df = process_pair(
                 target,
                 target,
@@ -784,12 +809,16 @@ def main(args):
                 features_normalization=args.features_normalization,
                 data_path=data_path,
             )
+            elapsed_time = time.perf_counter() - start_time
+            print(f"Time taken for {target} -> {target}: {elapsed_time:.2f} seconds")
+            times.append(elapsed_time)
             results.append(df)
     else:
         for source in targets:
             for target in targets:
-                if source is not target:
+                if source != target:
                     print(f"Processing {source} -> {target}")
+                    start_time = time.perf_counter()
                     df = process_pair(
                         source,
                         target,
@@ -805,7 +834,19 @@ def main(args):
                         features_normalization=args.features_normalization,
                         data_path=data_path,
                     )
+                    elapsed_time = time.perf_counter() - start_time
+                    print(f"Time taken for {source} -> {target}: {elapsed_time:.2f} seconds")
+                    times.append(elapsed_time)
                     results.append(df)
+
+    # Save and print average time
+    avg_time = sum(times) / len(times)
+    print(f"Average time for all pairs: {avg_time:.2f} seconds")
+    with open(Path(output_dir, "timing_results.txt"), "w") as f:
+        for i, t in enumerate(times):
+            f.write(f"Pair {i + 1}: {t:.2f} seconds\n")
+        f.write(f"\nAverage time: {avg_time:.2f} seconds\n")
+    
 
     results_df = pd.concat(results, ignore_index=True)
     results_df.to_csv(Path(output_dir, "matching_results.csv"), index=False)

@@ -5,6 +5,7 @@ import os
 import sys
 import torch
 import yaml
+import time
 from easydict import EasyDict as edict
 
 sys.path.append("..")
@@ -63,6 +64,8 @@ def compute_p2p_with_flows_composition(
         target_model: Target model
         device: Device to run computations on
     """
+    print("> computing p2p with flows composition")
+    start_time = time.time()
     source_input = source_input.to(device)
     target_input = target_input.to(device)
     source_model = source_model.to(device)
@@ -80,7 +83,11 @@ def compute_p2p_with_flows_composition(
     _, p2p = nbrs.kneighbors(sample_cpu)
     p2p = p2p[:, 0]
 
-    return p2p
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f">>>> compute_p2p_with_flows_composition elapsed {elapsed_time:.4f}s")
+
+    return p2p, elapsed_time
 
 
 def compute_p2p_with_flows_composition_hungarian(
@@ -95,6 +102,10 @@ def compute_p2p_with_flows_composition_hungarian(
         source_model: Source model
         target_model: Target model
     """
+
+    print("> computing p2p with flows composition + hungarian")
+    start_time = time.time()
+
     with torch.no_grad():
         emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
         sample = target_model.sample(noise=emb1_pullback, num_steps=64)
@@ -102,15 +113,15 @@ def compute_p2p_with_flows_composition_hungarian(
     # Compute the pairwise distances between sample and target_input
     dists = torch.cdist(sample, target_input)
 
-    # Optimal assignment using Hungarian algorithm
-    # assignment = batch_linear_assignment(dists)
-    # row_ind, col_ind = assignment_to_indices(assignment)
-
     row_ind, col_ind = linear_sum_assignment(dists.cpu().numpy())
 
     p2p = col_ind[np.argsort(row_ind)]
 
-    return p2p
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f">>>> compute_p2p_with_flows_composition_hungarian elapsed {elapsed_time:.4f}s")
+
+    return p2p, elapsed_time
 
 
 def compute_p2p_with_flows_composition_lapjv(
@@ -125,6 +136,8 @@ def compute_p2p_with_flows_composition_lapjv(
         source_model: Source model
         target_model: Target model
     """
+    print("> computing p2p with flows composition + lapjv")
+    start_time = time.time()
     with torch.no_grad():
         emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
         sample = target_model.sample(noise=emb1_pullback, num_steps=64)
@@ -135,35 +148,11 @@ def compute_p2p_with_flows_composition_lapjv(
     row_ind, col_ind, _ = lapjv(dists.cpu().numpy())
     p2p = col_ind[np.argsort(row_ind)]
 
-    return p2p
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f">>>> compute_p2p_with_flows_composition_lapjv elapsed {elapsed_time:.4f}s")
 
-
-def compute_p2p_with_flows_composition_hungarian_optimized(
-    source_input, target_input, source_model, target_model
-):
-    with torch.no_grad():
-        emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
-        sample = target_model.sample(noise=emb1_pullback, num_steps=64)
-
-    dists = torch.cdist(sample, target_input)
-    nearest = torch.argmin(dists, dim=1)
-
-    assigned = set()
-    p2p = torch.empty(len(sample), dtype=torch.long)
-
-    for i, j in sorted(enumerate(nearest), key=lambda x: dists[x[0], x[1]].item()):
-        if j.item() not in assigned:
-            p2p[i] = j
-            assigned.add(j.item())
-        else:
-            # pick next best target not yet assigned
-            candidates = torch.argsort(dists[i])
-            for cand in candidates:
-                if cand.item() not in assigned:
-                    p2p[i] = cand
-                    assigned.add(cand.item())
-                    break
-    return p2p
+    return p2p, elapsed_time
 
 
 def compute_p2p_with_inverted_flows_in_gauss(
@@ -177,6 +166,8 @@ def compute_p2p_with_inverted_flows_in_gauss(
         source_model: Source model
         target_model: Target model
     """
+    print("> computing p2p with inverted flows in gauss")
+    start_time = time.time()
     with torch.no_grad():
         emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
         emb2_pullback = target_model.inverse(samples=target_input, num_steps=64)
@@ -187,7 +178,11 @@ def compute_p2p_with_inverted_flows_in_gauss(
     _, p2p = nbrs.kneighbors(emb1_pullback.cpu().numpy())
     p2p = p2p[:, 0]
 
-    return p2p
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f">>>> compute_p2p_with_inverted_flows_in_gauss elapsed {elapsed_time:.4f}s")
+
+    return p2p, elapsed_time
 
 
 def compute_p2p_with_inverted_flows_in_gauss_uniformed(
@@ -201,6 +196,8 @@ def compute_p2p_with_inverted_flows_in_gauss_uniformed(
         source_model: Source model
         target_model: Target model
     """
+    print("> computing p2p with inverted flows in gauss uniformed")
+    start_time = time.time()
     with torch.no_grad():
         emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
         emb2_pullback = target_model.inverse(samples=target_input, num_steps=64)
@@ -215,7 +212,13 @@ def compute_p2p_with_inverted_flows_in_gauss_uniformed(
     _, p2p = nbrs.kneighbors(emb1_pullback_uniform.cpu().numpy())
     p2p = p2p[:, 0]
 
-    return p2p
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(
+        f">>>> compute_p2p_with_inverted_flows_in_gauss_uniformed elapsed {elapsed_time:.4f}s"
+    )
+
+    return p2p, elapsed_time
 
 
 def compute_p2p_with_flows_composition_zoomout(
@@ -239,6 +242,8 @@ def compute_p2p_with_flows_composition_zoomout(
         target_model: Target model
         device: Device to run computations on
     """
+    print("> computing p2p with flows composition + zoomout")
+    start_time = time.time()
     source_input = source_input.to(device)
     target_input = target_input.to(device)
     source_model = source_model.to(device)
@@ -252,11 +257,15 @@ def compute_p2p_with_flows_composition_zoomout(
     sample_cpu = sample
     target_input_cpu = target_input
 
-    p2p = compute_p2p_with_knn_zoomout(
-        source_path, target_path, sample_cpu, target_input_cpu
+    p2p, _ = compute_p2p_with_knn_zoomout(
+        source_path, target_path, sample_cpu, target_input_cpu,
     )
 
-    return p2p
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f">>>> compute_p2p_with_flows_composition_zoomout elapsed {elapsed_time:.4f}s")
+
+    return p2p, elapsed_time
 
 
 def compute_p2p_with_flows_composition_neural_zoomout(
@@ -280,6 +289,8 @@ def compute_p2p_with_flows_composition_neural_zoomout(
         target_model: Target model
         device: Device to run computations on
     """
+    print("> computing p2p with flows composition + neural zoomout")
+    start_time = time.time()
     source_input = source_input.to(device)
     target_input = target_input.to(device)
     source_model = source_model.to(device)
@@ -293,11 +304,17 @@ def compute_p2p_with_flows_composition_neural_zoomout(
     sample_cpu = sample
     target_input_cpu = target_input
 
-    p2p = compute_p2p_with_knn_neural_zoomout(
+    p2p, _ = compute_p2p_with_knn_neural_zoomout(
         source_path, target_path, sample_cpu, target_input_cpu
     )
 
-    return p2p
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(
+        f">>>> compute_p2p_with_flows_composition_neural_zoomout elapsed {elapsed_time:.4f}s"
+    )
+
+    return p2p, elapsed_time
 
 
 ################ KNN #######################
@@ -310,13 +327,19 @@ def compute_p2p_with_knn(source_input, target_input):
         source_input: Source input tensor
         target_input: Target input tensor
     """
+    print("> computing p2p with knn")
+    start_time = time.time()
     nbrs = NearestNeighbors(n_neighbors=1, algorithm="kd_tree").fit(
         target_input.cpu().numpy()
     )
     _, p2p = nbrs.kneighbors(source_input.cpu().numpy())
     p2p = p2p[:, 0]
 
-    return p2p
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f">>>> compute_p2p_with_knn elapsed {elapsed_time:.4f}s")
+
+    return p2p, elapsed_time
 
 
 ################ LINEAR ASSIGNMENT #######################
@@ -327,18 +350,19 @@ def compute_p2p_with_hungarian(source_input, target_input):
         source_input: Source input tensor
         target_input: Target input tensor
     """
+    print("> computing p2p with hungarian")
+    start_time = time.time()
     # Compute the pairwise distances between source_input and target_input
     dists = torch.cdist(source_input, target_input)
-
-    # Optimal assignment using Hungarian algorithm
-    # assignment = batch_linear_assignment(dists)
-    # row_ind, col_ind = assignment_to_indices(assignment)
-    # p2p = col_ind[np.argsort(row_ind)]
 
     row_ind, col_ind = linear_sum_assignment(dists.cpu().numpy())
     p2p = col_ind[np.argsort(row_ind)]
 
-    return p2p
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f">>>> compute_p2p_with_hungarian elapsed {elapsed_time:.4f}s")
+
+    return p2p, elapsed_time
 
 
 def compute_p2p_with_lapjv(source_input, target_input):
@@ -348,18 +372,19 @@ def compute_p2p_with_lapjv(source_input, target_input):
         source_input: Source input tensor
         target_input: Target input tensor
     """
+    print("> computing p2p with lapjv")
+    start_time = time.time()
     # Compute the pairwise distances between source_input and target_input
     dists = torch.cdist(source_input, target_input)
-
-    # Optimal assignment using Hungarian algorithm
-    # assignment = batch_linear_assignment(dists)
-    # row_ind, col_ind = assignment_to_indices(assignment)
-    # p2p = col_ind[np.argsort(row_ind)]
 
     row_ind, col_ind, _ = lapjv(dists.cpu().numpy())
     p2p = col_ind[np.argsort(row_ind)]
 
-    return p2p
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f">>>> compute_p2p_with_lapjv elapsed {elapsed_time:.4f}s")
+
+    return p2p, elapsed_time
 
 
 ################ FUNCTIONAL MAPS #######################
@@ -374,6 +399,8 @@ def compute_p2p_with_fmaps(source_path, target_path, source_features, target_fea
         source_features: Source features (N, D)
         target_features: Target features (M, D)
     """
+    print("> computing p2p with fmaps")
+    start_time = time.time()
     mesh = trimesh.load(source_path, process=False)
     mesh2 = trimesh.load(target_path, process=False)
 
@@ -435,7 +462,11 @@ def compute_p2p_with_fmaps(source_path, target_path, source_features, target_fea
 
     p2p = converter(fmap, mesh_b.basis, mesh_a.basis)
 
-    return p2p
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f">>>> compute_p2p_with_fmaps elapsed {elapsed_time:.4f}s")
+
+    return p2p, elapsed_time
 
 
 def compute_p2p_with_fmaps_wks(
@@ -449,6 +480,8 @@ def compute_p2p_with_fmaps_wks(
         input_landmark: Input landmark indices (n_ldmk)
         target_landmark: Target landmark indices (n_ldmk)
     """
+    print("> computing p2p with fmaps_wks")
+    start_time = time.time()
     mesh = trimesh.load(source_path, process=False)
     mesh2 = trimesh.load(target_path, process=False)
 
@@ -525,7 +558,11 @@ def compute_p2p_with_fmaps_wks(
 
     p2p = converter(fmap, mesh_a.basis, mesh_b.basis)
 
-    return p2p
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f">>>> compute_p2p_with_fmaps_wks elapsed {elapsed_time:.4f}s")
+
+    return p2p, elapsed_time
 
 
 def compute_p2p_with_knn_zoomout(source_path, target_path, source_input, target_input):
@@ -538,6 +575,8 @@ def compute_p2p_with_knn_zoomout(source_path, target_path, source_input, target_
         source_input: Source features (N, D)
         target_input: Target features (M, D)
     """
+    print("> computing p2p with knn + zoomout")
+    start_time = time.time()
     nbrs = NearestNeighbors(n_neighbors=1, algorithm="kd_tree").fit(
         target_input.cpu().numpy()
     )
@@ -573,7 +612,11 @@ def compute_p2p_with_knn_zoomout(source_path, target_path, source_input, target_
     converter = P2pFromFmConverter()
     p2p = converter(fmap, mesh_b.basis, mesh_a.basis)
 
-    return p2p
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f">>>> compute_p2p_with_knn_zoomout elapsed {elapsed_time:.4f}s")
+
+    return p2p, elapsed_time
 
 
 def compute_p2p_with_fmap_zoomout(source_path, target_path, source_input, target_input):
@@ -586,6 +629,8 @@ def compute_p2p_with_fmap_zoomout(source_path, target_path, source_input, target
         source_input: Source features (N, D)
         target_input: Target features (M, D)
     """
+    print("> computing p2p with fmap + zoomout")
+    start_time = time.time()
     mesh = trimesh.load(source_path, process=False)
     mesh2 = trimesh.load(target_path, process=False)
 
@@ -649,7 +694,11 @@ def compute_p2p_with_fmap_zoomout(source_path, target_path, source_input, target
     converter = P2pFromFmConverter()
     p2p = converter(fmap, mesh_b.basis, mesh_a.basis)
 
-    return p2p
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f">>>> compute_p2p_with_fmap_zoomout elapsed {elapsed_time:.4f}s")
+
+    return p2p, elapsed_time
 
 
 def compute_p2p_with_knn_neural_zoomout(
@@ -664,6 +713,8 @@ def compute_p2p_with_knn_neural_zoomout(
         source_input: Source features (N, D)
         target_input: Target features (M, D)
     """
+    print("> computing p2p with knn + neural zoomout")
+    start_time = time.time()
     nbrs = NearestNeighbors(n_neighbors=1, algorithm="kd_tree").fit(
         target_input.cpu().numpy()
     )
@@ -699,7 +750,11 @@ def compute_p2p_with_knn_neural_zoomout(
     converter = P2pFromNamConverter()
     p2p = converter(fmap, mesh_b.basis, mesh_a.basis)
 
-    return p2p
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f">>>> compute_p2p_with_knn_neural_zoomout elapsed {elapsed_time:.4f}s")
+
+    return p2p, elapsed_time
 
 
 def compute_p2p_with_fmap_neural_zoomout(
@@ -714,6 +769,8 @@ def compute_p2p_with_fmap_neural_zoomout(
         source_input: Source features (N, D)
         target_input: Target features (M, D)
     """
+    print("> computing p2p with fmap + neural zoomout")
+    start_time = time.time()
     source_input = source_input.cpu().numpy()
     target_input = target_input.cpu().numpy()
 
@@ -784,7 +841,11 @@ def compute_p2p_with_fmap_neural_zoomout(
     converter = P2pFromNamConverter()
     p2p = converter(fmap, mesh_b.basis, mesh_a.basis)
 
-    return p2p
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f">>>> compute_p2p_with_fmap_neural_zoomout elapsed {elapsed_time:.4f}s")
+
+    return p2p, elapsed_time
 
 
 ################ Neural Deformation Pyramid #######################
@@ -808,6 +869,8 @@ def ndp_with_ldmks(source_path, target_path, source_landmarks, target_landmarks)
     Returns:
         p2p: Point-to-point maps (source_n_points)
     """
+    print("> computing p2p with ndp_with_ldmks")
+    start_time = time.time()
 
     mesh = trimesh.load(source_path, process=False)
     mesh2 = trimesh.load(target_path, process=False)
@@ -856,7 +919,11 @@ def ndp_with_ldmks(source_path, target_path, source_landmarks, target_landmarks)
     _, p2p = nbrs.kneighbors(warped_pcd.cpu().numpy())
     p2p = p2p[:, 0]
 
-    return p2p
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"> ndp_with_ldmks elapsed {elapsed_time:.4f}s")
+
+    return p2p, elapsed_time
 
 
 ################ OT #######################
@@ -870,6 +937,8 @@ def compute_p2p_with_ot(source_features, target_features):
         source_features: Source features (N, D)
         target_features: Target features (M, D)
     """
+    print("> computing p2p with ot (sinkhorn)")
+    start_time = time.time()
 
     M = np.exp(-ot.dist(source_features.cpu().numpy(), target_features.cpu().numpy()))
 
@@ -880,5 +949,10 @@ def compute_p2p_with_ot(source_features, target_features):
     Gs = ot.sinkhorn(a, b, M, reg=1)
 
     indices = np.argsort(Gs, axis=1)[:, :1]
+    p2p = indices.T[0, :]
 
-    return indices.T[0, :]
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f">>>> compute_p2p_with_ot elapsed {elapsed_time:.4f}s")
+
+    return p2p, elapsed_time
