@@ -556,7 +556,7 @@ def compute_p2p_with_fmaps_wks(
 
     converter = P2pFromFmConverter()
 
-    p2p = converter(fmap, mesh_a.basis, mesh_b.basis)
+    p2p = converter(fmap, mesh_b.basis, mesh_a.basis)
 
     end_time = time.time()
     elapsed_time = end_time - start_time
