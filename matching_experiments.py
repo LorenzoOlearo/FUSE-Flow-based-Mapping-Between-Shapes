@@ -8,10 +8,11 @@ import torch
 import trimesh
 import matplotlib.colors as mcolors
 import time
-from typing import Callable, Dict
+from typing import Callable, Dict, Optional
 from dataclasses import dataclass
 import pandas as pd
 import json
+from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from model.models import FMCond
@@ -35,6 +36,7 @@ from util.plot import plot_points, start_end_subplot
 
 @dataclass
 class DataPath:
+    output_dir: Path
     landmarks: List[int]
     dataset_path: Path
     dists_path: Path
@@ -42,7 +44,7 @@ class DataPath:
     flows_path: Path
     flows_SDFs_path: Path
     sdf_path: Path
-    corr_path: Path = None
+    corr_path: Optional[Path] = None
 
 
 def plot_geodesic_comparison(vertices, faces, true_dists, dijkstra_dists, save_path):
@@ -168,7 +170,7 @@ def is_in_range(name):
         return False
 
 
-def get_targets(args) -> List[str]:
+def get_targets_faust(args) -> List[str]:
     """Determine which targets to process."""
     # targets = [
     #     f.name for f in SDFs_PATH.iterdir() if f.is_dir() and
@@ -181,27 +183,27 @@ def get_targets(args) -> List[str]:
     for i in range(80, 100):
         if args.source_rep == "sdf" or args.target_rep == "sdf":
             if i == 86 or i == 87 or i == 96 or i == 97:
-                print(f"Skipping topologically incorrect shape tr_reg_{i:03d}")
+                tqdm.write(f"Skipping topologically incorrect shape tr_reg_{i:03d}")
                 continue
         target = f"tr_reg_{i:03d}"
         targets.append(target)
 
-    print(f"Processing all targets: {targets}")
+    tqdm.write(f"Processing all targets: {targets}")
     return targets
 
 
-def get_targets_smal(args, data_path) -> List[str]:
+def get_targets_smal(flows_path) -> List[str]:
     """Determine which targets to process."""
     # Only load cougar, hippo and horse
     targets = [
         f.name
-        for f in data_path.flows_path.iterdir()
+        for f in flows_path.iterdir()
         if f.is_dir()
         and f.name.startswith(("cougar", "hippo", "horse"))
         and f.name != "horse_09"
     ]
 
-    print(f"Processing all targets: {targets}")
+    tqdm.write(f"Processing all targets: {targets}")
     return targets
 
 
@@ -223,7 +225,7 @@ def process_element(
 
     points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
     if representation == "mesh":
-        print(f"Loading {element} with {representation} representation")
+        tqdm.write(f"Loading {element} with {representation} representation")
         # features_path = Path(data_path.flows_path, element, f'vertex-geodesics-interpolated-vnorm.txt')
         # vertex_features_path = Path(data_path.flows_path, element, f'vertex-geodesics-vnorm.txt')
 
@@ -248,7 +250,7 @@ def process_element(
         )
 
     elif representation == "sdf":
-        print(f"Loading {element} with {representation} representation")
+        tqdm.write(f"Loading {element} with {representation} representation")
         features_path = Path(
             data_path.flows_SDFs_path,
             element,
@@ -262,7 +264,7 @@ def process_element(
         #     points_path = Path(SDFs_PATH, element, f'{element}-sdf-sampled-points.txt')
         #     points = torch.tensor(np.loadtxt(points_path).astype(np.float32)).to(device)
         # else:
-        #     print(f"Using mesh baseline for {element}")
+        #     tqdm.write(f"Using mesh baseline for {element}")
         #     features_path = Path(SDFs_PATH, element, f'{element}-sdf-mesh-dists-projected-interpolated.txt')
         #     # features_path = Path(SDFs_PATH, element, f'{element}-sdf-extracted-mesh-dists.txt')   # Analitic SDF features
         #     points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
@@ -358,11 +360,31 @@ def get_matching_methods(
             "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
                 source_features, target_features, source_model, target_model
             ),
-            "knn-zoomout": lambda: compute_p2p_with_knn_zoomout(
+            "ndp-landmarks": lambda: ndp_with_ldmks(
+                source_path,
+                target_path,
+                source_landmarks=source_landmarks,
+                target_landmarks=target_landmarks,
+            ),
+            "fmap-wks": lambda: compute_p2p_with_fmaps_wks(
+                source_path,
+                target_path,
+                source_landmarks=source_landmarks,
+                target_landmarks=target_landmarks,
+            ),
+        }
+    elif matching_methods == "baselines-no-zoomout":
+        return {
+            "knn": lambda: compute_p2p_with_knn(source_features, target_features),
+            "ot": lambda: compute_p2p_with_ot(source_features, target_features),
+            "flow": lambda: compute_p2p_with_flows_composition(
+                source_features, target_features, source_model, target_model, device
+            ),
+            "fmaps": lambda: compute_p2p_with_fmaps(
                 source_path, target_path, source_features, target_features
             ),
-            "knn-neural-zoomout": lambda: compute_p2p_with_knn_neural_zoomout(
-                source_path, target_path, source_features, target_features
+            "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
+                source_features, target_features, source_model, target_model
             ),
             "ndp-landmarks": lambda: ndp_with_ldmks(
                 source_path,
@@ -375,6 +397,33 @@ def get_matching_methods(
                 target_path,
                 source_landmarks=source_landmarks,
                 target_landmarks=target_landmarks,
+            ),
+        }
+    elif matching_methods == "zoomout":
+        return {
+            "flow-zoomout": lambda: compute_p2p_with_flows_composition_zoomout(
+                source_path,
+                target_path,
+                source_features,
+                target_features,
+                source_model,
+                target_model,
+                device,
+            ),
+            "flow-neural-zoomout": lambda: compute_p2p_with_flows_composition_neural_zoomout(
+                source_path,
+                target_path,
+                source_features,
+                target_features,
+                source_model,
+                target_model,
+                device,
+            ),
+            "fmap-zoomout": lambda: compute_p2p_with_fmap_zoomout(
+                source_path, target_path, source_features, target_features
+            ),
+            "fmap-neural-zoomout": lambda: compute_p2p_with_fmap_neural_zoomout(
+                source_path, target_path, source_features, target_features
             ),
         }
     else:
@@ -406,7 +455,6 @@ def compute_geodesic_distance(
 
     return dist
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def run_matching_methods_parallel(
     matching_methods,
@@ -416,12 +464,12 @@ def run_matching_methods_parallel(
     dists,
     source_corr=None,
     target_corr=None,
-    max_workers=4,
+    max_workers=10,
 ):
     results = {}
 
     def wrapper(name, fn):
-        return name, run_matching_methods(
+        return name, run_matching_methods_parallel(
             {name: fn},
             target_points,
             source_mesh,
@@ -429,6 +477,7 @@ def run_matching_methods_parallel(
             dists,
             source_corr,
             target_corr,
+            max_workers=10,
         )[name]
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -464,7 +513,7 @@ def run_matching_methods(
             coverage = compute_coverage(p2p, len(target_mesh.vertices))
 
         else:
-            print(f"Applying correspondences alignment for {name}")
+            tqdm.write(f"Applying correspondences alignment for {name}")
             matched_points = target_points[p2p]
             target_points_corr = target_points
             matched_points = matched_points[source_corr]
@@ -489,10 +538,10 @@ def run_matching_methods(
 
 
 def log_results(source: str, target: str, results: Dict[str, MatchingResult]) -> None:
-    """Print error metrics nicely formatted."""
-    print(f"> Evaluation results for {source} -> {target}:")
+    """tqdm.write error metrics nicely formatted."""
+    tqdm.write(f"> Evaluation results for {source} -> {target}:")
     for name, res in results.items():
-        print(
+        tqdm.write(
             f"  > {name:<20}: euclidean_error {res.euclidean_error:.4f} | geodesic_error {res.geodesic_error:.4f} | dirichlet_energy={res.dirichlet_energy:.4f} | coverage={res.coverage:.4f} | elapsed={res.elapsed:.2f}s"
         )
 
@@ -566,8 +615,6 @@ def process_pair(
     mesh_baseline: bool,
     plot_html: bool,
     plot_png: bool,
-    geo_error: bool,
-    output_dir: str,
     all_methods: str,
     features_normalization: str,
     data_path: DataPath,
@@ -618,7 +665,7 @@ def process_pair(
     if data_path.corr_path is not None:
         source_corr = np.loadtxt(Path(data_path.corr_path, source + ".vts")).astype(int) - 1
         target_corr = np.loadtxt(Path(data_path.corr_path, target + ".vts")).astype(int) - 1
-        results = run_matching_methods_parallel(
+        results = run_matching_methods(
             matching_methods=matching_methods,
             target_points=target_points,
             source_mesh=source_mesh,
@@ -626,11 +673,10 @@ def process_pair(
             dists=target_geo_dists,
             source_corr=source_corr,
             target_corr=target_corr,
-            max_workers=10,
         )
     else:
-        print("No correspondence path provided")
-        results = run_matching_methods_parallel(
+        tqdm.write("No correspondence path provided")
+        results = run_matching_methods(
             matching_methods=matching_methods,
             target_points=target_points,
             source_mesh=source_mesh,
@@ -638,12 +684,18 @@ def process_pair(
             dists=target_geo_dists,
             source_corr=None,
             target_corr=None,
-            max_workers=10,
         )
 
     log_results(source, target, results)
     plot_results(
-        source_points, source, target, results, output_dir, plot_html, plot_png
+        source_points=source_points,
+        source=source,
+        target=target,
+        results=results,
+        output_dir=str(data_path.output_dir),
+        plot_html=plot_html,
+        plot_png=plot_png,
+        max_points=100_000,
     )
 
     rows = []
@@ -757,105 +809,84 @@ def main(args):
     mesh_baseline = args.mesh_baseline
 
     if args.faust:
-        print("Running FAUST experiments")
-        data_path = DataPath(
-            landmarks=config["matching_config"]["FAUST"]["landmarks"],
-            dataset_path=Path(config["matching_config"]["FAUST"]["dataset_path"]),
-            dists_path=Path(config["matching_config"]["FAUST"]["dists_path"]),
-            dataset_extension=config["matching_config"]["FAUST"]["dataset_extension"],
-            flows_path=Path(config["matching_config"]["FAUST"]["flows_path"]),
-            flows_SDFs_path=Path(config["matching_config"]["FAUST"]["flows_SDFs_path"]),
-            sdf_path=Path(config["matching_config"]["FAUST"]["SDFs_path"]),
-            corr_path=None,
-        )
-        targets = get_targets(args)
+        dataset = "FAUST"
+        targets = get_targets_faust(args)
     elif args.smal:
-        print("Running SMAL experiments")
-        data_path = DataPath(
-            landmarks=config["matching_config"]["SMAL"]["landmarks"],
-            dataset_path=Path(config["matching_config"]["SMAL"]["dataset_path"]),
-            dists_path=Path(config["matching_config"]["SMAL"]["dists_path"]),
-            dataset_extension=config["matching_config"]["SMAL"]["dataset_extension"],
-            flows_path=Path(config["matching_config"]["SMAL"]["flows_path"]),
-            flows_SDFs_path=Path(config["matching_config"]["SMAL"]["flows_SDFs_path"]),
-            sdf_path=Path(config["matching_config"]["SMAL"]["SDFs_path"]),
-            corr_path=Path(config["matching_config"]["SMAL"]["corr_path"]),
-        )
-        targets = get_targets_smal(args, data_path)
+        dataset = "SMAL"
+        targets = get_targets_smal(Path(config["matching_config"][dataset]["flows_path"]))
+    else:
+        raise ValueError("Please specify either --faust or --smal")
 
-    print(f"Found {len(targets)} targets: {targets}")
-    output_dir = Path(f"./out/matching/matching-{args.source_rep}-{args.target_rep}-{args.run_name}")
-    os.makedirs(output_dir, exist_ok=True)
+    if targets is None or len(targets) == 0:
+        raise ValueError("No targets found to process.")
+    tqdm.write(f"Running {dataset} experiments")
+    tqdm.write(f"Found {len(targets)} targets: {targets}")
+
+    output_dir = Path(f"./out/matching/{dataset.lower()}/matching-{args.source_rep}-{args.target_rep}-{args.matching_run_name}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    tqdm.write(f"Output directory: {output_dir}")
+
+    data_path = DataPath(
+        output_dir=output_dir,
+        landmarks=config["matching_config"][dataset]["landmarks"],
+        dataset_path=Path(config["matching_config"][dataset]["dataset_path"]),
+        dists_path=Path(config["matching_config"][dataset]["dists_path"]),
+        dataset_extension=config["matching_config"][dataset]["dataset_extension"],
+        flows_path=Path(config["matching_config"][dataset]["flows_path"]),
+        flows_SDFs_path=Path(config["matching_config"][dataset]["flows_SDFs_path"]),
+        sdf_path=Path(config["matching_config"][dataset]["SDFs_path"]),
+        corr_path=Path(config["matching_config"][dataset]["corr_path"]) if "corr_path" in config["matching_config"][dataset] else None
+    )
 
     results = []
     times = []
+    results_file = Path(output_dir, "matching_results.csv")
 
     if args.same:
-        for target in targets:
-            print(f"Matching the same shape {target} from {args.source_rep} to {args.target_rep}")
-            start_time = time.perf_counter()
-            df = process_pair(
-                target,
-                target,
-                args.source_rep,
-                args.target_rep,
-                device,
-                mesh_baseline,
-                args.plot_html,
-                args.plot_png,
-                args.geo_error,
-                output_dir,
-                args.matching_methods,
-                features_normalization=args.features_normalization,
-                data_path=data_path,
-            )
-            elapsed_time = time.perf_counter() - start_time
-            print(f"Time taken for {target} -> {target}: {elapsed_time:.2f} seconds")
-            times.append(elapsed_time)
-            results.append(df)
+        pairs = [(t, t) for t in targets]
     else:
-        for source in targets:
-            for target in targets:
-                if source != target:
-                    print(f"Processing {source} -> {target}")
-                    start_time = time.perf_counter()
-                    df = process_pair(
-                        source,
-                        target,
-                        args.source_rep,
-                        args.target_rep,
-                        device,
-                        mesh_baseline,
-                        args.plot_html,
-                        args.plot_png,
-                        args.geo_error,
-                        output_dir,
-                        args.matching_methods,
-                        features_normalization=args.features_normalization,
-                        data_path=data_path,
-                    )
-                    elapsed_time = time.perf_counter() - start_time
-                    print(f"Time taken for {source} -> {target}: {elapsed_time:.2f} seconds")
-                    times.append(elapsed_time)
-                    results.append(df)
+        pairs = [(s, t) for s in targets for t in targets if s != t]
 
-    # Save and print average time
-    avg_time = sum(times) / len(times)
-    print(f"Average time for all pairs: {avg_time:.2f} seconds")
+    for source, target in tqdm(pairs, desc="Processing shape pairs", unit="pair", dynamic_ncols=True):
+        tqdm.write(f"Processing {source} -> {target}")
+        start_time = time.perf_counter()
+        df = process_pair(
+            source=source,
+            target=target,
+            source_rep=args.source_rep,
+            target_rep=args.target_rep,
+            device=device,
+            mesh_baseline=mesh_baseline,
+            plot_html=args.plot_html,
+            plot_png=args.plot_png,
+            all_methods=args.matching_methods,
+            features_normalization=args.features_normalization,
+            data_path=data_path,
+        )
+        elapsed_time = time.perf_counter() - start_time
+        tqdm.write(f"Time taken for {source} -> {target}: {elapsed_time:.2f} seconds")
+        times.append(elapsed_time)
+
+        df.to_csv(results_file, mode="a", header=not results_file.exists(), index=False)
+        results.append(df)
+
+    # Save and tqdm.write average time
+    times_sec = [t.total_seconds() if hasattr(t, "total_seconds") else float(t) for t in times]
+    avg_time = sum(times_sec) / len(times_sec)
+    tqdm.write(f"Average time for all pairs: {avg_time:.2f} seconds")
     with open(Path(output_dir, "timing_results.txt"), "w") as f:
-        for i, t in enumerate(times):
+        for i, t in enumerate(times_sec):
             f.write(f"Pair {i + 1}: {t:.2f} seconds\n")
         f.write(f"\nAverage time: {avg_time:.2f} seconds\n")
-    
 
     results_df = pd.concat(results, ignore_index=True)
-    results_df.to_csv(Path(output_dir, "matching_results.csv"), index=False)
+    results_df.to_csv(Path(output_dir, "matching_results_completed.csv"), index=False)
 
-    print("Average errors across all pairs:")
+    tqdm.write("Average errors across all pairs:")
     avg_metrics = df.groupby("method")[
         ["euclidean_error", "geodesic_error", "dirichlet", "coverage", "elapsed"]
     ].mean()
-    print(avg_metrics)
+    tqdm.write(avg_metrics)
 
 
 if __name__ == "__main__":
@@ -930,7 +961,7 @@ if __name__ == "__main__":
         default=False,
     )
     parser.add_argument(
-        "--run_name",
+        "--matching_run_name",
         type=str,
         help="Name of the run to append at the end of the output directory",
         default="",
@@ -949,10 +980,6 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-
-    if args.run_name == "":
-        args.run_name = input("Enter a run name: ")
-
     if args.config:
         with open(args.config, "r") as f:
             config = json.load(f)
@@ -961,9 +988,12 @@ if __name__ == "__main__":
                 continue
             setattr(args, key, value)
 
-    print("------------------------------------------")
+    if args.matching_run_name == "":
+        args.matching_run_name = input("Enter a run name: ")
+
+    tqdm.write("------------------------------------------")
     for arg in vars(args):
-        print(f"{arg}: {getattr(args, arg)}")
-    print("------------------------------------------")
+        tqdm.write(f"{arg}: {getattr(args, arg)}")
+    tqdm.write("------------------------------------------")
 
     main(args)

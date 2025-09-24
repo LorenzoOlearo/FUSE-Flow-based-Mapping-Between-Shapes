@@ -6,6 +6,7 @@ import sys
 import torch
 import yaml
 import time
+from tqdm import tqdm
 from easydict import EasyDict as edict
 
 sys.path.append("..")
@@ -64,7 +65,7 @@ def compute_p2p_with_flows_composition(
         target_model: Target model
         device: Device to run computations on
     """
-    print("> computing p2p with flows composition")
+    tqdm.write("> computing p2p with flows composition")
     start_time = time.time()
     source_input = source_input.to(device)
     target_input = target_input.to(device)
@@ -85,7 +86,7 @@ def compute_p2p_with_flows_composition(
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f">>>> compute_p2p_with_flows_composition elapsed {elapsed_time:.4f}s")
+    tqdm.write(f">>>> compute_p2p_with_flows_composition elapsed {elapsed_time:.4f}s")
 
     return p2p, elapsed_time
 
@@ -103,7 +104,7 @@ def compute_p2p_with_flows_composition_hungarian(
         target_model: Target model
     """
 
-    print("> computing p2p with flows composition + hungarian")
+    tqdm.write("> computing p2p with flows composition + hungarian")
     start_time = time.time()
 
     with torch.no_grad():
@@ -119,7 +120,7 @@ def compute_p2p_with_flows_composition_hungarian(
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f">>>> compute_p2p_with_flows_composition_hungarian elapsed {elapsed_time:.4f}s")
+    tqdm.write(f">>>> compute_p2p_with_flows_composition_hungarian elapsed {elapsed_time:.4f}s")
 
     return p2p, elapsed_time
 
@@ -136,7 +137,7 @@ def compute_p2p_with_flows_composition_lapjv(
         source_model: Source model
         target_model: Target model
     """
-    print("> computing p2p with flows composition + lapjv")
+    tqdm.write("> computing p2p with flows composition + lapjv")
     start_time = time.time()
     with torch.no_grad():
         emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
@@ -150,7 +151,7 @@ def compute_p2p_with_flows_composition_lapjv(
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f">>>> compute_p2p_with_flows_composition_lapjv elapsed {elapsed_time:.4f}s")
+    tqdm.write(f">>>> compute_p2p_with_flows_composition_lapjv elapsed {elapsed_time:.4f}s")
 
     return p2p, elapsed_time
 
@@ -166,7 +167,7 @@ def compute_p2p_with_inverted_flows_in_gauss(
         source_model: Source model
         target_model: Target model
     """
-    print("> computing p2p with inverted flows in gauss")
+    tqdm.write("> computing p2p with inverted flows in gauss")
     start_time = time.time()
     with torch.no_grad():
         emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
@@ -180,7 +181,7 @@ def compute_p2p_with_inverted_flows_in_gauss(
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f">>>> compute_p2p_with_inverted_flows_in_gauss elapsed {elapsed_time:.4f}s")
+    tqdm.write(f">>>> compute_p2p_with_inverted_flows_in_gauss elapsed {elapsed_time:.4f}s")
 
     return p2p, elapsed_time
 
@@ -196,7 +197,7 @@ def compute_p2p_with_inverted_flows_in_gauss_uniformed(
         source_model: Source model
         target_model: Target model
     """
-    print("> computing p2p with inverted flows in gauss uniformed")
+    tqdm.write("> computing p2p with inverted flows in gauss uniformed")
     start_time = time.time()
     with torch.no_grad():
         emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
@@ -214,7 +215,7 @@ def compute_p2p_with_inverted_flows_in_gauss_uniformed(
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(
+    tqdm.write(
         f">>>> compute_p2p_with_inverted_flows_in_gauss_uniformed elapsed {elapsed_time:.4f}s"
     )
 
@@ -242,7 +243,7 @@ def compute_p2p_with_flows_composition_zoomout(
         target_model: Target model
         device: Device to run computations on
     """
-    print("> computing p2p with flows composition + zoomout")
+    tqdm.write("> computing p2p with flows composition + zoomout")
     start_time = time.time()
     source_input = source_input.to(device)
     target_input = target_input.to(device)
@@ -263,7 +264,7 @@ def compute_p2p_with_flows_composition_zoomout(
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f">>>> compute_p2p_with_flows_composition_zoomout elapsed {elapsed_time:.4f}s")
+    tqdm.write(f">>>> compute_p2p_with_flows_composition_zoomout elapsed {elapsed_time:.4f}s")
 
     return p2p, elapsed_time
 
@@ -289,7 +290,7 @@ def compute_p2p_with_flows_composition_neural_zoomout(
         target_model: Target model
         device: Device to run computations on
     """
-    print("> computing p2p with flows composition + neural zoomout")
+    tqdm.write("> computing p2p with flows composition + neural zoomout")
     start_time = time.time()
     source_input = source_input.to(device)
     target_input = target_input.to(device)
@@ -310,7 +311,7 @@ def compute_p2p_with_flows_composition_neural_zoomout(
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(
+    tqdm.write(
         f">>>> compute_p2p_with_flows_composition_neural_zoomout elapsed {elapsed_time:.4f}s"
     )
 
@@ -327,7 +328,7 @@ def compute_p2p_with_knn(source_input, target_input):
         source_input: Source input tensor
         target_input: Target input tensor
     """
-    print("> computing p2p with knn")
+    tqdm.write("> computing p2p with knn")
     start_time = time.time()
     nbrs = NearestNeighbors(n_neighbors=1, algorithm="kd_tree").fit(
         target_input.cpu().numpy()
@@ -337,7 +338,7 @@ def compute_p2p_with_knn(source_input, target_input):
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f">>>> compute_p2p_with_knn elapsed {elapsed_time:.4f}s")
+    tqdm.write(f">>>> compute_p2p_with_knn elapsed {elapsed_time:.4f}s")
 
     return p2p, elapsed_time
 
@@ -350,7 +351,7 @@ def compute_p2p_with_hungarian(source_input, target_input):
         source_input: Source input tensor
         target_input: Target input tensor
     """
-    print("> computing p2p with hungarian")
+    tqdm.write("> computing p2p with hungarian")
     start_time = time.time()
     # Compute the pairwise distances between source_input and target_input
     dists = torch.cdist(source_input, target_input)
@@ -360,7 +361,7 @@ def compute_p2p_with_hungarian(source_input, target_input):
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f">>>> compute_p2p_with_hungarian elapsed {elapsed_time:.4f}s")
+    tqdm.write(f">>>> compute_p2p_with_hungarian elapsed {elapsed_time:.4f}s")
 
     return p2p, elapsed_time
 
@@ -372,7 +373,7 @@ def compute_p2p_with_lapjv(source_input, target_input):
         source_input: Source input tensor
         target_input: Target input tensor
     """
-    print("> computing p2p with lapjv")
+    tqdm.write("> computing p2p with lapjv")
     start_time = time.time()
     # Compute the pairwise distances between source_input and target_input
     dists = torch.cdist(source_input, target_input)
@@ -382,7 +383,7 @@ def compute_p2p_with_lapjv(source_input, target_input):
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f">>>> compute_p2p_with_lapjv elapsed {elapsed_time:.4f}s")
+    tqdm.write(f">>>> compute_p2p_with_lapjv elapsed {elapsed_time:.4f}s")
 
     return p2p, elapsed_time
 
@@ -399,7 +400,7 @@ def compute_p2p_with_fmaps(source_path, target_path, source_features, target_fea
         source_features: Source features (N, D)
         target_features: Target features (M, D)
     """
-    print("> computing p2p with fmaps")
+    tqdm.write("> computing p2p with fmaps")
     start_time = time.time()
     mesh = trimesh.load(source_path, process=False)
     mesh2 = trimesh.load(target_path, process=False)
@@ -464,7 +465,7 @@ def compute_p2p_with_fmaps(source_path, target_path, source_features, target_fea
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f">>>> compute_p2p_with_fmaps elapsed {elapsed_time:.4f}s")
+    tqdm.write(f">>>> compute_p2p_with_fmaps elapsed {elapsed_time:.4f}s")
 
     return p2p, elapsed_time
 
@@ -480,7 +481,7 @@ def compute_p2p_with_fmaps_wks(
         input_landmark: Input landmark indices (n_ldmk)
         target_landmark: Target landmark indices (n_ldmk)
     """
-    print("> computing p2p with fmaps_wks")
+    tqdm.write("> computing p2p with fmaps_wks")
     start_time = time.time()
     mesh = trimesh.load(source_path, process=False)
     mesh2 = trimesh.load(target_path, process=False)
@@ -560,7 +561,7 @@ def compute_p2p_with_fmaps_wks(
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f">>>> compute_p2p_with_fmaps_wks elapsed {elapsed_time:.4f}s")
+    tqdm.write(f">>>> compute_p2p_with_fmaps_wks elapsed {elapsed_time:.4f}s")
 
     return p2p, elapsed_time
 
@@ -575,7 +576,7 @@ def compute_p2p_with_knn_zoomout(source_path, target_path, source_input, target_
         source_input: Source features (N, D)
         target_input: Target features (M, D)
     """
-    print("> computing p2p with knn + zoomout")
+    tqdm.write("> computing p2p with knn + zoomout")
     start_time = time.time()
     nbrs = NearestNeighbors(n_neighbors=1, algorithm="kd_tree").fit(
         target_input.cpu().numpy()
@@ -614,7 +615,7 @@ def compute_p2p_with_knn_zoomout(source_path, target_path, source_input, target_
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f">>>> compute_p2p_with_knn_zoomout elapsed {elapsed_time:.4f}s")
+    tqdm.write(f">>>> compute_p2p_with_knn_zoomout elapsed {elapsed_time:.4f}s")
 
     return p2p, elapsed_time
 
@@ -629,7 +630,7 @@ def compute_p2p_with_fmap_zoomout(source_path, target_path, source_input, target
         source_input: Source features (N, D)
         target_input: Target features (M, D)
     """
-    print("> computing p2p with fmap + zoomout")
+    tqdm.write("> computing p2p with fmap + zoomout")
     start_time = time.time()
     mesh = trimesh.load(source_path, process=False)
     mesh2 = trimesh.load(target_path, process=False)
@@ -696,7 +697,7 @@ def compute_p2p_with_fmap_zoomout(source_path, target_path, source_input, target
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f">>>> compute_p2p_with_fmap_zoomout elapsed {elapsed_time:.4f}s")
+    tqdm.write(f">>>> compute_p2p_with_fmap_zoomout elapsed {elapsed_time:.4f}s")
 
     return p2p, elapsed_time
 
@@ -713,7 +714,7 @@ def compute_p2p_with_knn_neural_zoomout(
         source_input: Source features (N, D)
         target_input: Target features (M, D)
     """
-    print("> computing p2p with knn + neural zoomout")
+    tqdm.write("> computing p2p with knn + neural zoomout")
     start_time = time.time()
     nbrs = NearestNeighbors(n_neighbors=1, algorithm="kd_tree").fit(
         target_input.cpu().numpy()
@@ -752,7 +753,7 @@ def compute_p2p_with_knn_neural_zoomout(
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f">>>> compute_p2p_with_knn_neural_zoomout elapsed {elapsed_time:.4f}s")
+    tqdm.write(f">>>> compute_p2p_with_knn_neural_zoomout elapsed {elapsed_time:.4f}s")
 
     return p2p, elapsed_time
 
@@ -769,7 +770,7 @@ def compute_p2p_with_fmap_neural_zoomout(
         source_input: Source features (N, D)
         target_input: Target features (M, D)
     """
-    print("> computing p2p with fmap + neural zoomout")
+    tqdm.write("> computing p2p with fmap + neural zoomout")
     start_time = time.time()
     source_input = source_input.cpu().numpy()
     target_input = target_input.cpu().numpy()
@@ -843,7 +844,7 @@ def compute_p2p_with_fmap_neural_zoomout(
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f">>>> compute_p2p_with_fmap_neural_zoomout elapsed {elapsed_time:.4f}s")
+    tqdm.write(f">>>> compute_p2p_with_fmap_neural_zoomout elapsed {elapsed_time:.4f}s")
 
     return p2p, elapsed_time
 
@@ -869,7 +870,7 @@ def ndp_with_ldmks(source_path, target_path, source_landmarks, target_landmarks)
     Returns:
         p2p: Point-to-point maps (source_n_points)
     """
-    print("> computing p2p with ndp_with_ldmks")
+    tqdm.write("> computing p2p with ndp_with_ldmks")
     start_time = time.time()
 
     mesh = trimesh.load(source_path, process=False)
@@ -921,7 +922,7 @@ def ndp_with_ldmks(source_path, target_path, source_landmarks, target_landmarks)
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f"> ndp_with_ldmks elapsed {elapsed_time:.4f}s")
+    tqdm.write(f"> ndp_with_ldmks elapsed {elapsed_time:.4f}s")
 
     return p2p, elapsed_time
 
@@ -937,7 +938,7 @@ def compute_p2p_with_ot(source_features, target_features):
         source_features: Source features (N, D)
         target_features: Target features (M, D)
     """
-    print("> computing p2p with ot (sinkhorn)")
+    tqdm.write("> computing p2p with ot (sinkhorn)")
     start_time = time.time()
 
     M = np.exp(-ot.dist(source_features.cpu().numpy(), target_features.cpu().numpy()))
@@ -953,6 +954,6 @@ def compute_p2p_with_ot(source_features, target_features):
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f">>>> compute_p2p_with_ot elapsed {elapsed_time:.4f}s")
+    tqdm.write(f">>>> compute_p2p_with_ot elapsed {elapsed_time:.4f}s")
 
     return p2p, elapsed_time
