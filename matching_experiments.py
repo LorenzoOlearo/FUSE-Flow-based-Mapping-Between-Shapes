@@ -1,4 +1,5 @@
 import os
+os.environ["GEOMSTATS_BACKEND"] = "pytorch"
 from pathlib import Path
 from typing import List
 import argparse
@@ -22,7 +23,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from geomfum.shape.mesh import TriangleMesh
-from geomfum.metric.mesh import HeatDistanceMetric
+from geomfum.metric import HeatDistanceMetric
 import potpourri3d as pp3d
 
 
@@ -243,7 +244,7 @@ def process_element(
 
         model.load_state_dict(
             torch.load(
-                Path(data_path.flows_path, element, "checkpoint-9999.pth"),
+                Path(data_path.flows_path, element, "checkpoint-99.pth"),
                 weights_only=False,
             )["model"],
             strict=True,
@@ -425,6 +426,7 @@ def get_matching_methods(
             "fmap-neural-zoomout": lambda: compute_p2p_with_fmap_neural_zoomout(
                 source_path, target_path, source_features, target_features
             ),
+            
         }
     else:
         raise ValueError(f"Unknown matching methods option: {matching_methods}")
@@ -896,8 +898,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda:0",
-        help="Device to use (e.g., 'cpu', 'cuda:0, 'cuda:1')",
+        default="cuda:1",
+        help="Device to use (e.g., 'cpu', 'cuda:1, 'cuda:1')",
     )
     parser.add_argument(
         "--config",

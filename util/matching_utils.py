@@ -27,7 +27,7 @@ from geomfum.laplacian import LaplacianFinder
 from util.mesh_utils import normalize_mesh_08
 import ot
 from geomfum.refine import ZoomOut, NeuralZoomOut
-from geomfum.convert import FmFromP2pConverter, NamFromP2pConverter, P2pFromNamConverter
+from geomfum.convert import FmFromP2pConverter, NamFromP2pConverter, P2pFromNamConverter, SoftmaxNeighborFinder
 
 
 from geomfum.descriptor.spectral import (
@@ -45,7 +45,7 @@ from scipy.optimize import linear_sum_assignment
 from lapjv import lapjv
 from torch.distributions import Normal
 
-device = "cuda:0"
+device = "cuda:1"
 torch.cuda.set_device(device)
 
 
@@ -259,7 +259,7 @@ def compute_p2p_with_flows_composition_zoomout(
     target_input_cpu = target_input
 
     p2p, _ = compute_p2p_with_knn_zoomout(
-        source_path, target_path, sample_cpu, target_input_cpu,
+        source_path, target_path, sample_cpu, target_input_cpu,device
     )
 
     end_time = time.time()
@@ -423,8 +423,8 @@ def compute_p2p_with_fmaps(source_path, target_path, source_features, target_fea
     mesh_b.basis.use_k = 20
     mesh_a.basis.use_k = 20
 
-    descr_a = source_features.cpu().numpy().astype(np.float32).T
-    descr_b = target_features.cpu().numpy().astype(np.float32).T
+    descr_a = source_features.cpu().T
+    descr_b = target_features.cpu().T
 
     factors = [
         SpectralDescriptorPreservation(
@@ -566,7 +566,7 @@ def compute_p2p_with_fmaps_wks(
     return p2p, elapsed_time
 
 
-def compute_p2p_with_knn_zoomout(source_path, target_path, source_input, target_input):
+def compute_p2p_with_knn_zoomout(source_path, target_path, source_input, target_input, device="cuda:1"):
     """
     knn + zoomout
     Compute point-to-point maps using functional maps optimized on initial features.
@@ -597,21 +597,35 @@ def compute_p2p_with_knn_zoomout(source_path, target_path, source_input, target_
         mesh_a = PointCloud(np.array(mesh.vertices))
         mesh_b = PointCloud(np.array(mesh2.vertices))
 
-    mesh_a.laplacian.laplacian_finder = LaplacianFinder.from_registry(which="robust")
-    mesh_b.laplacian.laplacian_finder = LaplacianFinder.from_registry(which="robust")
+    mesh_a.laplacian.laplacian_finder = LaplacianFinder.from_registry()
+    mesh_b.laplacian.laplacian_finder = LaplacianFinder.from_registry()
 
-    mesh_a.laplacian.find_spectrum(spectrum_size=200)
-    mesh_b.laplacian.find_spectrum(spectrum_size=200)
+    mesh_a.laplacian.find_spectrum(spectrum_size=125)
+    mesh_b.laplacian.find_spectrum(spectrum_size=125)
+
+    mesh_a.basis.full_vecs = mesh_a.basis.full_vecs.to(device)
+    mesh_b.basis.full_vecs = mesh_b.basis.full_vecs.to(device)
+    mesh_a.basis.full_vals = mesh_a.basis.full_vals.to(device)
+    mesh_b.basis.full_vals = mesh_b.basis.full_vals.to(device)
+    
+    mesh_a.laplacian._mass_matrix = mesh_a.laplacian._mass_matrix.to(device)
+    mesh_b.laplacian._mass_matrix = mesh_b.laplacian._mass_matrix.to(device)
+    
     mesh_b.basis.use_k = 20
     mesh_a.basis.use_k = 20
 
-    p2p_to_fm = FmFromP2pConverter()
-    fmap_ini = p2p_to_fm(p2p, mesh_b.basis, mesh_a.basis)
+    p2p_to_fm = FmFromP2pConverter(pseudo_inverse=True)
+    converter = P2pFromFmConverter(neighbor_finder=SoftmaxNeighborFinder())
+    fmap = p2p_to_fm(p2p, mesh_b.basis, mesh_a.basis)
 
-    zoomout = ZoomOut(nit=20, step=5)
-    fmap = zoomout(fmap_ini, mesh_b.basis, mesh_a.basis)
-    converter = P2pFromFmConverter()
+    
+    mesh_b.basis.use_k = 125
+    mesh_a.basis.use_k = 125
+    zoomout = ZoomOut(nit=20, step=5, p2p_from_fm_converter=converter, fm_from_p2p_converter=p2p_to_fm)
+    fmap = zoomout(fmap, mesh_b.basis, mesh_a.basis)
+
     p2p = converter(fmap, mesh_b.basis, mesh_a.basis)
+    p2p = p2p.cpu().numpy()
 
     end_time = time.time()
     elapsed_time = end_time - start_time
@@ -648,13 +662,13 @@ def compute_p2p_with_fmap_zoomout(source_path, target_path, source_input, target
     mesh_a.laplacian.laplacian_finder = LaplacianFinder.from_registry(which="robust")
     mesh_b.laplacian.laplacian_finder = LaplacianFinder.from_registry(which="robust")
 
-    mesh_a.laplacian.find_spectrum(spectrum_size=200)
-    mesh_b.laplacian.find_spectrum(spectrum_size=200)
+    mesh_a.laplacian.find_spectrum(spectrum_size=125)
+    mesh_b.laplacian.find_spectrum(spectrum_size=125)
     mesh_b.basis.use_k = 20
     mesh_a.basis.use_k = 20
 
-    descr_a = source_input.cpu().numpy().astype(np.float32).T
-    descr_b = target_input.cpu().numpy().astype(np.float32).T
+    descr_a = source_input.cpu().double().T
+    descr_b = target_input.cpu().double().T
 
     factors = [
         SpectralDescriptorPreservation(
@@ -686,14 +700,29 @@ def compute_p2p_with_fmap_zoomout(source_path, target_path, source_input, target
     )
 
     fmap = res.x.reshape(x0.shape)
+    
+    fmap=fmap.to(device)
 
-    fmap.shape
-    mesh_a.basis.use_k = 200
-    mesh_b.basis.use_k = 200
-    zoomout = ZoomOut(nit=20, step=5)
+    mesh_a.basis.full_vecs = mesh_a.basis.full_vecs.to(device)
+    mesh_b.basis.full_vecs = mesh_b.basis.full_vecs.to(device)
+    mesh_a.basis.full_vals = mesh_a.basis.full_vals.to(device)
+    mesh_b.basis.full_vals = mesh_b.basis.full_vals.to(device)
+    
+    mesh_a.laplacian._mass_matrix = mesh_a.laplacian._mass_matrix.to(device)
+    mesh_b.laplacian._mass_matrix = mesh_b.laplacian._mass_matrix.to(device)
+    mesh_b.basis.use_k = 20
+    mesh_a.basis.use_k = 20
+
+    p2p_to_fm = FmFromP2pConverter(pseudo_inverse=True)
+    converter = P2pFromFmConverter(neighbor_finder=SoftmaxNeighborFinder(tau=0.07))
+    mesh_b.basis.use_k = 125
+    mesh_a.basis.use_k = 125
+
+    zoomout = ZoomOut(nit=20, step=5, p2p_from_fm_converter=converter, fm_from_p2p_converter=p2p_to_fm)
     fmap = zoomout(fmap, mesh_b.basis, mesh_a.basis)
-    converter = P2pFromFmConverter()
     p2p = converter(fmap, mesh_b.basis, mesh_a.basis)
+
+    p2p = p2p.cpu().numpy()
 
     end_time = time.time()
     elapsed_time = end_time - start_time
@@ -703,7 +732,7 @@ def compute_p2p_with_fmap_zoomout(source_path, target_path, source_input, target
 
 
 def compute_p2p_with_knn_neural_zoomout(
-    source_path, target_path, source_input, target_input, device="cuda:0"
+    source_path, target_path, source_input, target_input, device="cuda:1"
 ):
     """
     knn + zoomout
@@ -738,18 +767,28 @@ def compute_p2p_with_knn_neural_zoomout(
     mesh_a.laplacian.laplacian_finder = LaplacianFinder.from_registry(which="robust")
     mesh_b.laplacian.laplacian_finder = LaplacianFinder.from_registry(which="robust")
 
-    mesh_a.laplacian.find_spectrum(spectrum_size=200)
-    mesh_b.laplacian.find_spectrum(spectrum_size=200)
+    mesh_a.laplacian.find_spectrum(spectrum_size=125)
+    mesh_b.laplacian.find_spectrum(spectrum_size=125)
+    
+    
+    mesh_a.basis.full_vecs = mesh_a.basis.full_vecs.to(device)
+    mesh_b.basis.full_vecs = mesh_b.basis.full_vecs.to(device)
+    mesh_a.basis.full_vals = mesh_a.basis.full_vals.to(device)
+    mesh_b.basis.full_vals = mesh_b.basis.full_vals.to(device)
     mesh_b.basis.use_k = 20
     mesh_a.basis.use_k = 20
 
     p2p_to_fm = NamFromP2pConverter(device=device)
-    fmap_ini = p2p_to_fm(p2p, mesh_b.basis, mesh_a.basis)
+    converter = P2pFromNamConverter(neighbor_finder=SoftmaxNeighborFinder(tau=0.07))
 
-    zoomout = NeuralZoomOut(nit=20, step=5, device=device)
-    fmap = zoomout(fmap_ini, mesh_b.basis, mesh_a.basis)
-    converter = P2pFromNamConverter()
+    fmap = p2p_to_fm(p2p, mesh_b.basis, mesh_a.basis)
+
+    mesh_a.basis.use_k = 125
+    mesh_b.basis.use_k = 125
+    zoomout = ZoomOut(nit=20, step=5, p2p_from_fm_converter=converter, fm_from_p2p_converter=p2p_to_fm)
+    fmap = zoomout(fmap, mesh_b.basis, mesh_a.basis)
     p2p = converter(fmap, mesh_b.basis, mesh_a.basis)
+    p2p = p2p.cpu().numpy()
 
     end_time = time.time()
     elapsed_time = end_time - start_time
@@ -759,7 +798,7 @@ def compute_p2p_with_knn_neural_zoomout(
 
 
 def compute_p2p_with_fmap_neural_zoomout(
-    source_path, target_path, source_input, target_input, device="cuda:0"
+    source_path, target_path, source_input, target_input, device="cuda:1"
 ):
     """
     knn + neural_zoomout
@@ -772,8 +811,6 @@ def compute_p2p_with_fmap_neural_zoomout(
     """
     tqdm.write("> computing p2p with fmap + neural zoomout")
     start_time = time.time()
-    source_input = source_input.cpu().numpy()
-    target_input = target_input.cpu().numpy()
 
     mesh = trimesh.load(source_path, process=False)
     mesh2 = trimesh.load(target_path, process=False)
@@ -791,13 +828,15 @@ def compute_p2p_with_fmap_neural_zoomout(
     mesh_a.laplacian.laplacian_finder = LaplacianFinder.from_registry(which="robust")
     mesh_b.laplacian.laplacian_finder = LaplacianFinder.from_registry(which="robust")
 
-    mesh_a.laplacian.find_spectrum(spectrum_size=200)
-    mesh_b.laplacian.find_spectrum(spectrum_size=200)
+    mesh_a.laplacian.find_spectrum(spectrum_size=125)
+    mesh_b.laplacian.find_spectrum(spectrum_size=125)
+    
+
     mesh_b.basis.use_k = 20
     mesh_a.basis.use_k = 20
 
-    descr_a = source_input.T
-    descr_b = target_input.T
+    descr_a = source_input.cpu().double().T
+    descr_b = target_input.cpu().double().T
 
     factors = [
         SpectralDescriptorPreservation(
@@ -833,15 +872,29 @@ def compute_p2p_with_fmap_neural_zoomout(
     fmap.shape
     p2p_from_fmap = P2pFromFmConverter()
     p2p = p2p_from_fmap(fmap, mesh_b.basis, mesh_a.basis)
+    
+    
     nam_from_p2p = NamFromP2pConverter(device=device)
     fmap = nam_from_p2p(p2p, mesh_b.basis, mesh_a.basis)
-    mesh_a.basis.use_k = 200
-    mesh_b.basis.use_k = 200
-    zoomout = NeuralZoomOut(nit=20, step=5, device=device)
+    
+    mesh_a.basis.full_vecs = mesh_a.basis.full_vecs.to(device)
+    mesh_b.basis.full_vecs = mesh_b.basis.full_vecs.to(device)
+    mesh_a.basis.full_vals = mesh_a.basis.full_vals.to(device)
+    mesh_b.basis.full_vals = mesh_b.basis.full_vals.to(device)
+    mesh_b.basis.use_k = 20
+    mesh_a.basis.use_k = 20
+
+    p2p_to_fm = NamFromP2pConverter(device=device)
+    converter = P2pFromNamConverter(neighbor_finder=SoftmaxNeighborFinder(tau=0.07))
+
+
+    mesh_a.basis.use_k = 125
+    mesh_b.basis.use_k = 125
+    zoomout = ZoomOut(nit=20, step=5, device=device, p2p_from_fm_converter=converter, fm_from_p2p_converter=p2p_to_fm)
     fmap = zoomout(fmap, mesh_b.basis, mesh_a.basis)
-    converter = P2pFromNamConverter()
     p2p = converter(fmap, mesh_b.basis, mesh_a.basis)
 
+    p2p = p2p.cpu().numpy()
     end_time = time.time()
     elapsed_time = end_time - start_time
     tqdm.write(f">>>> compute_p2p_with_fmap_neural_zoomout elapsed {elapsed_time:.4f}s")
@@ -852,7 +905,7 @@ def compute_p2p_with_fmap_neural_zoomout(
 ################ Neural Deformation Pyramid #######################
 # TODO: Make Shape_Matching_Baseline_wrapper a package to install via pip
 _base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_ndp_dir = os.path.normpath( os.path.join(_base_dir, "..", "Shape_Matching_Baseline_wrapper", "DeformationPyramid"))
+_ndp_dir = os.path.normpath( os.path.join(_base_dir, "../../SM-baselines", "Shape_Matching_Baseline_wrapper", "DeformationPyramid"))
 sys.path.append(_ndp_dir)
 
 from models.registration import Registration

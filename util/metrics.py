@@ -5,9 +5,10 @@ import torch
 import torch.nn.functional as F
 from geomfum.shape.mesh import TriangleMesh
 from geomfum.shape.point_cloud import PointCloud
-from geomfum.metric.mesh import HeatDistanceMetric
+from geomfum.metric import HeatDistanceMetric
 import potpourri3d as pp3d
 from geomfum.laplacian import LaplacianFinder
+import geomstats.backend as gs
 
 
 def compute_geodesic_error(dists, p2p, corr_a=None, corr_b=None):
@@ -38,14 +39,11 @@ def compute_dirichlet_energy(mesh, mesh_target, p2p):
     # For a discrete mesh, we can approximate it using the Laplacian
 
     # Create map from source to target vertices as vectors
-    mapping = mesh_target.vertices[p2p]
+    mapping = gs.array(mesh_target.vertices[p2p])
 
     if len(mesh.faces) > 0:
         mesh_gf = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
         L, A = mesh_gf.laplacian.find()
-
-        # Convert to CSR format for efficient matrix operations
-        L = L.tocsr()
 
         # Compute Dirichlet energy
         energy_x = mapping[:, 0].T @ L @ mapping[:, 0]
