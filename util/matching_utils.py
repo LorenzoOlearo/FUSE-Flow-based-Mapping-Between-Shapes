@@ -423,8 +423,8 @@ def compute_p2p_with_fmaps(source_path, target_path, source_features, target_fea
     mesh_b.basis.use_k = 20
     mesh_a.basis.use_k = 20
 
-    descr_a = source_features.cpu().T
-    descr_b = target_features.cpu().T
+    descr_a = source_features.cpu().double().T
+    descr_b = target_features.cpu().double().T
 
     factors = [
         SpectralDescriptorPreservation(
@@ -890,7 +890,7 @@ def compute_p2p_with_fmap_neural_zoomout(
 
     mesh_a.basis.use_k = 125
     mesh_b.basis.use_k = 125
-    zoomout = ZoomOut(nit=20, step=5, device=device, p2p_from_fm_converter=converter, fm_from_p2p_converter=p2p_to_fm)
+    zoomout = ZoomOut(nit=20, step=5, p2p_from_fm_converter=converter, fm_from_p2p_converter=p2p_to_fm)
     fmap = zoomout(fmap, mesh_b.basis, mesh_a.basis)
     p2p = converter(fmap, mesh_b.basis, mesh_a.basis)
 
@@ -905,7 +905,7 @@ def compute_p2p_with_fmap_neural_zoomout(
 ################ Neural Deformation Pyramid #######################
 # TODO: Make Shape_Matching_Baseline_wrapper a package to install via pip
 _base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_ndp_dir = os.path.normpath( os.path.join(_base_dir, "../../SM-baselines", "Shape_Matching_Baseline_wrapper", "DeformationPyramid"))
+_ndp_dir = os.path.normpath( os.path.join(_base_dir, "../", "Shape_Matching_Baseline_wrapper", "DeformationPyramid"))
 sys.path.append(_ndp_dir)
 
 from models.registration import Registration
@@ -959,8 +959,8 @@ def ndp_with_ldmks(source_path, target_path, source_landmarks, target_landmarks)
     model = Registration(config)
     timer = Timers()
     x, y = (
-        torch.tensor(mesh_a.vertices).float().to("cuda"),
-        torch.tensor(mesh_b.vertices).float().to("cuda"),
+        torch.tensor(mesh_a.vertices).double().to("cuda"),
+        torch.tensor(mesh_b.vertices).double().to("cuda"),
     )
 
     model.load_pcds(x, y, [x[mesh_a.landmark_indices], y[mesh_b.landmark_indices]])

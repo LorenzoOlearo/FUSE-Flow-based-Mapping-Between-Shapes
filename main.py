@@ -15,6 +15,10 @@ import time
 from pathlib import Path
 from tqdm import trange
 
+from geomfum.shape.mesh import TriangleMesh
+from geomfum.metric.mesh import HeatDistanceMetric
+import potpourri3d as pp3d
+
 import numpy as np
 import torch
 import trimesh
@@ -308,6 +312,7 @@ def normalize_features(features, vertex_features, method):
         normalized = features / (norms + 1e-8)
         vertex_features_normalized = vertex_features / (norms + 1e-8)
         print(f"Feature normalization (euclidean): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+
     elif method == "mean_var_vertex":
         mean_vertex_features = vertex_features.mean(dim=0)
         var_vertex_features = vertex_features.std(dim=0)
@@ -315,7 +320,7 @@ def normalize_features(features, vertex_features, method):
         vertex_features_normalized = (vertex_features - mean_vertex_features) / (var_vertex_features + 1e-8)
         normalized = features_normalized
         print(f"Feature normalization (mean_var_vertex): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
-        
+
     elif method == "mean_var":
         mean_features = features.mean(dim=0)
         mean_vertex_features = vertex_features.mean(dim=0)
@@ -324,6 +329,7 @@ def normalize_features(features, vertex_features, method):
         vertex_features_normalized = (vertex_features - mean_vertex_features) / (var_vertex_features + 1e-8)
         normalized = features_normalized
         print(f"Feature normalization (mean_var_vertex): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+
     elif method == "mean_var_features":
         mean_features = features.mean(dim=0)
         var_features = features.std(dim=0)
@@ -529,13 +535,7 @@ def train(args, device):
     model, optimizer, loss_scaler = initialize_model_and_optimizer(args, device)
     misc.load_model(args=args, model_without_ddp=model, optimizer=optimizer, loss_scaler=loss_scaler)
     
-    # Load the mesh and normalize it between [-0.8, 0.8]
     mesh = trimesh.load(args.data_path, process=False)
-    if len(mesh.faces) > 0:
-        mesh = normalize_mesh_08(mesh)
-    # else:
-        # TODO: Normalize between [-0.8, 0.8] for point clouds as for meshes; refactor function names
-        # mesh.vertices = pc_normalize(mesh.vertices)
 
     if args.features_path is not None and args.vertex_features_path is not None:
         print(f"Ignoring config_file data_path --> loading features from {args.features_path}")
