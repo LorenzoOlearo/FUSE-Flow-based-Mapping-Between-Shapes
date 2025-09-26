@@ -27,7 +27,7 @@ from geomfum.laplacian import LaplacianFinder
 from util.mesh_utils import normalize_mesh_08
 import ot
 from geomfum.refine import ZoomOut, NeuralZoomOut
-from geomfum.convert import FmFromP2pConverter, NamFromP2pConverter, P2pFromNamConverter, SoftmaxNeighborFinder
+from geomfum.convert import FmFromP2pConverter, NamFromP2pConverter, P2pFromNamConverter, GPUEuclideanNeighborFinder
 
 
 from geomfum.descriptor.spectral import (
@@ -615,7 +615,7 @@ def compute_p2p_with_knn_zoomout(source_path, target_path, source_input, target_
     mesh_a.basis.use_k = 20
 
     p2p_to_fm = FmFromP2pConverter(pseudo_inverse=True)
-    converter = P2pFromFmConverter(neighbor_finder=SoftmaxNeighborFinder())
+    converter = P2pFromFmConverter(neighbor_finder=GPUEuclideanNeighborFinder())
     fmap = p2p_to_fm(p2p, mesh_b.basis, mesh_a.basis)
 
     
@@ -714,7 +714,7 @@ def compute_p2p_with_fmap_zoomout(source_path, target_path, source_input, target
     mesh_a.basis.use_k = 20
 
     p2p_to_fm = FmFromP2pConverter(pseudo_inverse=True)
-    converter = P2pFromFmConverter(neighbor_finder=SoftmaxNeighborFinder(tau=0.07))
+    converter = P2pFromFmConverter(neighbor_finder=GPUEuclideanNeighborFinder())
     mesh_b.basis.use_k = 125
     mesh_a.basis.use_k = 125
 
@@ -779,7 +779,7 @@ def compute_p2p_with_knn_neural_zoomout(
     mesh_a.basis.use_k = 20
 
     p2p_to_fm = NamFromP2pConverter(device=device)
-    converter = P2pFromNamConverter(neighbor_finder=SoftmaxNeighborFinder(tau=0.07))
+    converter = P2pFromNamConverter(neighbor_finder=GPUEuclideanNeighborFinder())
 
     fmap = p2p_to_fm(p2p, mesh_b.basis, mesh_a.basis)
 
@@ -885,7 +885,7 @@ def compute_p2p_with_fmap_neural_zoomout(
     mesh_a.basis.use_k = 20
 
     p2p_to_fm = NamFromP2pConverter(device=device)
-    converter = P2pFromNamConverter(neighbor_finder=SoftmaxNeighborFinder(tau=0.07))
+    converter = P2pFromNamConverter(neighbor_finder=GPUEuclideanNeighborFinder())
 
 
     mesh_a.basis.use_k = 125
@@ -905,7 +905,7 @@ def compute_p2p_with_fmap_neural_zoomout(
 ################ Neural Deformation Pyramid #######################
 # TODO: Make Shape_Matching_Baseline_wrapper a package to install via pip
 _base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_ndp_dir = os.path.normpath( os.path.join(_base_dir, "../", "Shape_Matching_Baseline_wrapper", "DeformationPyramid"))
+_ndp_dir = os.path.normpath( os.path.join(_base_dir, "../../SM-baselines/", "Shape_Matching_Baseline_wrapper", "DeformationPyramid"))
 sys.path.append(_ndp_dir)
 
 from models.registration import Registration
