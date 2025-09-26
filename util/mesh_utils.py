@@ -25,6 +25,10 @@ from geomfum.descriptor.spectral import WaveKernelSignature
 from geomfum.descriptor.pipeline import DescriptorPipeline, ArangeSubsampler
 from geomfum.laplacian import LaplacianFinder, LaplacianSpectrumFinder
 
+from geomfum.shape.mesh import TriangleMesh
+from geomfum.metric import HeatDistanceMetric
+import potpourri3d as pp3d
+
 
 ########################FUNCTIONS FOR MESH NORMALIZATION ##########################
 def normalize_mesh_unit(mesh):
@@ -329,6 +333,43 @@ def get_interpolated_feats(mesh, features, num_points, device):
         interpolated_feats[invalid_mask_tensor] = nearest_geodesic[invalid_mask_tensor]
 
     return torch.cat([samples_tensor, interpolated_feats], -1)
+
+
+
+def get_shape_diameter(
+    mesh: trimesh.Trimesh,
+    target: str,
+    dists_path: str,
+) -> np.ndarray:
+    """
+    Compute or load geodesic distance matrix for a target mesh.
+
+    Args:
+        mesh (trimesh.Trimesh): The mesh to compute distances on.
+        target_name (str): Identifier for caching (e.g. filename stem).
+        data_path (DataPath): Dataclass containing paths for caching.
+    Returns:
+        np.ndarray: Geodesic distance matrix of shape (n_vertices, n_vertices).
+    """
+    os.makedirs(dists_path, exist_ok=True)
+    dist_cache_path = os.path.join(dists_path, f"{target}_dists.npy")
+
+    if os.path.exists(dist_cache_path):
+        dist = np.load(dist_cache_path)
+    else:
+        if len(mesh.faces) > 0:
+            mesh_gf = TriangleMesh(mesh.vertices, np.array(mesh.faces))
+            heat = HeatDistanceMetric.from_registry(mesh_gf)
+            dist = heat.dist_matrix()
+        else:
+            solver = pp3d.PointCloudHeatSolver(mesh.vertices)
+            distances = []
+            for idx in range(len(mesh.vertices)):
+                distances.append(solver.compute_distance(idx))
+            dist = np.array(distances)
+        np.save(dist_cache_path, dist)
+
+    return dist.max()
 
 
 ######################## # FUNCTIONS FOR COMPUTING FEATURES ########################

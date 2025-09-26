@@ -7,7 +7,7 @@ import argparse
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = Path('./out/flows/smal/smal-norm-0-1-indipendent')
+OUTPUT_DIR = Path('./out/flows/smal/smal-diameter-norm')
 SMAL_DIR = Path('./data/SMAL_r/off')
 
 
@@ -63,6 +63,7 @@ def main(args):
             "embedding_dim": 6,
             "embedding_type": "features_only",
             "features_type": "landmarks",
+            "features_normalization": "diameter",
             "landmarks": target_landmarks.tolist(),
         }
 
@@ -81,7 +82,6 @@ def main(args):
             command = [
                 "python", "main.py",
                 "--config", config_path,
-                "--features_normalization", "0_1_indipendent"
             ]
 
         command_str = " ".join(command)

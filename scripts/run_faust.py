@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = Path('./out/flows/faust/faust-norm-0-1-indipendent')
+OUTPUT_DIR = Path('./out/flows/faust/faust-diameter-norm')
 FAUST_DIR = Path('./data/MPI-FAUST/training/registrations')
 
 
@@ -62,7 +62,7 @@ def main(args):
             "embedding_dim": 5,
             "embedding_type": "features_only",
             "features_type": "landmarks",
-            "features_normalization": "0_1_indipendent",
+            "features_normalization": "diameter",
             "landmarks": [412, 5891, 6593, 3323, 2119]
         }
 

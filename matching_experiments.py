@@ -23,6 +23,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from geomfum.shape.mesh import TriangleMesh
+from geomfum.metric import HeatDistanceMetric
 import potpourri3d as pp3d
 
 from util.matching_utils import *
@@ -209,9 +210,10 @@ def get_targets_smal(flows_path) -> List[str]:
 def get_mesh_element_features(
     element: str,
     mesh: trimesh.Trimesh,
-    device: str,
     data_path: DataPath,
-    recompute: bool
+    landmarks: List[int],
+    recompute: bool,
+    device: str,
 ) -> torch.Tensor:
 
     vertex_features_path = Path(data_path.features_path, element, f"vertex-geodesics.txt")
@@ -221,8 +223,10 @@ def get_mesh_element_features(
         vertex_features = torch.tensor(np.loadtxt(vertex_features_path).astype(np.float32)).to(device)
     else:
         tqdm.write(f"Computing features for {element} in {data_path.features_path}")
-        vertex_features = torch.tensor(compute_geodesic_distances(mesh, data_path.landmarks).T.astype(np.float32)).to(device)
-        vertex_features = vertex_features / vertex_features.max()
+        vertex_features = torch.tensor(compute_geodesic_distances(mesh, landmarks).T.astype(np.float32)).to(device)
+
+        geo_dists = get_geodesic_dists(mesh, element, data_path)
+        vertex_features /= geo_dists.max()
 
         os.makedirs(vertex_features_path.parent, exist_ok=True)
         np.savetxt(vertex_features_path, vertex_features.cpu().numpy())
@@ -250,7 +254,22 @@ def process_element(
 
     if representation == "mesh":
         tqdm.write(f"Loading {element} with {representation} representation")
-        vertex_features = get_mesh_element_features(element, mesh, device, data_path, recompute=True)
+
+        if data_path.corr_path is not None:
+            corr = np.loadtxt(Path(data_path.corr_path, element + ".vts")).astype(int) - 1
+        else:
+            corr = np.arange(len(mesh.vertices))
+        landmarks = corr[data_path.landmarks]
+
+        vertex_features = get_mesh_element_features(
+                element=element,
+                mesh=mesh,
+                data_path=data_path,
+                landmarks=landmarks,
+                device=device,
+                recompute=True
+        )
+
         model.load_state_dict(
             torch.load(
                 Path(data_path.flows_path, element, "checkpoint-9999.pth"),
@@ -258,6 +277,7 @@ def process_element(
             )["model"],
             strict=True,
         )
+
 
     elif representation == "sdf":
         tqdm.write(f"Loading {element} with {representation} representation")
@@ -296,7 +316,7 @@ def process_element(
     model.to(device)
     model.eval()
 
-    return vertex_features, points, model, mesh
+    return vertex_features, points, model, mesh, landmarks, corr
 
 
 @dataclass
@@ -416,7 +436,6 @@ def get_matching_methods(
             ),
         }
 
-
     elif matching_methods == "baselines-no-zoomout":
         return {
             "knn": lambda: compute_p2p_with_knn(source_features, target_features),
@@ -473,32 +492,6 @@ def get_matching_methods(
         }
     else:
         raise ValueError(f"Unknown matching methods option: {matching_methods}")
-
-
-def compute_geodesic_distance(
-    source_mesh: trimesh.Trimesh,
-    target_mesh: trimesh.Trimesh,
-    data_path: DataPath,
-) -> np.ndarray:
-    os.makedirs(data_path.dists_path, exist_ok=True)
-    dist_cache_path = os.path.join(data_path.dists_path, f"{target}_dists.npy")
-
-    if os.path.exists(dist_cache_path):
-        dist = np.load(dist_cache_path)
-    else:
-        if len(target_mesh.faces) > 0:
-            mesh_gf = TriangleMesh(target_mesh.vertices, np.array(target_mesh.faces))
-            heat = HeatDistanceMetric.from_registry(mesh_gf)
-            dist = heat.dist_matrix()
-        else:
-            solver = pp3d.PointCloudHeatSolver(vertices)
-            distances = []
-            for idx in range(len(vertices)):
-                distances.append(solver.compute_distance(idx))
-            dist = np.array(distances)
-        np.save(dist_cache_path, dist)
-
-    return dist
 
 
 def run_matching_methods_parallel(
@@ -560,10 +553,8 @@ def run_matching_methods(
 
         else:
             tqdm.write(f"Applying correspondences alignment for {name}")
-            matched_points = target_points[p2p]
-            target_points_corr = target_points
-            matched_points = matched_points[source_corr]
-            target_points_corr = target_points_corr[target_corr]
+            matched_points = target_points[p2p[source_corr]]
+            target_points_corr = target_points[target_corr]
 
             euclidean_error = torch.norm(matched_points - target_points_corr, dim=-1).mean().item() / max_euclidean_error
             geodesic_error = compute_geodesic_error(dists, p2p, source_corr, target_corr) / dists.max()
@@ -618,21 +609,21 @@ def plot_results(
 
 def get_geodesic_dists(
     mesh: trimesh.Trimesh,
-    target: str,
+    element: str,
     data_path: DataPath
 ) -> np.ndarray:
     """
-    Compute or load geodesic distance matrix for a target mesh.
+    Compute or load geodesic distance matrix for a element mesh.
 
     Args:
         mesh (trimesh.Trimesh): The mesh to compute distances on.
-        target_name (str): Identifier for caching (e.g. filename stem).
+        element_name (str): Identifier for caching (e.g. filename stem).
         data_path (DataPath): Dataclass containing paths for caching.
     Returns:
         np.ndarray: Geodesic distance matrix of shape (n_vertices, n_vertices).
     """
     os.makedirs(data_path.dists_path, exist_ok=True)
-    dist_cache_path = os.path.join(data_path.dists_path, f"{target}_dists.npy")
+    dist_cache_path = os.path.join(data_path.dists_path, f"{element}_dists.npy")
 
     if os.path.exists(dist_cache_path):
         dist = np.load(dist_cache_path)
@@ -670,29 +661,26 @@ def process_pair(
     log and plot results, and return a DataFrame of errors.
     """
 
-    source_features, source_points, source_model, source_mesh = process_element(
-        source, source_rep, device, mesh_baseline, features_normalization, data_path
+    source_features, source_points, source_model, source_mesh, source_landmarks, source_corr = process_element(
+        element=source,
+        representation=source_rep,
+        device=device,
+        mesh_baseline=mesh_baseline,
+        features_normalization=features_normalization,
+        data_path=data_path,
     )
-    target_features, target_points, target_model, target_mesh = process_element(
-        target, target_rep, device, mesh_baseline, features_normalization, data_path
+
+    target_features, target_points, target_model, target_mesh, target_landmarks, target_corr = process_element(
+        element=target,
+        representation=target_rep,
+        device=device,
+        mesh_baseline=mesh_baseline,
+        features_normalization=features_normalization,
+        data_path=data_path,
     )
 
     source_geo_dists = get_geodesic_dists(source_mesh, source, data_path)
     target_geo_dists = get_geodesic_dists(target_mesh, target, data_path)
-
-    if data_path.corr_path is not None:
-        source_corr = (
-            np.loadtxt(Path(data_path.corr_path, source + ".vts")).astype(int) - 1
-        )
-        target_corr = (
-            np.loadtxt(Path(data_path.corr_path, target + ".vts")).astype(int) - 1
-        )
-    else:
-        source_corr = np.arange(len(source_mesh.vertices))
-        target_corr = np.arange(len(target_mesh.vertices))
-
-    source_landmarks = source_corr[data_path.landmarks]
-    target_landmarks = target_corr[data_path.landmarks]
 
     # TODO: Move target and source in dataclasses
     matching_methods = get_matching_methods(
@@ -709,8 +697,6 @@ def process_pair(
     )
 
     if data_path.corr_path is not None:
-        source_corr = np.loadtxt(Path(data_path.corr_path, source + ".vts")).astype(int) - 1
-        target_corr = np.loadtxt(Path(data_path.corr_path, target + ".vts")).astype(int) - 1
         results = run_matching_methods(
             matching_methods=matching_methods,
             target_points=target_points,

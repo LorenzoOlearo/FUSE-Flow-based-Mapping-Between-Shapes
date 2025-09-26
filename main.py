@@ -15,10 +15,6 @@ import time
 from pathlib import Path
 from tqdm import trange
 
-from geomfum.shape.mesh import TriangleMesh
-from geomfum.metric.mesh import HeatDistanceMetric
-import potpourri3d as pp3d
-
 import numpy as np
 import torch
 import trimesh
@@ -27,9 +23,7 @@ from util import misc
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
 from util.train_utils import setup_logging, initialize_device_and_seed
 from util.mesh_utils import (
-    normalize_mesh_unit,
-    normalize_mesh_08,
-    pc_normalize,
+    get_shape_diameter,
     generate_embeddings,
     compute_features,
     sample_initial_distribution,
@@ -267,7 +261,7 @@ def setup_data_loader(args):
     return data_loader_train
 
 
-def normalize_features(features, vertex_features, method):
+def normalize_features(features, vertex_features, method, diameter=None):
     """Normalize features based on the specified method."""
     if method == "none":
         print("No normalization applied to features.")
@@ -337,6 +331,9 @@ def normalize_features(features, vertex_features, method):
         vertex_features_normalized = (vertex_features - mean_features) / (var_features + 1e-8)
         normalized = features_normalized
         print(f"Feature normalization (mean_var_features): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+    elif method == "diameter":
+        vertex_features_normalized = vertex_features / diameter
+        normalized = features / diameter
     else:
         raise ValueError(f"Unknown normalization method: {method}")
 
@@ -537,6 +534,10 @@ def train(args, device):
     
     mesh = trimesh.load(args.data_path, process=False)
 
+    target = args.data_path.split("/")[-1].split(".")[0]
+    dists_path = str(Path(args.data_path).parent / f"{target}_dists.npy")
+    diameter = get_shape_diameter(mesh, target, dists_path)
+
     if args.features_path is not None and args.vertex_features_path is not None:
         print(f"Ignoring config_file data_path --> loading features from {args.features_path}")
 
@@ -594,7 +595,7 @@ def train(args, device):
         print(f"Saved interpolated features to {os.path.join(args.output_dir, 'vertex-geodesics-interpolated.txt')}")
 
     if args.features_normalization != "none":
-        features, vertex_features = normalize_features(features, vertex_features, args.features_normalization)
+        features, vertex_features = normalize_features(features, vertex_features, args.features_normalization, diameter)
         print("------------------------------------")
         print(f"vertex_features (shape {list(vertex_features.shape)}):")
         print(f"  min: {vertex_features.min(dim=0).values.tolist()}")
