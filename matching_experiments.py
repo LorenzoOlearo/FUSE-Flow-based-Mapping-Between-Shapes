@@ -23,6 +23,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from geomfum.shape.mesh import TriangleMesh
+from geomfum.shape.point_cloud import PointCloud
 from geomfum.metric import HeatDistanceMetric
 import potpourri3d as pp3d
 
@@ -177,6 +178,20 @@ def get_targets_smal(flows_path) -> List[str]:
     tqdm.write(f"Processing targets: {targets}")
     return targets
 
+def get_targets_kinect(flows_path) -> List[str]:
+    """Determine which targets to process."""
+    # Only load cougar, hippo and horse
+    targets = [
+        f.name
+        for f in flows_path.iterdir()
+        if f.is_dir()
+        and f.name.startswith(("data"))
+    ]
+
+    tqdm.write(f"Processing all targets: {targets}")
+    return targets
+
+
 
 def get_targets_surreal(flows_path) -> List[str]:
     targets = []
@@ -306,7 +321,7 @@ def process_element(
         dists, diameter = mesh_geodesics(mesh=mesh, target=element, recompute=False, dists_path=str(data_path.dists_path))
         model.load_state_dict(
             torch.load(
-                Path(data_path.flows_path, element, "checkpoint-9999.pth"),
+                Path(data_path.flows_path, element, "checkpoint-99.pth"),
                 weights_only=False,
             )["model"],
             strict=True,
@@ -412,27 +427,6 @@ def get_matching_methods(
         return {
             "knn": lambda: compute_p2p_with_knn(source_features, target_features),
             "ot": lambda: compute_p2p_with_ot(source_features, target_features),
-            "flow": lambda: compute_p2p_with_flows_composition(
-                source_features, target_features, source_model, target_model, device
-            ),
-            "flow-zoomout": lambda: compute_p2p_with_flows_composition_zoomout(
-                source_path,
-                target_path,
-                source_features,
-                target_features,
-                source_model,
-                target_model,
-                device,
-            ),
-            "flow-neural-zoomout": lambda: compute_p2p_with_flows_composition_neural_zoomout(
-                source_path,
-                target_path,
-                source_features,
-                target_features,
-                source_model,
-                target_model,
-                device,
-            ),
             "fmaps": lambda: compute_p2p_with_fmaps(
                 source_path, target_path, source_features, target_features
             ),
@@ -441,9 +435,6 @@ def get_matching_methods(
             ),
             "fmap-neural-zoomout": lambda: compute_p2p_with_fmap_neural_zoomout(
                 source_path, target_path, source_features, target_features
-            ),
-            "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
-                source_features, target_features, source_model, target_model
             ),
             "ndp-landmarks": lambda: ndp_with_ldmks(
                 source_path,
@@ -519,23 +510,8 @@ def get_matching_methods(
         }
     elif matching_methods == "zoomout":
         return {
-            "flow-zoomout": lambda: compute_p2p_with_flows_composition_zoomout(
-                source_path,
-                target_path,
-                source_features,
-                target_features,
-                source_model,
-                target_model,
-                device,
-            ),
-            "flow-neural-zoomout": lambda: compute_p2p_with_flows_composition_neural_zoomout(
-                source_path,
-                target_path,
-                source_features,
-                target_features,
-                source_model,
-                target_model,
-                device,
+            "fmap": lambda: compute_p2p_with_fmaps(
+                source_path, target_path, source_features, target_features
             ),
             "fmap-zoomout": lambda: compute_p2p_with_fmap_zoomout(
                 source_path, target_path, source_features, target_features
@@ -543,7 +519,6 @@ def get_matching_methods(
             "fmap-neural-zoomout": lambda: compute_p2p_with_fmap_neural_zoomout(
                 source_path, target_path, source_features, target_features
             ),
-            
         }
     else:
         raise ValueError(f"Unknown matching methods option: {matching_methods}")
@@ -596,6 +571,7 @@ def run_matching_methods(
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         p2p, elapsed = func()
+        max_euclidean_error = torch.cdist(target_points, target_points).max().item()
 
         max_euclidean_error = torch.cdist(target_points, target_points).max().item()
 
@@ -605,12 +581,10 @@ def run_matching_methods(
             geodesic_error = compute_geodesic_error(dists, p2p, None, None) / dists.max()
             dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p).item()
             coverage = compute_coverage(p2p, len(target_mesh.vertices))
-
         else:
             tqdm.write(f"Applying correspondences alignment for {name}")
             matched_points = target_points[p2p[source_corr]]
             target_points_corr = target_points[target_corr]
-
             euclidean_error = torch.norm(matched_points - target_points_corr, dim=-1).mean().item() / max_euclidean_error
             geodesic_error = compute_geodesic_error(dists, p2p, source_corr, target_corr) / dists.max()
             dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p).item()
@@ -662,6 +636,40 @@ def plot_results(
         )
 
 
+def get_geodesic_dists(
+    mesh: trimesh.Trimesh,
+    element: str,
+    data_path: DataPath
+) -> np.ndarray:
+    """
+    Compute or load geodesic distance matrix for a element mesh.
+
+    Args:
+        mesh (trimesh.Trimesh): The mesh to compute distances on.
+        element_name (str): Identifier for caching (e.g. filename stem).
+        data_path (DataPath): Dataclass containing paths for caching.
+    Returns:
+        np.ndarray: Geodesic distance matrix of shape (n_vertices, n_vertices).
+    """
+    os.makedirs(data_path.dists_path, exist_ok=True)
+    dist_cache_path = os.path.join(data_path.dists_path, f"{element}_dists.npy")
+
+    if os.path.exists(dist_cache_path):
+        dist = np.load(dist_cache_path)
+    else:
+        if len(mesh.faces) > 0:
+            mesh_gf = TriangleMesh(mesh.vertices, np.array(mesh.faces))
+            heat = HeatDistanceMetric.from_registry(mesh_gf)
+            dist = heat.dist_matrix()
+        else:
+            pc_gf = PointCloud(np.array(mesh.vertices))
+            heat = HeatDistanceMetric.from_registry(mesh=False, shape=pc_gf)
+            dist = heat.dist_matrix()
+        np.save(dist_cache_path, dist)
+
+    return dist
+
+
 def process_pair(
     source: str,
     target: str,
@@ -701,6 +709,30 @@ def process_pair(
     print(f"Source features ({source_rep}): shape: {source_element.vertex_features.shape} | max: {source_element.vertex_features.max().item():.4f} | min: {source_element.vertex_features.min().item():.4f} | mean: {source_element.vertex_features.mean().item():.4f} | std: {source_element.vertex_features.std().item():.4f}")
     print(f"Target features ({target_rep}): shape: {target_element.vertex_features.shape} | max: {target_element.vertex_features.max().item():.4f} | min: {target_element.vertex_features.min().item():.4f} | mean: {target_element.vertex_features.mean().item():.4f} | std: {target_element.vertex_features.std().item():.4f}")
 
+    # source_geo_dists = get_geodesic_dists(source_mesh, source, data_path)
+    # target_geo_dists = get_geodesic_dists(target_mesh, target, data_path)
+    # 
+    # source_features = source_features / source_geo_dists.max()
+    # target_features = target_features / target_geo_dists.max()
+    #
+    #
+    # if data_path.corr_path is not None:
+    #     source_corr = (
+    #         np.loadtxt(Path(data_path.corr_path, source + ".vts")).astype(int) 
+    #     )
+    #     target_corr = (
+    #         np.loadtxt(Path(data_path.corr_path, target + ".vts")).astype(int) 
+    #     )
+    # else:
+    #     source_corr = np.arange(len(source_mesh.vertices))
+    #     target_corr = np.arange(len(target_mesh.vertices))
+    # print(args.correspondence_offset)
+    # source_corr = source_corr+args.correspondence_offset
+    # target_corr = target_corr+args.correspondence_offset
+    #
+    # source_landmarks = source_corr[data_path.landmarks]
+    # target_landmarks = target_corr[data_path.landmarks]
+
     matching_methods = get_matching_methods(
         source_features=source_element.vertex_features,
         target_features=target_element.vertex_features,
@@ -717,6 +749,9 @@ def process_pair(
     )
 
     if data_path.corr_path is not None:
+        source_corr = np.loadtxt(Path(data_path.corr_path, source + ".vts")).astype(int) + args.correspondence_offset
+        target_corr = np.loadtxt(Path(data_path.corr_path, target + ".vts")).astype(int) + args.correspondence_offset
+        
         results = run_matching_methods(
             matching_methods=matching_methods,
             target_points=target_element.vertex_points,
@@ -830,8 +865,11 @@ def main(args):
     elif args.surreal:
         dataset = "SURREAL"
         targets = get_targets_surreal(Path(config["matching_config"][dataset]["flows_path"]))
+    elif args.kinect:
+        dataset = "KINECT"
+        targets = get_targets_kinect(Path(config["matching_config"][dataset]["flows_path"]))
     else:
-        raise ValueError("Please specify either --faust, --smal or --surreal")
+        raise ValueError("Please specify either --faust or --smal on --kinect")
 
     if targets is None or len(targets) == 0:
         raise ValueError("No targets found to process.")
@@ -943,6 +981,12 @@ if __name__ == "__main__":
         default=False,
     )
     parser.add_argument(
+        "--kinect",
+        action="store_true",
+        help="Run matching methods on KINECT dataset",
+        default=False,
+    )
+    parser.add_argument(
         "--mesh_baseline",
         action="store_true",
         help="Use the mesh vertices features instead of randomly sampled points",
@@ -995,6 +1039,13 @@ if __name__ == "__main__":
         default="none",
         type=str,
         help="Normalization to apply to the features: none, 0_1_indipendent, 0_1_global, 0_center_indipendent, 0_center_global",
+    )
+    parser.add_argument(
+        "--correspondence_offset",
+        default = 0,
+        type = int,
+        help="offset to apply to the correspondences, in case of SMAL offset : -1, otherwise default=0"
+        
     )
 
     parser.add_argument(

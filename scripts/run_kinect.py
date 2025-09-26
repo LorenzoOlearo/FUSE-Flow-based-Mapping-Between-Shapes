@@ -1,49 +1,51 @@
-import os
-import json
 import subprocess
+import os
+import numpy as np
+import json
 import argparse
 
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = Path('./out/flows/surreal/surreal-diameter-norm')
-SURREAL_DIR = Path('./data/SURREAL')
+OUTPUT_DIR = Path('./out/flows/kinect/kinect/')
+SMAL_DIR = Path('../data/kinect_clean/off')
+
 
 def get_targets(overwrite) -> List[str]:
     targets = []
 
-    for file in os.listdir(SURREAL_DIR):
-        if file.endswith(".off") and file.startswith("surreal"):
-            target = os.path.splitext(file)[0]
+    for file in os.listdir(SMAL_DIR):
+        if file.endswith(".off"):
+            shape_name = os.path.splitext(file)[0]
             os.makedirs(OUTPUT_DIR, exist_ok=True)
-            os.makedirs(Path(OUTPUT_DIR, target), exist_ok=True)
-            if os.path.exists(Path(OUTPUT_DIR, target, 'checkpoint-9999.pth')) and overwrite == True:
-                targets.append(target)
-            elif not os.path.exists(Path(OUTPUT_DIR, target, 'checkpoint-9999.pth')):
-                targets.append(target)
+            os.makedirs(Path(OUTPUT_DIR, shape_name), exist_ok=True)
+
+            if not os.path.exists(Path(OUTPUT_DIR, shape_name, 'checkpoint-9999.pth')) or overwrite:
+                targets.append(shape_name)
 
     return targets
 
 
 def main(args):
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    targets = get_targets(args.overwrite)
+    targets = get_targets(overwrite=args.overwrite)
     if targets == []:
         print("No targets found, exiting.")
         exit(0)
-
     print(f"Processing {len(targets)} targets: {targets}")
 
     for target in targets:
         target_dir = Path(OUTPUT_DIR, target)
-        os.makedirs(target_dir, exist_ok=True)
 
         working_dir = Path(str(Path(__file__).resolve()).split('/scripts')[0])
-        data_path = Path(working_dir, SURREAL_DIR, f"{target}.off")
-        features_path = Path(working_dir, 'data', 'SURREAL', f"{target}_features.npy")
+        data_path = Path(working_dir, SMAL_DIR, f"{target}.off")
+        features_path = Path(working_dir, 'data', 'SMAL_features_pca_20', f"{target}_features.npy")
+
+        smpl_landmarks = np.array([412, 5891, 6593, 3323, 2119])
+        corr = np.array(np.loadtxt(f'../data/kinect_clean/corres/{target}.vts')) # HERE I REMOVED -1
+        target_landmarks = corr[smpl_landmarks]
 
         config = {
-            "device": "cuda:0",
+            "device": "cuda:1",
             "blr": 5e-7,
             "output_dir": str(target_dir),
             "log_dir": str(target_dir),
@@ -54,15 +56,14 @@ def main(args):
             "num_steps": 64,
             "method": "FM",
             "network": "MLP",
-            "batch_size": 50000,
-            "num_points_train": 50000,
+            "batch_size": 10000,
+            "num_points_train": 10000,
             "learning_rate": 0.01,
             "distribution": "gaussian",
             "embedding_dim": 5,
             "embedding_type": "features_only",
             "features_type": "landmarks",
-            "features_normalization": "diameter",
-            "landmarks": [412, 5891, 6593, 3323, 2119]
+            "landmarks": target_landmarks.tolist(),
         }
 
         config_path = os.path.join(target_dir, "config.json")
@@ -79,7 +80,8 @@ def main(args):
         else:
             command = [
                 "python", "main.py",
-                "--config", config_path
+                "--config", config_path,
+                "--features_normalization", "none",
             ]
 
         command_str = " ".join(command)
@@ -94,13 +96,13 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train a flow on all SURREAL meshes")
+    parser = argparse.ArgumentParser(description="Train a flow on all SMAL meshes")
     parser.add_argument('--overwrite', action='store_true', help="Overwrite if an existing flow model \"checkpoint-9999.pth\" is found", default='False')
     parser.add_argument('--external', action='store_true', help="Use external precomputed features", default='False')
 
     args = parser.parse_args()
 
-    print("Training flows on SURREAL dataset:")
+    print("Training flows on FAUST dataset:")
     for arg, value in vars(args).items():
         print(f"  {arg}: {value}")
     print("-----------------------------------------------")

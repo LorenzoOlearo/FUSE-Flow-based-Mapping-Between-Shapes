@@ -26,9 +26,9 @@ def compute_geodesic_error(dists, p2p, corr_a=None, corr_b=None):
     """
     if corr_a is None or corr_b is None:
         p2p_gt = np.arange(len(p2p))
-        return dists[p2p, p2p_gt].mean()
+        return dists[p2p, p2p_gt].mean()/dists.max()
     else:
-        return dists[p2p[corr_a], corr_b].mean()
+        return dists[p2p[corr_a], corr_b].mean()/dists.max()
 
 
 def compute_dirichlet_energy(mesh, mesh_target, p2p):
@@ -58,7 +58,6 @@ def compute_dirichlet_energy(mesh, mesh_target, p2p):
         )
 
         # Convert to CSR format for efficient matrix operations
-        L = L.tocsr()
         energy_x = mapping[:, 0].T @ L @ mapping[:, 0]
         energy_y = mapping[:, 1].T @ L @ mapping[:, 1]
         energy_z = mapping[:, 2].T @ L @ mapping[:, 2]

@@ -701,7 +701,7 @@ def compute_p2p_with_fmap_zoomout(source_path, target_path, source_input, target
     mesh_a.basis.use_k = 20
 
     p2p_to_fm = FmFromP2pConverter(pseudo_inverse=True)
-    converter = P2pFromFmConverter(neighbor_finder=GPUEuclideanNeighborFinder())
+    converter = P2pFromFmConverter(adjoint=False, neighbor_finder=GPUEuclideanNeighborFinder())
     mesh_b.basis.use_k = 125
     mesh_a.basis.use_k = 125
 
@@ -850,8 +850,7 @@ def compute_p2p_with_fmap_neural_zoomout(
 
     fmap = res.x.reshape(x0.shape)
 
-    fmap.shape
-    p2p_from_fmap = P2pFromFmConverter()
+    p2p_from_fmap = P2pFromFmConverter(adjoint=True)
     p2p = p2p_from_fmap(fmap, mesh_b.basis, mesh_a.basis)
     
     
