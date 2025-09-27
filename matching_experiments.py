@@ -139,31 +139,6 @@ def create_rgb_colormap(points):
     return colors_hex
 
 
-def normalize_mesh(mesh):
-    rescale = max(mesh.extents) / 2.0
-    tform = [-(mesh.bounds[1][i] + mesh.bounds[0][i]) / 2.0 for i in range(3)]
-    matrix = np.eye(4)
-    matrix[:3, 3] = tform
-    mesh.apply_transform(matrix)
-    matrix = np.eye(4)
-    matrix[:3, :3] /= rescale
-    mesh.apply_transform(matrix)
-
-    return mesh
-
-
-def normalize_mesh_08(mesh):
-    centroid = torch.tensor(mesh.centroid, dtype=torch.float32)
-    verts = torch.tensor(mesh.vertices, dtype=torch.float32)
-
-    verts -= centroid
-    verts /= verts.abs().max()
-    verts *= 0.8
-
-    mesh.vertices = verts.numpy()
-    return mesh
-
-
 def is_in_range(name):
     try:
         num = int("".join(filter(str.isdigit, name)))
@@ -343,7 +318,7 @@ def get_matching_methods(
     target_landmarks,
     device: str,
     matching_methods: str,
-) -> Dict[str, Callable[[], torch.Tensor]]:
+):
     """Return mapping of strategy names to their compute functions."""
 
     if matching_methods == "fast":
@@ -548,7 +523,7 @@ def run_matching_methods(
             matched_points = target_points[p2p]
             euclidean_error = torch.norm(matched_points - target_points, dim=-1).mean().item() / max_euclidean_error
             geodesic_error = compute_geodesic_error(dists, p2p, None, None) / dists.max()
-            dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p)
+            dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p).item()
             coverage = compute_coverage(p2p, len(target_mesh.vertices))
 
         else:
@@ -919,6 +894,8 @@ def main(args):
     avg_metrics = df.groupby("method")[
         ["euclidean_error", "geodesic_error", "dirichlet", "coverage", "elapsed"]
     ].mean()
+    avg_metrics.to_csv("average_metrics.csv")
+    tqdm.write("Saved average metrics to average_metrics.csv")
     tqdm.write(avg_metrics.to_string())
 
 

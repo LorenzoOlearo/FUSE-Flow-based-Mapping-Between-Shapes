@@ -24,7 +24,6 @@ from geomfum.numerics.optimization import ScipyMinimize
 from geomfum.shape import TriangleMesh, PointCloud
 from geomfum.convert import P2pFromFmConverter
 from geomfum.laplacian import LaplacianFinder
-from util.mesh_utils import normalize_mesh_08
 import ot
 from geomfum.refine import ZoomOut, NeuralZoomOut
 from geomfum.convert import FmFromP2pConverter, NamFromP2pConverter, P2pFromNamConverter, GPUEuclideanNeighborFinder
@@ -406,9 +405,6 @@ def compute_p2p_with_fmaps(source_path, target_path, source_features, target_fea
     mesh2 = trimesh.load(target_path, process=False)
 
     if len(mesh.faces) > 0:
-        mesh = normalize_mesh_08(trimesh.load(source_path, process=False))
-        mesh2 = normalize_mesh_08(trimesh.load(target_path, process=False))
-
         mesh_a = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
         mesh_b = TriangleMesh(np.array(mesh2.vertices), np.array(mesh2.faces))
     else:
@@ -487,9 +483,6 @@ def compute_p2p_with_fmaps_wks(
     mesh2 = trimesh.load(target_path, process=False)
 
     if len(mesh.faces) > 0:
-        mesh = normalize_mesh_08(trimesh.load(source_path, process=False))
-        mesh2 = normalize_mesh_08(trimesh.load(target_path, process=False))
-
         mesh_a = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
         mesh_b = TriangleMesh(np.array(mesh2.vertices), np.array(mesh2.faces))
     else:
@@ -588,9 +581,6 @@ def compute_p2p_with_knn_zoomout(source_path, target_path, source_input, target_
     mesh2 = trimesh.load(target_path, process=False)
 
     if len(mesh.faces) > 0:
-        mesh = normalize_mesh_08(trimesh.load(source_path, process=False))
-        mesh2 = normalize_mesh_08(trimesh.load(target_path, process=False))
-
         mesh_a = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
         mesh_b = TriangleMesh(np.array(mesh2.vertices), np.array(mesh2.faces))
     else:
@@ -650,9 +640,6 @@ def compute_p2p_with_fmap_zoomout(source_path, target_path, source_input, target
     mesh2 = trimesh.load(target_path, process=False)
 
     if len(mesh.faces) > 0:
-        mesh = normalize_mesh_08(trimesh.load(source_path, process=False))
-        mesh2 = normalize_mesh_08(trimesh.load(target_path, process=False))
-
         mesh_a = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
         mesh_b = TriangleMesh(np.array(mesh2.vertices), np.array(mesh2.faces))
     else:
@@ -755,9 +742,6 @@ def compute_p2p_with_knn_neural_zoomout(
     mesh2 = trimesh.load(target_path, process=False)
 
     if len(mesh.faces) > 0:
-        mesh = normalize_mesh_08(trimesh.load(source_path, process=False))
-        mesh2 = normalize_mesh_08(trimesh.load(target_path, process=False))
-
         mesh_a = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
         mesh_b = TriangleMesh(np.array(mesh2.vertices), np.array(mesh2.faces))
     else:
@@ -816,9 +800,6 @@ def compute_p2p_with_fmap_neural_zoomout(
     mesh2 = trimesh.load(target_path, process=False)
 
     if len(mesh.faces) > 0:
-        mesh = normalize_mesh_08(trimesh.load(source_path, process=False))
-        mesh2 = normalize_mesh_08(trimesh.load(target_path, process=False))
-
         mesh_a = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
         mesh_b = TriangleMesh(np.array(mesh2.vertices), np.array(mesh2.faces))
     else:
@@ -905,7 +886,7 @@ def compute_p2p_with_fmap_neural_zoomout(
 ################ Neural Deformation Pyramid #######################
 # TODO: Make Shape_Matching_Baseline_wrapper a package to install via pip
 _base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_ndp_dir = os.path.normpath( os.path.join(_base_dir, "../../SM-baselines/", "Shape_Matching_Baseline_wrapper", "DeformationPyramid"))
+_ndp_dir = os.path.normpath( os.path.join(_base_dir, "../", "Shape_Matching_Baseline_wrapper", "DeformationPyramid"))
 sys.path.append(_ndp_dir)
 
 from models.registration import Registration
@@ -930,9 +911,6 @@ def ndp_with_ldmks(source_path, target_path, source_landmarks, target_landmarks)
     mesh2 = trimesh.load(target_path, process=False)
 
     if len(mesh.faces) > 0:
-        mesh = normalize_mesh_08(trimesh.load(source_path, process=False))
-        mesh2 = normalize_mesh_08(trimesh.load(target_path, process=False))
-
         mesh_a = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
         mesh_b = TriangleMesh(np.array(mesh2.vertices), np.array(mesh2.faces))
     else:
