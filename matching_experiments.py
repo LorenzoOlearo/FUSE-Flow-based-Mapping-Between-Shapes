@@ -182,6 +182,17 @@ def get_targets_smal(flows_path) -> List[str]:
     return targets
 
 
+def get_targets_surreal(flows_path) -> List[str]:
+    targets = []
+    targets = [
+        f.name
+        for f in flows_path.iterdir()
+        if f.is_dir()
+        and f.name.startswith(("surreal"))
+    ]
+    return targets
+
+
 def get_mesh_element_features(
     element: str,
     mesh: trimesh.Trimesh,
@@ -533,7 +544,7 @@ def run_matching_methods(
 
             euclidean_error = torch.norm(matched_points - target_points_corr, dim=-1).mean().item() / max_euclidean_error
             geodesic_error = compute_geodesic_error(dists, p2p, source_corr, target_corr) / dists.max()
-            dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p)
+            dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p).item()
             coverage = compute_coverage(p2p, len(target_mesh.vertices))
 
         results[name] = MatchingResult(
@@ -821,8 +832,11 @@ def main(args):
     elif args.smal:
         dataset = "SMAL"
         targets = get_targets_smal(Path(config["matching_config"][dataset]["flows_path"]))
+    elif args.surreal:
+        dataset = "SURREAL"
+        targets = get_targets_surreal(Path(config["matching_config"][dataset]["flows_path"]))
     else:
-        raise ValueError("Please specify either --faust or --smal")
+        raise ValueError("Please specify either --faust, --smal or --surreal")
 
     if targets is None or len(targets) == 0:
         raise ValueError("No targets found to process.")
@@ -894,8 +908,7 @@ def main(args):
     avg_metrics = df.groupby("method")[
         ["euclidean_error", "geodesic_error", "dirichlet", "coverage", "elapsed"]
     ].mean()
-    avg_metrics.to_csv("average_metrics.csv")
-    tqdm.write("Saved average metrics to average_metrics.csv")
+    avg_metrics.to_csv(Path(output_dir, "matching_results_average.csv"))
     tqdm.write(avg_metrics.to_string())
 
 
@@ -926,6 +939,12 @@ if __name__ == "__main__":
         "--smal",
         action="store_true",
         help="Run matching methods on SMAL dataset",
+        default=False,
+    )
+    parser.add_argument(
+        "--surreal",
+        action="store_true",
+        help="Run matching methods on SURREAL dataset",
         default=False,
     )
     parser.add_argument(
