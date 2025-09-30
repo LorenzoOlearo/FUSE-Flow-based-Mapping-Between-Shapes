@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = Path('./out/flows')
+OUTPUT_DIR = Path('./out/flows/faust-SDFs/faust-SDFs-diameter-norm')
 SDF_DIR = Path('./out/SDFs')
 FAUST_DIR = Path('./data/MPI-FAUST/training/registrations')
 
@@ -19,20 +19,20 @@ def get_targets(overwrite, test) -> List[str]:
             f.name for f in SDF_DIR.iterdir() if f.is_dir() and
             any(80 <= int(num) <= 99 for num in re.findall(r'\d+', f.name)) and
             any(child.suffix == '.pth' for child in f.iterdir()) and
-            any(child.name.endswith('sdf-mesh-dists-projected.txt') for child in f.iterdir())
+            any(child.name.endswith('sdf-dijkstra-surface-points.txt') for child in f.iterdir())
         ]
     elif overwrite == True:
         targets = [
             f.name for f in SDF_DIR.iterdir() if f.is_dir() and
             any(child.suffix == '.pth' for child in f.iterdir()) and
-            any(child.name.endswith('sdf-mesh-dists-projected.txt') for child in f.iterdir())
+            any(child.name.endswith('sdf-dijkstra-surface-points.txt') for child in f.iterdir())
         ]
     elif test == True:
         targets = [
             f.name for f in SDF_DIR.iterdir() if f.is_dir() and
             any(80 <= int(num) <= 99 for num in re.findall(r'\d+', f.name)) and
             any(child.suffix == '.pth' for child in f.iterdir()) and
-            any(child.name.endswith('sdf-mesh-dists-projected.txt') for child in f.iterdir())
+            any(child.name.endswith('sdf-dijkstra-surface-points.txt') for child in f.iterdir())
         ]
     else:
         targets = []
@@ -40,7 +40,7 @@ def get_targets(overwrite, test) -> List[str]:
             if not f.is_dir():
                 continue
             has_pth = any(child.suffix == '.pth' for child in f.iterdir())
-            has_sdf = any(child.name.endswith('sdf-mesh-dists-projected.txt') for child in f.iterdir())
+            has_sdf = any(child.name.endswith('sdf-dijkstra-surface-points.txt') for child in f.iterdir())
             if not (has_pth and has_sdf):
                 continue
             checkpoint = Path(OUTPUT_DIR, f.name, 'checkpoint-9999.pth')
@@ -68,7 +68,7 @@ def main(args):
         data_path = Path(working_dir, FAUST_DIR, f"{target}.ply")
 
         config = {
-            "device": "cuda:0",
+            "device": "cuda:1",
             "blr": 5e-7,
             "output_dir": str(target_dir),
             "log_dir": str(target_dir),
@@ -86,6 +86,7 @@ def main(args):
             "embedding_dim": 5,
             "embedding_type": "features_only",
             "features_type": "landmarks",
+            "features_normalization": "diameter",
             "landmarks": [412, 5891, 6593, 3323, 2119]
         }
 
