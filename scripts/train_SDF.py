@@ -762,6 +762,7 @@ if __name__ == "__main__":
     parser.add_argument('--all', action='store_true', help="Train on all mesh files in the specified folder.")
     parser.add_argument('--eval', action='store_true', help="Evaluate the trained SDF model.")
     parser.add_argument('--test', action='store_true', help="Only train on meshes with names like 'tr_reg_080' to 'tr_reg_099'.")
+    parser.add_argument('--smal', action='store_true', help="Use SMAL dataset")
     args = parser.parse_args()
 
     print("--------------------------")
@@ -774,12 +775,18 @@ if __name__ == "__main__":
             print("Error: '--all' requires '--mesh_folder' to be specified.")
             exit(1)
 
-        mesh_files = [
-            f for f in os.listdir(args.mesh_folder)
-            if f.endswith(('.off', '.ply')) and (
-                not args.test or any(f"tr_reg_{n:03d}" in f for n in range(80, 100))
-            )
-        ]
+        if args.smal == False:
+            mesh_files = [
+                f for f in os.listdir(args.mesh_folder)
+                if f.endswith(('.off', '.ply')) and (
+                    not args.test or any(f"tr_reg_{n:03d}" in f for n in range(80, 100))
+                )
+            ]
+        else:
+            mesh_files = [
+                f for f in os.listdir(args.mesh_folder)
+                if f.endswith(('.off')) and f.startswith(("cougar", "hippo", "horse"))
+            ]
 
         if not mesh_files:
             print("No valid mesh files found in the specified folder.")
