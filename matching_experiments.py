@@ -264,17 +264,11 @@ def process_element(
             strict=True,
         )
 
-
     elif representation == "sdf":
         tqdm.write(f"Loading {element} with {representation} representation")
-        features_path = Path(
-            data_path.flows_SDFs_path,
-            element,
-            f"vertex-geodesics-interpolated.txt",
-        )
-        vertex_features_path = Path(
-            data_path.flows_SDFs_path, element, f"vertex-geodesics.txt"
-        )
+        features_path = Path(data_path.sdf_path, element, f"{element}-sdf-dijkstra-surface-points.txt")
+        vertex_features_path = Path(data_path.sdf_path, element, f"{element}-sdf-projected-vertex-dists.txt")
+
         # if mesh_baseline is False:
         #     features_path = Path(SDFs_PATH, element, f'{element}-sdf-dijkstra-features.txt')
         #     points_path = Path(SDFs_PATH, element, f'{element}-sdf-sampled-points.txt')
@@ -285,9 +279,10 @@ def process_element(
         #     # features_path = Path(SDFs_PATH, element, f'{element}-sdf-extracted-mesh-dists.txt')   # Analitic SDF features
         #     points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
         features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
-        vertex_features = torch.tensor(
-            np.loadtxt(vertex_features_path).astype(np.float32)
-        ).to(device)
+        vertex_features = torch.tensor(np.loadtxt(vertex_features_path).astype(np.float32)).to(device)
+        landmarks = data_path.landmarks
+        corr = None
+
         model.load_state_dict(
             torch.load(
                 Path(data_path.flows_SDFs_path, element, "checkpoint-9999.pth"),
@@ -337,6 +332,23 @@ def get_matching_methods(
             "knn": lambda: compute_p2p_with_knn(source_features, target_features),
             "flow": lambda: compute_p2p_with_flows_composition(
                 source_features, target_features, source_model, target_model, device
+            ),
+        }
+    elif matching_methods == "sdf":
+        return {
+            "knn": lambda: compute_p2p_with_knn(source_features, target_features),
+            "ot": lambda: compute_p2p_with_ot(source_features, target_features),
+            "flow": lambda: compute_p2p_with_flows_composition(
+                source_features, target_features, source_model, target_model, device
+            ),
+            # "ndp-sdf": lambda: ndp_sdf(
+            #     source_path,
+            #     target_path,
+            #     source_landmarks=source_landmarks,
+            #     target_landmarks=target_landmarks,
+            # ),
+            "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
+                source_features, target_features, source_model, target_model
             ),
         }
     elif matching_methods == "all":
@@ -892,6 +904,9 @@ def main(args):
         df.to_csv(results_file, mode="a", header=not results_file.exists(), index=False)
         results.append(df)
 
+    results_df = pd.concat(results, ignore_index=True)
+    results_df.to_csv(Path(output_dir, "matching_results_completed.csv"), index=False)
+    
     # Save and tqdm.write average time
     times_sec = [t.total_seconds() if hasattr(t, "total_seconds") else float(t) for t in times]
     avg_time = sum(times_sec) / len(times_sec)
@@ -901,11 +916,8 @@ def main(args):
             f.write(f"Pair {i + 1}: {t:.2f} seconds\n")
         f.write(f"\nAverage time: {avg_time:.2f} seconds\n")
 
-    results_df = pd.concat(results, ignore_index=True)
-    results_df.to_csv(Path(output_dir, "matching_results_completed.csv"), index=False)
-
     tqdm.write("Average errors across all pairs:")
-    avg_metrics = df.groupby("method")[
+    avg_metrics = results_df.groupby("method")[
         ["euclidean_error", "geodesic_error", "dirichlet", "coverage", "elapsed"]
     ].mean()
     avg_metrics.to_csv(Path(output_dir, "matching_results_average.csv"))
