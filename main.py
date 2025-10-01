@@ -14,6 +14,7 @@ import sys
 import time
 from pathlib import Path
 from tqdm import trange
+import pandas as pd
 
 import numpy as np
 import torch
@@ -222,6 +223,13 @@ def get_inline_arg():
             default=None,
             type=str,
             help="Path to the features file"
+    )
+
+    parser.add_argument(
+            "--diameters_path", 
+            default=None,
+            type=str,
+            help="Path to the diameters CSV file"
     )
 
     parser.add_argument(
@@ -550,8 +558,22 @@ def train(args, device):
         elif ext == ".npy":
             features = torch.tensor(np.load(args.features_path).astype(np.float32)).to(device)
             vertex_features = torch.tensor(np.loadtxt(args.vertex_features_path).astype(np.float32)).to(device)
+        else:
+            raise ValueError(f"Features file must be .txt or .npy, got {ext}")
         print(f"Loaded features from {args.features_path} | Features shape: {features.shape}")
         print(f"Loaded vertex features from {args.vertex_features_path} | Vertex features shape: {vertex_features.shape}")
+
+        print("------------------------------------")
+        print(f"vertex_features (shape {list(vertex_features.shape)}):")
+        print(f"  min: {vertex_features.min(dim=0).values.tolist()}")
+        print(f"  max: {vertex_features.max(dim=0).values.tolist()}")
+        print(f"  avg: {vertex_features.mean(dim=0).tolist()}")
+        print("------------------------------------")
+        print(f"features (shape {list(features.shape)}):")
+        print(f"  min: {features.min(dim=0).values.tolist()}")
+        print(f"  max: {features.max(dim=0).values.tolist()}")
+        print(f"  avg: {features.mean(dim=0).tolist()}")
+        print("------------------------------------")
 
         if args.features_interpolation > 0 and mesh is not None:
             features = generate_embeddings(
@@ -595,6 +617,12 @@ def train(args, device):
         print(f"Saved interpolated features to {os.path.join(args.output_dir, 'vertex-geodesics-interpolated.txt')}")
 
     if args.features_normalization != "none":
+        if args.diameters_path is not None and os.path.isfile(args.diameters_path): 
+            # Load the diameters as a dataframe, extract the row of args.target
+            df = pd.read_csv(args.diameters_path)
+            if target in df['target'].values:
+                diameter = df.loc[df['target'] == target, 'diameter'].values[0]
+                print(f"Loaded diameter {diameter} from {args.diameters_path} for target {target}")
         features, vertex_features = normalize_features(features, vertex_features, args.features_normalization, diameter)
         print("------------------------------------")
         print(f"vertex_features (shape {list(vertex_features.shape)}):")
@@ -610,6 +638,7 @@ def train(args, device):
         np.savetxt(os.path.join(args.output_dir, "vertex-geodesics-vnorm.txt"), vertex_features.detach().cpu().numpy())
     else:
         print("Skipping feature normalization")
+
 
 
     logging.info(f"Start training for {args.epochs} epochs")
