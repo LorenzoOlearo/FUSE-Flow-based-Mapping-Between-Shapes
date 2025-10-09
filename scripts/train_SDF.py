@@ -299,7 +299,7 @@ class SDF(nn.Module):
                               threshold: float = 0.05,
                               samples_per_step: int = 1000000,
                               bounds: Tuple[float, float] = (-1, 1),
-                              num_projections: int = 1,
+                              num_projections: int = 15,
                               igl_sdf: bool = False,
                               mesh: Optional[trimesh.Trimesh] = None,
     ):
@@ -316,12 +316,12 @@ class SDF(nn.Module):
                     print(f" > Sampling using neural SDF... (collected {n_samples}/{num_samples})")
                     unif = torch.rand(samples_per_step, 3, device=device) * (bounds[1] - bounds[0]) + bounds[0]
                     sdf = self.distance(unif)
-                    close = unif[sdf.squeeze() < threshold, :]
+                    close = unif[torch.abs(sdf.squeeze()) < threshold, :]
                 elif igl_sdf is True and mesh is not None:
                     print(f" > Sampling using IGL SDF... (collected {n_samples}/{num_samples})")
                     unif = np.random.rand(samples_per_step, 3).astype(np.float32) * (bounds[1] - bounds[0]) + bounds[0]
                     sdf, _, _, _ = signed_distance(unif, mesh.vertices, mesh.faces)
-                    close = unif[sdf.squeeze() < threshold, :]
+                    close = unif[torch.abs(sdf.squeeze()) < threshold, :]
                     close = torch.from_numpy(close).to(device)
                 sampled_pts.append(close)
                 n_samples += close.shape[0]
@@ -329,6 +329,7 @@ class SDF(nn.Module):
         print(f"Sampled {sampled_pts.shape[0]} points in {iterations} iterations.")
         for it in range(num_projections):
             sampled_pts = self.project_nearest(sampled_pts.float())
+            print(f" >> Projected onto surface: iteration {it + 1}/{num_projections}")
         return sampled_pts
     
     
@@ -431,7 +432,8 @@ class MeshDataset(Dataset):
     def __getitem__(self, idx) -> Dict[str, Float[Tensor, "*batch 3"]]:
         # Surface samples
         surface_pts, face_ids = kal.ops.mesh.sample_points(
-            self.mesh.geometry.vertices, self.mesh.geometry.faces, self.mesh.surf_sample)
+            self.mesh.geometry.vertices, self.mesh.geometry.faces, self.mesh.surf_sample
+        )
         surface_pts = surface_pts.squeeze(0)
         face_ids = face_ids.squeeze(0)
 

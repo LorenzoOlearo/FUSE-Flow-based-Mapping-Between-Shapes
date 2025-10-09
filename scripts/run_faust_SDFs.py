@@ -7,8 +7,9 @@ import re
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = Path('./out/flows/faust-SDFs/faust-SDFs-diameter-norm')
-SDF_DIR = Path('./out/SDFs')
+# OUTPUT_DIR = Path('./out/flows/faust-SDFs/faust-SDFs-diameter-norm')
+OUTPUT_DIR = Path('./out/flows/faust-SDFs/faust-SDFs-diameter-fixed-sampling')
+SDF_DIR = Path('./out/SDFs/faust-SDFs')
 FAUST_DIR = Path('./data/MPI-FAUST/training/registrations')
 
 
@@ -79,14 +80,14 @@ def main(args):
             "num_steps": 64,
             "method": "FM",
             "network": "MLP",
-            "batch_size": 100000,
-            "num_points_train": 500000,
+            "batch_size": 50000,
+            "num_points_train": 50000,
             "learning_rate": 0.01,
             "distribution": "gaussian",
             "embedding_dim": 5,
             "embedding_type": "features_only",
             "features_type": "landmarks",
-            "features_normalization": "diameter",
+            "features_normalization": "none",
             "landmarks": [412, 5891, 6593, 3323, 2119]
         }
 
@@ -97,7 +98,8 @@ def main(args):
         command = [
             "python", "main.py",
             "--config", config_path,
-            "--features_path", f"{SDF_DIR}/{target}/{target}-sdf-dijkstra-features.txt",
+            "--features_path", f"{SDF_DIR}/{target}/{target}-geodesics-normalized-diameter.txt",
+            "--vertex_features_path", f"{SDF_DIR}/{target}/{target}-vertex-geodesics-normalized-diameter.txt",
         ]
 
         command_str = " ".join(command)

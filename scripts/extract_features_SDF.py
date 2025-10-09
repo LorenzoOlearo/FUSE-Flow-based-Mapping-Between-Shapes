@@ -772,15 +772,30 @@ def get_fractional_offset_correction(surface_points, h, min_coord, max_coord, re
     return offsets
 
 
-def save_outputs(target, surface_points, dists_surface_points, dists_surface_points_idw, mesh_dists, mesh_dists_idw, verts_projection):
+def save_outputs(target, diameter, surface_points, dists_surface_points, dists_surface_points_idw, mesh_dists, mesh_dists_idw, verts_projection):
     out_dir = Path(f"out/SDFs/faust-SDFs/{target}")
     out_dir.mkdir(exist_ok=True)
-    np.savetxt(out_dir / f"{target}-sdf-dijkstra-surface-points.txt", dists_surface_points, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-sdf-dijkstra-surface-points-idw.txt", dists_surface_points_idw, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-sdf-sampled-surface-points.txt", surface_points, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-sdf-projected-vertex-dists.txt", mesh_dists, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-sdf-projected-vertex-dists-idw.txt", mesh_dists_idw, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-mesh-vertex-surface-projection.txt", verts_projection, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-geodesics.txt", dists_surface_points, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-geodesics-idw.txt", dists_surface_points_idw, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-surface-points.txt", surface_points, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-vertex-geodesics.txt", mesh_dists, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-vertex-geodesics-idw.txt", mesh_dists_idw, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-vertex-voxel-projection.txt", verts_projection, fmt='%.6f')
+
+    print(f"mesh_dists before normalization: min={np.min(mesh_dists)}, max={np.max(mesh_dists)}, mean={np.mean(mesh_dists)}")
+    print(f"dists_surface_points before normalization: min={np.min(dists_surface_points)}, max={np.max(dists_surface_points)}, mean={np.mean(dists_surface_points)}")
+    mesh_dists = mesh_dists / diameter
+    mesh_dists_idw = mesh_dists_idw / diameter
+    dists_surface_points = dists_surface_points / diameter
+    dists_surface_points_idw = dists_surface_points_idw / diameter
+    print(f"mesh_dists after normalization: min={np.min(mesh_dists)}, max={np.max(mesh_dists)}, mean={np.mean(mesh_dists)}")
+    print(f"dists_surface_points after normalization: min={np.min(dists_surface_points)}, max={np.max(dists_surface_points)}, mean={np.mean(dists_surface_points)}")
+    print(f"Shape diameter: {diameter}")
+
+    np.savetxt(out_dir / f"{target}-geodesics-normalized-diameter.txt", dists_surface_points, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-geodesics-idw-normalized-diameter.txt", dists_surface_points_idw, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-vertex-geodesics-normalized-diameter.txt", mesh_dists, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-vertex-geodesics-idw-normalized-diameter.txt", mesh_dists_idw, fmt='%.6f')
 
 
 def geodesic_diameter(surface_mask, h, n_start=5):
@@ -802,7 +817,7 @@ def geodesic_diameter(surface_mask, h, n_start=5):
 
     # The largest distance found across all sweeps
     diameter = max(max_distances)
-    return diameter 
+    return diameter
 
 
 def main(args):
@@ -849,10 +864,6 @@ def main(args):
             mesh=mesh, 
         )
 
-        diameter = geodesic_diameter(surface_mask, h, n_start=50)
-        print(f"Estimated geodesic diameter of the shape: {diameter:.4f}")
-        diameters_data.append({"target": target, "geodesic_diameter": float(diameter)})
-
         dists = compute_voxel_geodesics(
             surface_mask=surface_mask,
             landmarks=landmarks,
@@ -897,20 +908,35 @@ def main(args):
             device=device,
         )
 
-        # 6.5 Optional: Normalize both dists_surface_points and mesh_dists by the diameter of the shape
-        print(f"mesh_dists before normalization: min={np.min(mesh_dists)}, max={np.max(mesh_dists)}, mean={np.mean(mesh_dists)}")
-        print(f"dists_surface_points before normalization: min={np.min(dists_surface_points)}, max={np.max(dists_surface_points)}, mean={np.mean(dists_surface_points)}")
-        mesh_dists = mesh_dists / diameter
-        mesh_dists_idw = mesh_dists_idw / diameter
-        dists_surface_points = dists_surface_points / diameter
-        dists_surface_points_idw = dists_surface_points_idw / diameter
-        print(f"mesh_dists after normalization: min={np.min(mesh_dists)}, max={np.max(mesh_dists)}, mean={np.mean(mesh_dists)}")
-        print(f"dists_surface_points after normalization: min={np.min(dists_surface_points)}, max={np.max(dists_surface_points)}, mean={np.mean(dists_surface_points)}")
-        print(f"Shape diameter: {diameter}")
+        # Compute the NxN geodesic distance matrix on the mesh vertices projected to the SDF surface
+        # vertex_voxels = find_closest_occupied_index(
+        #     surface_mask,
+        #     verts_projection,
+        #     min_coord,
+        #     max_coord,
+        #     resolution,
+        #     world_to_grid=True,
+        #     unique=False
+        # )
+
+        # vertex_vertex_dists = compute_voxel_geodesics(
+        #     surface_mask=surface_mask,
+        #     landmarks=verts_projection,
+        #     h=h,
+        #     eps=eps,
+        #     target=target,
+        #     additional_plots=False,
+        #     full_matrix=True
+        # )
+        
+        diameter = geodesic_diameter(surface_mask, h, n_start=15)
+        # print(f"Estimated geodesic diameter of the shape: {vertex_vertex_dists.max():.4f}")
+        diameters_data.append({"target": target, "geodesic_diameter": float(diameter)})
 
         # 7. Save the results
         save_outputs(
             target=target,
+            diameter=diameter,
             surface_points=surface_points,
             dists_surface_points=dists_surface_points,
             dists_surface_points_idw=dists_surface_points_idw,
