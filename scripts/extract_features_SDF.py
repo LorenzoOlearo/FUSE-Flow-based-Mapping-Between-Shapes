@@ -561,7 +561,6 @@ def points_dist_in_grid_interpolated_IDW(surface_points, surface_mask, dists, ta
 
     return dists_interpolated
 
-
 def points_dist_in_grid(surface_points, surface_mask, dists, target: str, resolution, min_coord, max_coord, additional_plots=False, k_neighbors=8, idw_power=2):
     """
     Given surface points, compute:
@@ -815,9 +814,69 @@ def geodesic_diameter(surface_mask, h, n_start=5):
         dist_from_far = shortest_path(csgraph=adj, indices=farthest_idx, directed=False, method="D") * h
         max_distances.append(np.max(dist_from_far))
 
-    # The largest distance found across all sweeps
     diameter = max(max_distances)
     return diameter
+
+
+def compute_geodesic_matrix(surface_mask, vertex_voxels, h, batch_size=100, use_memmap=False, memmap_path="geodesic_matrix.dat"):
+    """
+    Compute the geodesic distance matrix between vertex_voxels using surface_mask for connectivity.
+
+    Parameters
+    ----------
+    surface_mask : array-like
+        The voxel surface or list of vertex indices used to build adjacency.
+    vertex_voxels : array-like
+        Indices of the vertices for which distances are computed.
+    h : float
+        Voxel edge length (distance scaling factor).
+    batch_size : int
+        Number of source vertices to process per batch.
+    use_memmap : bool
+        Whether to use a memory-mapped file to store results on disk.
+    memmap_path : str
+        Path for the memory-mapped file (used only if use_memmap=True).
+
+    Returns
+    -------
+    D : ndarray or np.memmap
+        NxN geodesic distance matrix between vertex_voxels.
+    """
+    # Build adjacency for the full surface
+    adj, _ = build_adjacency(surface_mask)
+
+    # Ensure vertex_voxels is a flat 1D integer array
+    vertex_voxels = np.array(vertex_voxels, dtype=int).ravel()
+    N = len(vertex_voxels)
+
+    # Prepare distance matrix
+    if use_memmap:
+        D = np.memmap(memmap_path, dtype=np.float32, mode='w+', shape=(N, N))
+    else:
+        D = np.zeros((N, N), dtype=np.float32)
+
+    n_batches = int(np.ceil(N / batch_size))
+
+    for i in range(n_batches):
+        start = i * batch_size
+        end = min((i + 1) * batch_size, N)
+        batch_indices = vertex_voxels[start:end]
+
+        # Compute distances from this batch to all surface vertices
+        dist_batch_full = shortest_path(csgraph=adj, indices=batch_indices, directed=False, method="D") * h
+
+        # Select only the columns corresponding to vertex_voxels
+        dist_batch = dist_batch_full[:, vertex_voxels]
+
+        # Store in matrix
+        D[start:end, :] = dist_batch.astype(np.float32)
+
+        print(f"Processed batch {i+1}/{n_batches}")
+
+    if use_memmap:
+        D.flush()
+
+    return D
 
 
 def main(args):
@@ -864,6 +923,7 @@ def main(args):
             mesh=mesh, 
         )
 
+        # 3. Compute geodesic distances from landmarks to all surface voxels
         dists = compute_voxel_geodesics(
             surface_mask=surface_mask,
             landmarks=landmarks,
@@ -908,32 +968,30 @@ def main(args):
             device=device,
         )
 
-        # Compute the NxN geodesic distance matrix on the mesh vertices projected to the SDF surface
-        # vertex_voxels = find_closest_occupied_index(
-        #     surface_mask,
-        #     verts_projection,
-        #     min_coord,
-        #     max_coord,
-        #     resolution,
-        #     world_to_grid=True,
-        #     unique=False
-        # )
-
-        # vertex_vertex_dists = compute_voxel_geodesics(
-        #     surface_mask=surface_mask,
-        #     landmarks=verts_projection,
-        #     h=h,
-        #     eps=eps,
-        #     target=target,
-        #     additional_plots=False,
-        #     full_matrix=True
-        # )
-        
         diameter = geodesic_diameter(surface_mask, h, n_start=15)
-        # print(f"Estimated geodesic diameter of the shape: {vertex_vertex_dists.max():.4f}")
         diameters_data.append({"target": target, "geodesic_diameter": float(diameter)})
 
-        # 7. Save the results
+        # 7. Optionally compute the full NxN geodesic distance matrix on the voxel surface
+        if args.full_geodesic:
+            vertex_voxels = find_closest_occupied_index(
+                surface_mask,
+                verts_projection,
+                min_coord,
+                max_coord,
+                resolution,
+                world_to_grid=True,
+                unique=False
+            )
+            full_vertex_geodesics = compute_geodesic_matrix(
+                surface_mask=surface_mask,
+                vertex_voxels=vertex_voxels,
+                h=h,
+                batch_size=50,
+                use_memmap=True,
+                memmap_path=f"out/SDFs/faust-SDFs/{target}/{target}-full-vertex-geodesics.dat"
+        )
+
+        # 8. Save the results
         save_outputs(
             target=target,
             diameter=diameter,
@@ -966,6 +1024,7 @@ if __name__ == "__main__":
     parser.add_argument('--mesh_folder', type=str, default=None, help="Folder containing the target mesh files to be processed. If not provided, will use the default out/SDFs directory.")
     parser.add_argument('--extension', type=str, default='ply', help="File extension of the target mesh files (default: 'ply')")
     parser.add_argument('--igl_sdf', action='store_true', help="Use libigl to compute the mesh signed distance for comparison")
+    parser.add_argument('--full_geodesic', action='store_true', help="Compute the full NxN geodesic distance matrix on the voxel surface (super slow)")
 
     args = parser.parse_args()
 
