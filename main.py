@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from tqdm import trange
 import pandas as pd
-
+import random
 import numpy as np
 import torch
 import trimesh
@@ -24,15 +24,15 @@ from util import misc
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
 from util.train_utils import setup_logging, initialize_device_and_seed
 from util.mesh_utils import (
-    get_shape_diameter,
+    mesh_geodesics,
     generate_embeddings,
     compute_features,
     sample_initial_distribution,
 )
 import util.lr_sched as lr_sched
 
-from flow_matching.path.scheduler import CondOTScheduler
 from flow_matching.path import AffineProbPath
+from flow_matching.path.scheduler import CondOTScheduler
 
 from model import models, networks
 from model.models import EDMPrecond, FMCond
@@ -40,10 +40,9 @@ from model.models import EDMPrecond, FMCond
 
 def get_inline_arg():
     parser = argparse.ArgumentParser("Train", add_help=False)
-    # common parameters
     parser.add_argument(
         "--config", default=None, type=str, help="Path to the config file"
-    )  # Model parameters
+    )
     parser.add_argument(
         "--method", default="FM", type=str, help="Method used for training, either 'FM' for Flow Matching or 'diffusion'"
     )
@@ -539,12 +538,7 @@ def train(args, device):
     data_loader_train = setup_data_loader(args)
     model, optimizer, loss_scaler = initialize_model_and_optimizer(args, device)
     misc.load_model(args=args, model_without_ddp=model, optimizer=optimizer, loss_scaler=loss_scaler)
-    
     mesh = trimesh.load(args.data_path, process=False)
-
-    target = args.data_path.split("/")[-1].split(".")[0]
-    dists_path = str(Path(args.data_path).parent / f"{target}_dists.npy")
-    diameter = get_shape_diameter(mesh, target, dists_path)
 
     if args.features_path is not None and args.vertex_features_path is not None:
         print(f"Ignoring config_file data_path --> loading features from {args.features_path}")
@@ -617,12 +611,12 @@ def train(args, device):
         print(f"Saved interpolated features to {os.path.join(args.output_dir, 'vertex-geodesics-interpolated.txt')}")
 
     if args.features_normalization != "none":
-        if args.diameters_path is not None and os.path.isfile(args.diameters_path): 
-            # Load the diameters as a dataframe, extract the row of args.target
-            df = pd.read_csv(args.diameters_path)
-            if target in df['target'].values:
-                diameter = df.loc[df['target'] == target, 'diameter'].values[0]
-                print(f"Loaded diameter {diameter} from {args.diameters_path} for target {target}")
+        target = args.data_path.split("/")[-1].split(".")[0]
+        dists_path = "./data/MPI-FAUST/training/registrations/dists/"
+        os.makedirs(dists_path, exist_ok=True)
+        _, diameter = mesh_geodesics(mesh=mesh, target=target, recompute=False, dists_path=dists_path)
+
+        print("Diameter used for normalization:", diameter)
         features, vertex_features = normalize_features(features, vertex_features, args.features_normalization, diameter)
         print("------------------------------------")
         print(f"vertex_features (shape {list(vertex_features.shape)}):")
@@ -634,12 +628,11 @@ def train(args, device):
         print(f"  min: {features.min(dim=0).values.tolist()}")
         print(f"  max: {features.max(dim=0).values.tolist()}")
         print(f"  avg: {features.mean(dim=0).tolist()}")
+        print(f"output_dir: {args.output_dir}")
         np.savetxt(os.path.join(args.output_dir, "vertex-geodesics-interpolated-vnorm.txt"), features.detach().cpu().numpy())
         np.savetxt(os.path.join(args.output_dir, "vertex-geodesics-vnorm.txt"), vertex_features.detach().cpu().numpy())
     else:
         print("Skipping feature normalization")
-
-
 
     logging.info(f"Start training for {args.epochs} epochs")
     start_time = time.time()
