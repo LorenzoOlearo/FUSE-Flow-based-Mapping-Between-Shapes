@@ -6,6 +6,10 @@ import trimesh
 import os
 import networkx as nx
 
+import scipy.sparse
+import scipy.sparse.csgraph
+import pandas as pd
+
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import shortest_path
 from sklearn import neighbors
@@ -51,7 +55,7 @@ def normalize_mesh_unit(mesh):
     return mesh
 
 
-def normalize_mesh_08(mesh):
+def normalize_mesh_08(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     centroid = torch.tensor(mesh.centroid, dtype=torch.float32)
     verts = torch.tensor(mesh.vertices, dtype=torch.float32)
 
@@ -60,6 +64,7 @@ def normalize_mesh_08(mesh):
     verts *= 0.8
 
     mesh.vertices = verts.numpy()
+
     return mesh
 
 
@@ -109,6 +114,33 @@ def sample_sphere_volume(radius, center, num_points, device="cuda"):
     return points
 
 
+def sample_sphere_volume_multidimensional(radius, center, num_points, device="cuda"):
+    """
+    Sample points uniformly within a d-dimensional sphere of given radius and center.
+    
+    Args:
+        radius (float): Radius of the sphere.
+        center (tuple or list): Center of the sphere (length = dimension d).
+        num_points (int): Number of points to sample.
+        device (str): Device for tensor operations.
+    
+    Returns:
+        torch.Tensor: Sampled points of shape (num_points, d).
+    """
+    center = torch.tensor(center, dtype=torch.float32, device=device)
+    d = len(center)  # Dimension inferred from center
+    
+    # Sample radius with proper scaling for uniform distribution in d dimensions
+    r = radius * torch.rand(num_points, device=device) ** (1/d)
+    
+    # Sample directions by normalizing Gaussian vectors
+    directions = torch.randn(num_points, d, device=device)
+    directions = directions / directions.norm(dim=1, keepdim=True)
+    
+    points = directions * r.view(-1, 1) + center
+    return points
+
+
 def sample_initial_distribution(num_points: int, embedding_dim: int, distribution: str, device: str):
     """
     Generate random samples based on the specified distribution.
@@ -122,17 +154,12 @@ def sample_initial_distribution(num_points: int, embedding_dim: int, distributio
         samples = torch.randn(num_points, embedding_dim).to(device)
 
     elif distribution == "sphere":
-        if embedding_dim == 3:
-            samples = sample_sphere_volume(
-                radius=1,
-                center=(0, 0, 0),
-                num_points=num_points,
-                device=device,
-            )
-        else:
-            raise NotImplementedError(
-                "Sampling from a sphere with dimensions other than 3 is not implemented."
-            )
+        samples = sample_sphere_volume_multidimensional(
+            radius=1,
+            center=(0.5, 0.5, 0.5, 0.5, 0.5),
+            num_points=num_points,
+            device=device,
+        )
     else:
         raise ValueError(f"Unsupported distribution type: {distribution}")
 
@@ -335,41 +362,127 @@ def get_interpolated_feats(mesh, features, num_points, device):
     return torch.cat([samples_tensor, interpolated_feats], -1)
 
 
-
 def get_shape_diameter(
     mesh: trimesh.Trimesh,
     target: str,
     dists_path: str,
-) -> np.ndarray:
+    recompute: bool = False,
+) -> float:
     """
-    Compute or load geodesic distance matrix for a target mesh.
+    Compute or load geodesic distance matrix for a target mesh and return the shape diameter (max distance).
 
     Args:
         mesh (trimesh.Trimesh): The mesh to compute distances on.
-        target_name (str): Identifier for caching (e.g. filename stem).
-        data_path (DataPath): Dataclass containing paths for caching.
+        target (str): Identifier for caching (e.g. filename stem).
+        dists_path (str): Directory path where the distance matrix is cached.
+        recompute (bool): If True, recompute and overwrite the cached distances even if present.
+
     Returns:
-        np.ndarray: Geodesic distance matrix of shape (n_vertices, n_vertices).
+        float: Shape diameter, i.e., the maximum geodesic distance.
     """
     os.makedirs(dists_path, exist_ok=True)
     dist_cache_path = os.path.join(dists_path, f"{target}_dists.npy")
 
-    if os.path.exists(dist_cache_path):
-        dist = np.load(dist_cache_path)
-    else:
-        if len(mesh.faces) > 0:
+    dist = None
+    if not recompute and os.path.exists(dist_cache_path):
+        try:
+            dist = np.load(dist_cache_path)
+        except Exception:
+            dist = None
+
+    if dist is None:
+        if mesh.is_watertight and len(mesh.faces) > 0:
+            print(f"Computing geodesic distances for {target} using GeomFum...")
             mesh_gf = TriangleMesh(mesh.vertices, np.array(mesh.faces))
             heat = HeatDistanceMetric.from_registry(mesh_gf)
             dist = heat.dist_matrix()
+            np.save(dist_cache_path, dist)
+            shape_diameter = float(np.max(dist))
         else:
+            print(f"Computing approximate geodesic distances for {target} using potpourri3d...")
             solver = pp3d.PointCloudHeatSolver(mesh.vertices)
-            distances = []
+            max_dist = 0.0
             for idx in range(len(mesh.vertices)):
-                distances.append(solver.compute_distance(idx))
-            dist = np.array(distances)
-        np.save(dist_cache_path, dist)
+                d = solver.compute_distance(idx)
+                max_dist = max(max_dist, np.max(d))
+            shape_diameter = float(max_dist)
+            np.save(dist_cache_path, shape_diameter)
+    else:
+        shape_diameter = float(np.max(dist)) if dist.ndim > 0 else float(dist)
 
-    return dist.max()
+    return shape_diameter
+
+
+def mesh_geodesics(
+    mesh: trimesh.Trimesh,
+    target: str,
+    recompute: bool,
+    dists_path: str,
+) -> tuple[np.ndarray, float]:
+    """
+    Compute or load the geodesic distance matrix and diameter of a mesh
+    using Dijkstra's algorithm, with caching support.
+
+    Args:
+        mesh: Trimesh object representing the mesh geometry.
+        target: Unique identifier for the mesh (e.g., filename stem).
+        recompute: If True, forces recomputation even if cached results exist.
+        dists_path: Directory to cache/load distance matrices and diameter CSV.
+
+    Returns:
+        (shape_dists, diameter):
+            shape_dists: (N, N) ndarray of geodesic distances between vertices.
+            diameter: Float, maximum finite distance across the mesh.
+    """
+    os.makedirs(dists_path, exist_ok=True)
+    dists_file = os.path.join(dists_path, f"{target}_dists.npy")
+    diameters_csv = os.path.join(dists_path, "diameters.csv")
+
+    # --- Load or compute full NxN distance matrix ---
+    if not recompute and os.path.exists(dists_file):
+        print(f"[INFO] Loading cached geodesic distances for '{target}'.")
+        shape_dists = np.load(dists_file)
+    else:
+        print(f"[INFO] Computing geodesic distances for '{target}' (Dijkstra)...")
+
+        edges, lengths = mesh.edges_unique, mesh.edges_unique_length
+        n_vertices = len(mesh.vertices)
+
+        adjacency = scipy.sparse.csr_matrix(
+            (lengths, (edges[:, 0], edges[:, 1])),
+            shape=(n_vertices, n_vertices),
+        )
+        adjacency = adjacency + adjacency.T  # ensure undirected
+
+        shape_dists = scipy.sparse.csgraph.dijkstra(
+            csgraph=adjacency, directed=False, return_predecessors=False
+        )
+
+        np.save(dists_file, shape_dists)
+
+    # --- Compute geodesic diameter ---
+    finite_dists = shape_dists[np.isfinite(shape_dists)]
+    diameter = float(finite_dists.max()) if finite_dists.size else 0.0
+
+    # --- Save or update diameter record ---
+    if os.path.exists(diameters_csv):
+        df = pd.read_csv(diameters_csv)
+    else:
+        df = pd.DataFrame(columns=["target", "diameter"])
+
+    if target in df["target"].values:
+        if recompute:
+            df.loc[df["target"] == target, "diameter"] = diameter
+            print(f"[INFO] Updated diameter entry for '{target}'.")
+    else:
+        df = pd.concat(
+            [df, pd.DataFrame({"target": [target], "diameter": [diameter]})],
+            ignore_index=True,
+        )
+
+    df.to_csv(diameters_csv, index=False)
+
+    return shape_dists, diameter
 
 
 ######################## # FUNCTIONS FOR COMPUTING FEATURES ########################

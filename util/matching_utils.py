@@ -958,9 +958,64 @@ def ndp_with_ldmks(source_path, target_path, source_landmarks, target_landmarks)
     return p2p, elapsed_time
 
 
+def compute_p2p_with_ndp_sdf(source_vertex, target_vertex, source_landmarks, target_landmarks):
+    """
+    Compute point-to-point maps using neural deformation pyramids.
+    Args:
+        source_sampled: Source sampled points (source_n_points, 3)
+        target_sampled: Target sampled points (target_n_points, 3)
+        source_vertex: Source shape vertices (source_n_vertices, 3)
+        target_vertex: Target shape vertices (target_n_vertices, 3)
+        source_landmarks: Source landmarks (source_n_landmarks)
+        target_landmarks: Target landmarks (target_n_landmarks)
+    Returns:
+        p2p: Point-to-point maps (source_n_points)
+    """
+    tqdm.write("> computing p2p with ndp_with_ldmks")
+    start_time = time.time()
+
+    with open(
+        f"{_ndp_dir}/config/NDP.yaml",
+        "r",
+    ) as f:
+        config = yaml.load(f, Loader=yaml.Loader)
+
+    config = edict(config)
+
+    # backup the experiment
+    if config.gpu_mode:
+        config.device = torch.cuda.current_device()
+    else:
+        config.device = torch.device("cpu")
+
+    model = Registration(config)
+    timer = Timers()
+    
+    model = Registration(config)
+    timer = Timers()
+    x, y = (
+        torch.tensor(source_vertex).double().to("cuda"),
+        torch.tensor(target_vertex).double().to("cuda"),
+    )
+
+    model.load_pcds(x, y, [x[source_landmarks], y[target_landmarks]])
+
+    timer.tic("registration")
+    warped_pcd, iter_cnt, timer = model.register(timer=timer)
+    timer.toc("registration")
+
+    nbrs = NearestNeighbors(n_neighbors=1, algorithm="auto").fit(y.cpu().numpy())
+    _, p2p = nbrs.kneighbors(warped_pcd.cpu().numpy())
+    p2p = p2p[:, 0]
+
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    tqdm.write(f"> ndp_with_ldmks elapsed {elapsed_time:.4f}s")
+
+    return p2p, elapsed_time
+
+
 ################ OT #######################
-
-
 def compute_p2p_with_ot(source_features, target_features):
     """
     Compute point-to-point distances using sinkhorn optimal transport.
