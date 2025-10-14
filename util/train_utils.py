@@ -1,7 +1,7 @@
 import numpy as np
 import os
 import logging
-
+import random
 import torch
 import torch.backends.cudnn as cudnn
 
@@ -19,17 +19,29 @@ def setup_logging(output_dir: str):
             logging.FileHandler(os.path.join(output_dir, "training.log"), mode="w", encoding="utf-8")
         ]
     )
+
+
 def initialize_device_and_seed(args):
-    """Initialize device and set random seeds."""
+    """Initialize device and set random seeds for reproducible results."""
     misc.init_distributed_mode(args)
     device = torch.device(args.device)
-    seed = args.seed + misc.get_rank()
-    torch.manual_seed(seed)
+
+    # Seed setup
+    seed = int(args.seed) + misc.get_rank()
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    random.seed(seed)
     np.random.seed(seed)
-    cudnn.benchmark = True
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    # Deterministic backend settings
+    cudnn.benchmark = False
     cudnn.deterministic = True
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
+    # torch.use_deterministic_algorithms(True)
+
+    # Disable TF32 for full precision reproducibility
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+
+    print(f"[Seed Init] Using seed {seed} on device {device}")
     return device
-
-
