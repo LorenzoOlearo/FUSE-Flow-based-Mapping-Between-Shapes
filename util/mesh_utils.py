@@ -509,7 +509,7 @@ def compute_features(mesh, args, device):
     features = None
 
     if args.embedding_type == "xyz":
-        return None
+        return torch.tensor(mesh.vertices, device=device).float()
     if args.features_type == "landmarks":
         if len(mesh.faces) > 0:
             features = torch.tensor(

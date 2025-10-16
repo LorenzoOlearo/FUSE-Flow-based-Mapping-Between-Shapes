@@ -22,6 +22,7 @@ import trimesh
 
 from util import misc
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
+from util.plot import plot_points, source_target_plot
 from util.train_utils import setup_logging, initialize_device_and_seed
 from util.mesh_utils import (
     mesh_geodesics,
@@ -733,15 +734,32 @@ def inference(args, device):
         sample, _ = model.sample(
             noise=noise, num_steps=args.num_steps, intermediate=True
         )
-
-    # Save the generated samples
+        
     if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
         np.save(
             os.path.join(args.output_dir, "generated_samples.npy"), sample.cpu().numpy()
         )
-    else:
-        np.save("generated_samples.npy", sample.cpu().numpy())
+        if args.embedding_dim == 3:
+            # def plot_points(points, distances=None, title="3D Points", save_path=None, save_html=True, save_png=True, colorbar_title="", colormap='Viridis', range=None):
+            
+            plot_points(
+                points=sample.cpu().numpy(),
+                title=f"Generated samples - {args.run_name}",
+                save_path=os.path.join(args.output_dir, "generated_samples"),
+                save_html=True,
+                save_png=True,
+            )
+            
+            source_target_plot(
+                source=noise,
+                source_v=noise,
+                target=sample,
+                target_v=sample,
+                run_name=args.run_name,
+                plots_path=args.output_dir,
+                show=False,
+            )
 
 
 def main():
