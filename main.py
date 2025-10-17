@@ -541,6 +541,16 @@ def train(args, device):
     misc.load_model(args=args, model_without_ddp=model, optimizer=optimizer, loss_scaler=loss_scaler)
     mesh = trimesh.load(args.data_path, process=False)
 
+    if args.run_name == "SPHERE":
+        print("[OCIO] Overriding mesh with a unit sphere")
+        mesh = trimesh.creation.icosphere(subdivisions=5, radius=1.0)
+    elif args.run_name == "TORUS":
+        print("[OCIO] Overriding mesh with a torus")
+        mesh = trimesh.creation.torus(major_radius=1.0, minor_radius=0.3, major_sections=100, minor_sections=30)
+    elif args.run_name == "CUBE":
+        print("[OCIO] Overriding mesh with a cube")
+        mesh = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+
     if args.features_path is not None and args.vertex_features_path is not None:
         print(f"Ignoring config_file data_path --> loading features from {args.features_path}")
 
