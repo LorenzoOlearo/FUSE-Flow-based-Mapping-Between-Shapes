@@ -26,6 +26,7 @@ from util.plot import plot_points, source_target_plot
 from util.train_utils import setup_logging, initialize_device_and_seed
 from util.mesh_utils import (
     mesh_geodesics,
+    pointcloud_geodesics,
     generate_embeddings,
     compute_features,
     sample_initial_distribution,
@@ -258,14 +259,14 @@ def get_inline_arg():
     return args
 
 
-def setup_data_loader(args):
+def setup_data_loader(data_path, batch_size, num_points_train):
     """Set up the data loader based on the input data path."""
     data_loader_train = {
-        "obj_file": args.data_path,
-        "batch_size": args.batch_size,
-        "epoch_size": args.num_points_train // args.batch_size,
+        "obj_file": data_path,
+        "batch_size": batch_size,
+        "epoch_size": num_points_train // batch_size,
     }
-    print(f"Data path: {args.data_path}")
+    print(f"Data path: {data_path} | Batch size: {batch_size} | Epoch size: {data_loader_train['epoch_size']}")
     return data_loader_train
 
 
@@ -536,7 +537,6 @@ def train_one_epoch(
 
 
 def train(args, device):
-    data_loader_train = setup_data_loader(args)
     model, optimizer, loss_scaler = initialize_model_and_optimizer(args, device)
     misc.load_model(args=args, model_without_ddp=model, optimizer=optimizer, loss_scaler=loss_scaler)
     mesh = trimesh.load(args.data_path, process=False)
@@ -623,9 +623,19 @@ def train(args, device):
 
     if args.features_normalization != "none":
         target = args.data_path.split("/")[-1].split(".")[0]
-        dists_path = "./data/MPI-FAUST/training/registrations/dists/"
-        os.makedirs(dists_path, exist_ok=True)
-        _, diameter = mesh_geodesics(mesh=mesh, target=target, recompute=False, dists_path=dists_path)
+       
+        # TODO: FIX THE PATHS AND THE DATASET SELECTION MESS 
+        if len(mesh.faces > 0):
+            dists_path = "./data/MPI-FAUST/training/registrations/dists/"
+            print(f"USING FAUST DISTS PATH: {dists_path}")
+            os.makedirs(dists_path, exist_ok=True)
+            _, diameter = mesh_geodesics(mesh=mesh, target=target, recompute=False, dists_path=dists_path)
+        else:
+            dists_path = "./data/kinect_clean/dists/"
+            print(f"USING KINECT DISTS PATH: {dists_path}")
+            os.makedirs(dists_path, exist_ok=True)
+            _, diameter = pointcloud_geodesics(pt=mesh, target=target, recompute=False, dists_path=dists_path)
+            args.batch_size = vertex_features.shape[0]
 
         print("Diameter used for normalization:", diameter)
         features, vertex_features = normalize_features(features, vertex_features, args.features_normalization, diameter)
@@ -644,6 +654,12 @@ def train(args, device):
         np.savetxt(os.path.join(args.output_dir, "vertex-geodesics-vnorm.txt"), vertex_features.detach().cpu().numpy())
     else:
         print("Skipping feature normalization")
+        
+    data_loader_train = setup_data_loader(
+        data_path=args.data_path,
+        batch_size=args.batch_size,
+        num_points_train=args.num_points_train,
+    )
 
     logging.info(f"Start training for {args.epochs} epochs")
     start_time = time.time()
@@ -666,7 +682,7 @@ def train(args, device):
             loss_scaler=loss_scaler,
             step_fn=step_fn,
             max_norm=args.clip_grad,
-            features=features,
+            features=features if len(mesh.faces) > 0 else vertex_features,
             mesh=mesh,
             embedding_type=args.embedding_type,
             args=args,

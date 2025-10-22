@@ -30,7 +30,12 @@ import potpourri3d as pp3d
 from util.matching_utils import *
 from util.metrics import *
 from util.plot import plot_points, start_end_subplot
-from util.mesh_utils import compute_geodesic_distances, generate_embeddings, mesh_geodesics
+from util.mesh_utils import (
+    mesh_geodesics,
+    pointcloud_geodesics,
+    compute_geodesic_distances_pointcloud
+)
+
 
 @dataclass
 class DataPath:
@@ -41,8 +46,8 @@ class DataPath:
     features_path: Path
     dataset_extension: str
     flows_path: Path
-    flows_SDFs_path: Path
-    sdf_path: Path
+    flows_SDFs_path: Path | None
+    sdf_path: Path | None
     corr_path: Optional[Path] = None
 
 
@@ -180,7 +185,6 @@ def get_targets_smal(flows_path) -> List[str]:
 
 def get_targets_kinect(flows_path) -> List[str]:
     """Determine which targets to process."""
-    # Only load cougar, hippo and horse
     targets = [
         f.name
         for f in flows_path.iterdir()
@@ -190,7 +194,6 @@ def get_targets_kinect(flows_path) -> List[str]:
 
     tqdm.write(f"Processing all targets: {targets}")
     return targets
-
 
 
 def get_targets_surreal(flows_path) -> List[str]:
@@ -215,12 +218,20 @@ def get_mesh_element_features(
 
     vertex_features_path = Path(data_path.flows_path, element, f"vertex-geodesics-vnorm.txt")
     vertex_features = torch.tensor(np.loadtxt(vertex_features_path).astype(np.float32)).to(device)
+    
+    features_path = Path(data_path.flows_path, element, f"vertex-geodesics-interpolated-vnorm.txt")
+    features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
+    
     print("------------------------------------")
     print(f"loaded vertex_features (shape {list(vertex_features.shape)}):")
     print(f"  min: {vertex_features.min(dim=0).values.tolist()}")
     print(f"  max: {vertex_features.max(dim=0).values.tolist()}")
     print(f"  avg: {vertex_features.mean(dim=0).tolist()}")
     print("------------------------------------")
+    print(f"loaded features (shape {list(vertex_features.shape)}):")
+    print(f"  min: {features.min(dim=0).values.tolist()}")
+    print(f"  max: {features.max(dim=0).values.tolist()}")
+    print(f"  avg: {features.mean(dim=0).tolist()}")
 
     # if recompute:
     #     tqdm.write(f"Computing features for {element} in {data_path.features_path}")
@@ -248,7 +259,7 @@ def get_mesh_element_features(
     #     os.makedirs(vertex_features_path.parent, exist_ok=True)
     #     np.savetxt(vertex_features_path, vertex_features.cpu().numpy())
 
-    return vertex_features
+    return features, vertex_features
 
 
 def get_sdf_element_features(
@@ -258,20 +269,56 @@ def get_sdf_element_features(
 ) -> torch.Tensor:
 
     # We load the featues already normalized by the diameter as used to train the SDF flows
+    features_path = Path(data_path.sdf_path, element, f"{element}-geodesics-normalized-diameter.txt")
     vertex_features_path = Path(data_path.sdf_path, element, f"{element}-vertex-geodesics-normalized-diameter.txt")
 
     try:
         tqdm.write(f"Loading precomputed features for {element} from {data_path.features_path}")
+        features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
         vertex_features = torch.tensor(np.loadtxt(vertex_features_path).astype(np.float32)).to(device)
     except Exception as e:
         raise ValueError(f"Error loading features from {vertex_features_path}: {e}")
 
-    return vertex_features
+    return features, vertex_features
+
+
+def get_pt_element_features(
+    element: str,
+    data_path: DataPath,
+    device: str,
+    recompute: bool,
+) -> torch.Tensor:
+
+    pt = trimesh.load(
+        Path(data_path.dataset_path, element + data_path.dataset_extension),
+        process=False
+    )
+
+    features_path = Path(data_path.flows_path, element, f"vertex-geodesics-vnorm.txt")
+
+    if recompute:
+        print(f"Computing features for {element} in {data_path.features_path} with heat method")
+        features = torch.tensor(
+            compute_geodesic_distances_pointcloud(
+                mesh=pt,
+                source_index=data_path.landmarks
+            )
+        ).T.to(device)
+    elif features_path.exists() and not recompute:
+        tqdm.write(f"Loading precomputed features for {element} from {features_path}")
+        features = np.loadtxt(features_path).astype(np.float32)
+        features = torch.tensor(features).to(device)
+    else:
+        raise ValueError(f"Features file {features_path} does not exist and recompute is set to False.")
+
+    return features
 
 
 @dataclass
 class Element:
+    features: torch.Tensor
     vertex_features: torch.Tensor
+    points: torch.Tensor
     vertex_points: torch.Tensor
     model: torch.nn.Module
     mesh: trimesh.Trimesh
@@ -310,7 +357,7 @@ def process_element(
             corr = np.arange(len(mesh.vertices))
         landmarks = corr[data_path.landmarks]
 
-        vertex_features = get_mesh_element_features(
+        features, vertex_features = get_mesh_element_features(
                 element=element,
                 mesh=mesh,
                 data_path=data_path,
@@ -321,14 +368,14 @@ def process_element(
         dists, diameter = mesh_geodesics(mesh=mesh, target=element, recompute=False, dists_path=str(data_path.dists_path))
         model.load_state_dict(
             torch.load(
-                Path(data_path.flows_path, element, "checkpoint-99.pth"),
+                Path(data_path.flows_path, element, "checkpoint-9999.pth"),
                 weights_only=False,
             )["model"],
             strict=True,
         )
 
     elif representation == "sdf":
-        vertex_features = get_sdf_element_features(
+        features, vertex_features = get_sdf_element_features(
                 element=element,
                 data_path=data_path,
                 device=device,
@@ -336,6 +383,9 @@ def process_element(
 
         vertex_points_path = Path(data_path.sdf_path, element, f"{element}-vertex-voxel-projection.txt")
         vertex_points = torch.tensor(np.loadtxt(vertex_points_path).astype(np.float32)).to(device)
+        
+        points_path = Path(data_path.sdf_path, element, f"{element}-sdf-sampled-surface-points.txt")
+        points = torch.tensor(np.loadtxt(points_path).astype(np.float32)).to(device)
 
         # DEBUG: USING THE MESH GEODESICS FOR THE SDF EVALUATION
         dists, diameter = mesh_geodesics(mesh=mesh, target=element, recompute=False, dists_path=str(data_path.dists_path))
@@ -352,6 +402,31 @@ def process_element(
             strict=True,
         )
 
+    elif representation == "pt":
+        if data_path.corr_path is not None:
+            corr = np.loadtxt(Path(data_path.corr_path, element + ".vts")).astype(int)
+        else:
+            corr = np.arange(len(mesh.vertices))
+        landmarks = corr[data_path.landmarks]
+
+        points = mesh.vertices
+        vertex_points = None
+        vertex_features = None
+        features = get_pt_element_features(
+            element=element,
+            data_path=data_path,
+            device=device,
+            recompute=False,
+        )
+
+        dists, diameter = pointcloud_geodesics(pt=mesh, target=element, recompute=False, dists_path=str(data_path.dists_path))
+        model.load_state_dict(
+            torch.load(
+                Path(data_path.flows_path, element, "checkpoint-9999.pth"),
+                weights_only=False,
+            )["model"],
+            strict=True,
+        )
     else:
         raise ValueError(f"Invalid representation: {representation}")
 
@@ -359,7 +434,9 @@ def process_element(
     model.eval()
 
     return Element(
+        features=features,
         vertex_features=vertex_features,
+        points=points,
         vertex_points=vertex_points,
         model=model,
         mesh=mesh,
@@ -573,8 +650,6 @@ def run_matching_methods(
         p2p, elapsed = func()
         max_euclidean_error = torch.cdist(target_points, target_points).max().item()
 
-        max_euclidean_error = torch.cdist(target_points, target_points).max().item()
-
         if source_corr is None and target_corr is None:
             matched_points = target_points[p2p]
             euclidean_error = torch.norm(matched_points - target_points, dim=-1).mean().item() / max_euclidean_error
@@ -614,6 +689,7 @@ def log_results(source: str, target: str, results: Dict[str, MatchingResult]) ->
 
 def plot_results(
     source_points: torch.Tensor,
+    target_points: torch.Tensor,
     source: str,
     target: str,
     results: Dict[str, MatchingResult],
@@ -627,7 +703,7 @@ def plot_results(
     for name, res in results.items():
         start_end_subplot(
             source_points,
-            res.matched_points[:max_points],
+            target_points[res.indices[:max_points]],
             plots_path=str(output_dir),
             run_name=f"{name}-{source}-{target}",
             show=False,
@@ -706,8 +782,8 @@ def process_pair(
         data_path=data_path,
     )
 
-    print(f"Source features ({source_rep}): shape: {source_element.vertex_features.shape} | max: {source_element.vertex_features.max().item():.4f} | min: {source_element.vertex_features.min().item():.4f} | mean: {source_element.vertex_features.mean().item():.4f} | std: {source_element.vertex_features.std().item():.4f}")
-    print(f"Target features ({target_rep}): shape: {target_element.vertex_features.shape} | max: {target_element.vertex_features.max().item():.4f} | min: {target_element.vertex_features.min().item():.4f} | mean: {target_element.vertex_features.mean().item():.4f} | std: {target_element.vertex_features.std().item():.4f}")
+    # print(f"Source features ({source_rep}): shape: {source_element.vertex_features.shape} | max: {source_element.vertex_features.max().item():.4f} | min: {source_element.vertex_features.min().item():.4f} | mean: {source_element.vertex_features.mean().item():.4f} | std: {source_element.vertex_features.std().item():.4f}")
+    # print(f"Target features ({target_rep}): shape: {target_element.vertex_features.shape} | max: {target_element.vertex_features.max().item():.4f} | min: {target_element.vertex_features.min().item():.4f} | mean: {target_element.vertex_features.mean().item():.4f} | std: {target_element.vertex_features.std().item():.4f}")
 
     # source_geo_dists = get_geodesic_dists(source_mesh, source, data_path)
     # target_geo_dists = get_geodesic_dists(target_mesh, target, data_path)
@@ -732,6 +808,14 @@ def process_pair(
     #
     # source_landmarks = source_corr[data_path.landmarks]
     # target_landmarks = target_corr[data_path.landmarks]
+   
+    # DEBUG: PARAMETRIZE THIS WITH mesh_baseline
+    if source_rep == "pt" or target_rep == "pt":
+        tqdm.write("[INFO] Matching with features instead of vertex_features")
+        source_element.vertex_features = source_element.features
+        target_element.vertex_features = target_element.features
+        source_element.vertex_points = torch.tensor(source_element.points)
+        target_element.vertex_points = torch.tensor(target_element.points)
 
     matching_methods = get_matching_methods(
         source_features=source_element.vertex_features,
@@ -776,6 +860,7 @@ def process_pair(
     log_results(source, target, results)
     plot_results(
         source_points=source_element.vertex_points,
+        target_points=target_element.vertex_points,
         source=source,
         target=target,
         results=results,
@@ -857,15 +942,23 @@ def main(args):
     mesh_baseline = args.mesh_baseline
 
     if args.faust:
+        if args.source_rep == "pt" or args.target_rep == "pt":
+            raise ValueError("The 'pt' representation is only supported for the KINECT dataset.")
         dataset = "FAUST"
         targets = get_targets_faust(args)
     elif args.smal:
+        if args.source_rep == "pt" or args.target_rep == "pt":
+            raise ValueError("The 'pt' representation is only supported for the KINECT dataset.")
         dataset = "SMAL"
         targets = get_targets_smal(Path(config["matching_config"][dataset]["flows_path"]))
     elif args.surreal:
+        if args.source_rep == "pt" or args.target_rep == "pt":
+            raise ValueError("The 'pt' representation is only supported for the KINECT dataset.")
         dataset = "SURREAL"
         targets = get_targets_surreal(Path(config["matching_config"][dataset]["flows_path"]))
     elif args.kinect:
+        if args.source_rep != "pt" or args.target_rep != "pt":
+            raise ValueError("For KINECT dataset only 'pt' representation is supported.")
         dataset = "KINECT"
         targets = get_targets_kinect(Path(config["matching_config"][dataset]["flows_path"]))
     else:
@@ -888,8 +981,8 @@ def main(args):
         features_path=Path(config["matching_config"][dataset]["features_path"]),
         dataset_extension=config["matching_config"][dataset]["dataset_extension"],
         flows_path=Path(config["matching_config"][dataset]["flows_path"]),
-        flows_SDFs_path=Path(config["matching_config"][dataset]["flows_SDFs_path"]),
-        sdf_path=Path(config["matching_config"][dataset]["SDFs_path"]),
+        flows_SDFs_path=Path(config["matching_config"][dataset]["flows_SDFs_path"]) if "flows_SDFs_path" in config["matching_config"][dataset] else None,
+        sdf_path=Path(config["matching_config"][dataset]["SDFs_path"]) if "SDFs_path" in config["matching_config"][dataset] else None,
         corr_path=Path(config["matching_config"][dataset]["corr_path"]) if "corr_path" in config["matching_config"][dataset] else None
     )
 
@@ -1008,13 +1101,13 @@ if __name__ == "__main__":
         "--source_rep",
         type=str,
         default="mesh",
-        help="Representation of the first element in the pair (e.g., 'mesh', 'sdf')",
+        help="Representation of the first element in the pair ('mesh', 'sdf', or 'pt')",
     )
     parser.add_argument(
         "--target_rep",
         type=str,
         default="mesh",
-        help="Representation of the first element in the pair (e.g., 'mesh', 'sdf')",
+        help="Representation of the first element in the pair ('mesh', 'sdf', or 'pt')",
     )
     parser.add_argument(
         "--same",

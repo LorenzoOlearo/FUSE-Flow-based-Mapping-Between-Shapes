@@ -7,14 +7,14 @@ import argparse
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = Path('./out/flows/kinect/kinect/')
-SMAL_DIR = Path('../data/kinect_clean/off')
+OUTPUT_DIR = Path('./out/flows/kinect/kinect-diameter-norm-points/')
+KINECT_DIR = Path('./data/kinect_clean/off_clean/')
 
 
 def get_targets(overwrite) -> List[str]:
     targets = []
 
-    for file in os.listdir(SMAL_DIR):
+    for file in os.listdir(KINECT_DIR):
         if file.endswith(".off"):
             shape_name = os.path.splitext(file)[0]
             os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -37,11 +37,11 @@ def main(args):
         target_dir = Path(OUTPUT_DIR, target)
 
         working_dir = Path(str(Path(__file__).resolve()).split('/scripts')[0])
-        data_path = Path(working_dir, SMAL_DIR, f"{target}.off")
-        features_path = Path(working_dir, 'data', 'SMAL_features_pca_20', f"{target}_features.npy")
+        data_path = Path(working_dir, KINECT_DIR, f"{target}.off")
+        features_path = Path(working_dir, 'data', 'KINECT_features_pca_20', f"{target}_features.npy")
 
         smpl_landmarks = np.array([412, 5891, 6593, 3323, 2119])
-        corr = np.array(np.loadtxt(f'../data/kinect_clean/corres/{target}.vts')) # HERE I REMOVED -1
+        corr = np.array(np.loadtxt(f'./data/kinect_clean/corres/{target}.vts'))
         target_landmarks = corr[smpl_landmarks]
 
         config = {
@@ -56,13 +56,14 @@ def main(args):
             "num_steps": 64,
             "method": "FM",
             "network": "MLP",
-            "batch_size": 10000,
-            "num_points_train": 10000,
+            "batch_size": 50000,
+            "num_points_train": 50000,
             "learning_rate": 0.01,
             "distribution": "gaussian",
             "embedding_dim": 5,
             "embedding_type": "features_only",
             "features_type": "landmarks",
+            "features_normalization": "diameter",
             "landmarks": target_landmarks.tolist(),
         }
 
@@ -81,7 +82,6 @@ def main(args):
             command = [
                 "python", "main.py",
                 "--config", config_path,
-                "--features_normalization", "none",
             ]
 
         command_str = " ".join(command)
@@ -96,7 +96,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train a flow on all SMAL meshes")
+    parser = argparse.ArgumentParser(description="Train a flow on all KINECT meshes")
     parser.add_argument('--overwrite', action='store_true', help="Overwrite if an existing flow model \"checkpoint-9999.pth\" is found", default='False')
     parser.add_argument('--external', action='store_true', help="Use external precomputed features", default='False')
 

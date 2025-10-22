@@ -485,6 +485,72 @@ def mesh_geodesics(
     return shape_dists, diameter
 
 
+def pointcloud_geodesics(
+    pt: trimesh.Trimesh,
+    target: str,
+    recompute: bool,
+    dists_path: str,
+) -> tuple[np.ndarray, float]:
+    """
+    Compute or load the geodesic distance matrix and diameter of a point cloud
+    using Heat Method, with caching support.
+
+    Args:
+        pt: Trimesh object representing the point cloud geometry.
+        target: Unique identifier for the point cloud (e.g., filename stem).
+        recompute: If True, forces recomputation even if cached results exist.
+        dists_path: Directory to cache/load distance matrices and diameter CSV.
+    Returns:
+        (shape_dists, diameter):
+            shape_dists: (N, N) ndarray of geodesic distances between points.
+            diameter: Float, maximum finite distance across the point cloud.
+    """
+    
+    os.makedirs(dists_path, exist_ok=True)
+    dists_file = os.path.join(dists_path, f"{target}_dists.npy")
+    diameters_csv = os.path.join(dists_path, "diameters.csv")
+
+    # --- Load or compute full NxN distance matrix ---
+    if not recompute and os.path.exists(dists_file):
+        print(f"[INFO] Loading cached geodesic distances for '{target}'.")
+        shape_dists = np.load(dists_file)
+    else:
+        print(f"[INFO] Computing geodesic distances for '{target}' (Heat Method)...")
+
+        solver = pp3d.PointCloudHeatSolver(pt.vertices)
+        n_points = len(pt.vertices)
+        shape_dists = np.zeros((n_points, n_points), dtype=np.float32)
+
+        for idx in range(n_points):
+            shape_dists[idx, :] = solver.compute_distance(idx)
+
+        np.save(dists_file, shape_dists)
+
+    # --- Compute geodesic diameter ---
+    finite_dists = shape_dists[np.isfinite(shape_dists)]
+    diameter = float(finite_dists.max()) if finite_dists.size else 0.0
+
+    # --- Save or update diameter record ---
+    if os.path.exists(diameters_csv):
+        df = pd.read_csv(diameters_csv)
+    else:
+        df = pd.DataFrame(columns=["target", "diameter"])
+
+    if target in df["target"].values:
+        if recompute:
+            df.loc[df["target"] == target, "diameter"] = diameter
+            print(f"[INFO] Updated diameter entry for '{target}'.")
+    else:
+        df = pd.concat(
+            [df, pd.DataFrame({"target": [target], "diameter": [diameter]})],
+            ignore_index=True,
+        )
+
+    df.to_csv(diameters_csv, index=False)
+
+    return shape_dists, diameter
+
+
 ######################## # FUNCTIONS FOR COMPUTING FEATURES ########################
 
 
@@ -654,7 +720,7 @@ def compute_geodesic_distances_pointcloud(mesh, source_index):
     # Compute distances for each landmark
     distances = []
     for idx in source_index:
-        distances.append([solver.compute_distance(idx)])
+        distances.append([solver.compute_distance(int(idx))])
 
     return np.concatenate(distances, axis=0)
 
