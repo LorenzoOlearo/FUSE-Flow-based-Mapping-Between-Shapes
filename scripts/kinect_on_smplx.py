@@ -172,14 +172,25 @@ def process_pair(
     
     p2p_knn, elapsed_knn = compute_p2p_with_knn(kinect_features, smplx_features)
     p2p_flow, elapsed_flow = compute_p2p_with_flows_composition(kinect_features, smplx_features, kinect_model, smplx_model, device)
-    
-    print(f"knn uniques : {len(np.unique(p2p_knn))}, elapsed: {elapsed_knn:.4f}s")
-    print(f"flow uniques : {len(np.unique(p2p_flow))}, elapsed: {elapsed_flow:.4f}s")
+    p2p_ndp, elapsed_ndp = compute_p2p_with_ndp_sdf(source_vertex=pt.vertices, target_vertex=mesh.vertices, source_landmarks=kinect_landmarks, target_landmarks=smplx_landmarks)
     
     results = {
         "knn": p2p_knn,
-        "flow": p2p_flow 
+        "flow": p2p_flow,
+        "ndp": p2p_ndp,
     }
+
+    for method, p2p in results.items():
+        tqdm.write(f"{method} unique: {len(np.unique(p2p))} / {len(p2p)}")
+        output_path = Path(
+            skinning_config.output_path,
+            "p2p",
+            f"p2p-{method}-{source}-to-{target}",
+        )
+        os.makedirs(output_path.parent, exist_ok=True)
+        np.save(output_path, p2p.astype(int))
+        tqdm.write(f"Saved {method} p2p to {output_path}")
+        
     
     os.makedirs(skinning_config.output_path, exist_ok=True) 
     plot_results(
@@ -188,11 +199,10 @@ def process_pair(
         results=results,
         source=source,
         target=target,
-        output_dir=skinning_config.output_path,
+        output_dir=str(skinning_config.output_path),
         plot_html=True,
         plot_png=True,
     )
-
 
 
 def main(args):
