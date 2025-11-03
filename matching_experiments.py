@@ -9,7 +9,7 @@ import torch
 import trimesh
 import matplotlib.colors as mcolors
 import time
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Tuple
 from dataclasses import dataclass
 import pandas as pd
 import json
@@ -29,6 +29,7 @@ import potpourri3d as pp3d
 
 from util.matching_utils import *
 from util.metrics import *
+from util.dataset_utils import *
 from util.plot import plot_points, start_end_subplot
 from util.mesh_utils import (
     mesh_geodesics,
@@ -49,6 +50,12 @@ class DataPath:
     flows_SDFs_path: Path | None
     sdf_path: Path | None
     corr_path: Optional[Path] = None
+
+    # Common landmarks CSV for SHREC20, see dataset_utils.py on how to get this file
+    common_landmarks_path: Optional[Path] = None
+    
+    # Path to ground truth correspondences, needed because we evaluate the shrec20 dataset on the landmarks common to each pair of matched shapes
+    gts_path: Optional[Path] = None
 
 
 def plot_geodesic_comparison(vertices, faces, true_dists, dijkstra_dists, save_path):
@@ -207,6 +214,19 @@ def get_targets_surreal(flows_path) -> List[str]:
     return targets
 
 
+def get_targets_shrec20(flows_path) -> List[str]:
+    """Determine which targets to process."""
+    targets = [
+        f.name
+        for f in flows_path.iterdir()
+        if f.is_dir()
+        and (flows_path / f.name / 'checkpoint-9999.pth').is_file()
+    ]
+
+    tqdm.write(f"Processing targets: {targets}")
+    return targets
+
+
 def get_mesh_element_features(
     element: str,
     mesh: trimesh.Trimesh,
@@ -222,16 +242,16 @@ def get_mesh_element_features(
     features_path = Path(data_path.flows_path, element, f"vertex-geodesics-interpolated-vnorm.txt")
     features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
     
-    print("------------------------------------")
-    print(f"loaded vertex_features (shape {list(vertex_features.shape)}):")
-    print(f"  min: {vertex_features.min(dim=0).values.tolist()}")
-    print(f"  max: {vertex_features.max(dim=0).values.tolist()}")
-    print(f"  avg: {vertex_features.mean(dim=0).tolist()}")
-    print("------------------------------------")
-    print(f"loaded features (shape {list(vertex_features.shape)}):")
-    print(f"  min: {features.min(dim=0).values.tolist()}")
-    print(f"  max: {features.max(dim=0).values.tolist()}")
-    print(f"  avg: {features.mean(dim=0).tolist()}")
+    tqdm.write("------------------------------------")
+    tqdm.write(f"loaded vertex_features (shape {list(vertex_features.shape)}):")
+    tqdm.write(f"  min: {vertex_features.min(dim=0).values.tolist()}")
+    tqdm.write(f"  max: {vertex_features.max(dim=0).values.tolist()}")
+    tqdm.write(f"  avg: {vertex_features.mean(dim=0).tolist()}")
+    tqdm.write("------------------------------------")
+    tqdm.write(f"loaded features (shape {list(vertex_features.shape)}):")
+    tqdm.write(f"  min: {features.min(dim=0).values.tolist()}")
+    tqdm.write(f"  max: {features.max(dim=0).values.tolist()}")
+    tqdm.write(f"  avg: {features.mean(dim=0).tolist()}")
 
     # if recompute:
     #     tqdm.write(f"Computing features for {element} in {data_path.features_path}")
@@ -297,7 +317,7 @@ def get_pt_element_features(
     features_path = Path(data_path.flows_path, element, f"vertex-geodesics-vnorm.txt")
 
     if recompute:
-        print(f"Computing features for {element} in {data_path.features_path} with heat method")
+        tqdm.write(f"Computing features for {element} in {data_path.features_path} with heat method")
         features = torch.tensor(
             compute_geodesic_distances_pointcloud(
                 mesh=pt,
@@ -316,6 +336,7 @@ def get_pt_element_features(
 
 @dataclass
 class Element:
+    element: str
     features: torch.Tensor
     vertex_features: torch.Tensor
     points: torch.Tensor
@@ -339,8 +360,10 @@ def process_element(
     # The mesh is needed both for 'mesh' and 'sdf' representations because we
     # need to project the mesh vertices onto the SDF isosurface for evaluation
     mesh_path = Path(data_path.dataset_path, element + data_path.dataset_extension)
-    mesh = trimesh.load(mesh_path, process=False)
-    mesh_vertex_points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
+    if mesh_baseline:
+        mesh = trimesh.load(mesh_path, process=False)
+        mesh_vertex_points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
+        
     model = FMCond(
         channels=len(data_path.landmarks),
         network=MLP(channels=len(data_path.landmarks)).to(device),
@@ -349,6 +372,12 @@ def process_element(
     tqdm.write(f"Loading {element} with {representation} representation")
 
     if representation == "mesh":
+        if data_path.landmarks == [-1, -1, -1, -1, -1, -1] and data_path.common_landmarks_path is not None:
+            landmarks_df = pd.read_csv(data_path.common_landmarks_path)
+            target_landmarks = landmarks_df[landmarks_df['Model'] == f"{element}.obj"].iloc[0, 1:].values.astype(int)
+            landmarks = target_landmarks.tolist()
+            tqdm.write(f"[SHREC20] Loaded from common landmarks for {element}: {landmarks}")
+
         points = None
         vertex_points = mesh_vertex_points
         if data_path.corr_path is not None:
@@ -373,6 +402,7 @@ def process_element(
             )["model"],
             strict=True,
         )
+
 
     elif representation == "sdf":
         features, vertex_features = get_sdf_element_features(
@@ -434,6 +464,7 @@ def process_element(
     model.eval()
 
     return Element(
+        element=element,
         features=features,
         vertex_features=vertex_features,
         points=points,
@@ -525,6 +556,30 @@ def get_matching_methods(
                 source_landmarks=source_landmarks,
                 target_landmarks=target_landmarks,
             ),
+            "flow": lambda: compute_p2p_with_flows_composition(
+                source_features, target_features, source_model, target_model, device
+            ),
+            "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
+                source_features, target_features, source_model, target_model
+            ),
+            "flow-zoomout": lambda: compute_p2p_with_flows_composition_zoomout(
+                source_path,
+                target_path,
+                source_features,
+                target_features,
+                source_model,
+                target_model,
+                device,
+            ),
+            "flow-neural-zoomout": lambda: compute_p2p_with_flows_composition_neural_zoomout(
+                source_path,
+                target_path,
+                source_features,
+                target_features,
+                source_model,
+                target_model,
+                device,
+            ),
         }
     elif matching_methods == "baselines":
         return {
@@ -604,9 +659,13 @@ def get_matching_methods(
 def run_matching_methods_parallel(
     matching_methods,
     target_points,
+    source_element,
+    target_element,
     source_mesh,
     target_mesh,
     dists,
+    output_dir: Path,
+    gt_path: Optional[str] = None,
     source_corr=None,
     target_corr=None,
     max_workers=10,
@@ -615,13 +674,17 @@ def run_matching_methods_parallel(
 
     def wrapper(name, fn):
         return name, run_matching_methods(
-            {name: fn},
-            target_points,
-            source_mesh,
-            target_mesh,
-            dists,
-            source_corr,
-            target_corr,
+            matching_methods={name: fn},
+            target_points=target_points,
+            source_element=source_element,
+            target_element=target_element,
+            source_mesh=source_mesh,
+            target_mesh=target_mesh,
+            dists=dists,
+            output_dir=output_dir,
+            gts_path=gt_path,
+            source_corr=source_corr,
+            target_corr=target_corr,
         )[name]
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -636,11 +699,15 @@ def run_matching_methods_parallel(
 def run_matching_methods(
     matching_methods: Dict[str, Callable[[], torch.Tensor]],
     target_points: torch.Tensor,
+    source_element: Element,
+    target_element: Element,
     source_mesh: trimesh.Trimesh,
     target_mesh: trimesh.Trimesh,
     dists: np.ndarray,
+    output_dir: Path,
     source_corr=None,
     target_corr=None,
+    gts_path: Optional[str] = None
 ) -> Dict[str, MatchingResult]:
     """Run all P2P strategies and compute matched points + errors."""
     results = {}
@@ -650,7 +717,24 @@ def run_matching_methods(
         p2p, elapsed = func()
         max_euclidean_error = torch.cdist(target_points, target_points).max().item()
 
-        if source_corr is None and target_corr is None:
+        if gts_path is not None:
+            source_gt_path = f"{gts_path}/{source_element.element}.mat"
+            target_gt_path = f"{gts_path}/{target_element.element}.mat"
+            if os.path.exists(source_gt_path) and os.path.exists(target_gt_path):
+                _, common_source_landmarks, common_target_landmarks, = get_common_landmarks_between_two_models(
+                    source_gt_path,
+                    target_gt_path
+                )
+            matched_points = target_points[p2p]
+            matched_points = matched_points[common_source_landmarks]
+            target_subset = target_points[common_target_landmarks]
+            euclidean_error = torch.norm(matched_points - target_subset, dim=-1).mean().item() / max_euclidean_error
+            geodesic_error = compute_geodesic_error(dists, p2p, common_source_landmarks, common_target_landmarks) / dists.max()
+            coverage = compute_coverage(p2p, len(target_mesh.vertices))
+            dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p).item()
+            tqdm.write(f"[SHREC20 DEBUG] Evaluated on {len(common_source_landmarks)} common landmarks between {source_element.element} and {target_element.element}")
+
+        elif source_corr is None and target_corr is None:
             matched_points = target_points[p2p]
             euclidean_error = torch.norm(matched_points - target_points, dim=-1).mean().item() / max_euclidean_error
             geodesic_error = compute_geodesic_error(dists, p2p, None, None) / dists.max()
@@ -674,6 +758,12 @@ def run_matching_methods(
             coverage=coverage,
             elapsed=elapsed,
         )
+
+        p2p_dir = Path(output_dir, "p2p")
+        os.makedirs(Path(p2p_dir), exist_ok=True)
+        p2p_save_path = p2p_dir / f"p2p-{name}-{source_element.element}-{target_element.element}.npy"
+        np.save(p2p_save_path, p2p)
+        tqdm.write(f"Saved P2P mapping for {name} at {p2p_save_path}")
 
     return results
 
@@ -758,6 +848,7 @@ def process_pair(
     all_methods: str,
     features_normalization: str,
     data_path: DataPath,
+    output_dir: str,
 ) -> pd.DataFrame:
     """
     Main pipeline to process a source-target pair, evaluate multiple P2P methods,
@@ -781,33 +872,6 @@ def process_pair(
         features_normalization=features_normalization,
         data_path=data_path,
     )
-
-    # print(f"Source features ({source_rep}): shape: {source_element.vertex_features.shape} | max: {source_element.vertex_features.max().item():.4f} | min: {source_element.vertex_features.min().item():.4f} | mean: {source_element.vertex_features.mean().item():.4f} | std: {source_element.vertex_features.std().item():.4f}")
-    # print(f"Target features ({target_rep}): shape: {target_element.vertex_features.shape} | max: {target_element.vertex_features.max().item():.4f} | min: {target_element.vertex_features.min().item():.4f} | mean: {target_element.vertex_features.mean().item():.4f} | std: {target_element.vertex_features.std().item():.4f}")
-
-    # source_geo_dists = get_geodesic_dists(source_mesh, source, data_path)
-    # target_geo_dists = get_geodesic_dists(target_mesh, target, data_path)
-    # 
-    # source_features = source_features / source_geo_dists.max()
-    # target_features = target_features / target_geo_dists.max()
-    #
-    #
-    # if data_path.corr_path is not None:
-    #     source_corr = (
-    #         np.loadtxt(Path(data_path.corr_path, source + ".vts")).astype(int) 
-    #     )
-    #     target_corr = (
-    #         np.loadtxt(Path(data_path.corr_path, target + ".vts")).astype(int) 
-    #     )
-    # else:
-    #     source_corr = np.arange(len(source_mesh.vertices))
-    #     target_corr = np.arange(len(target_mesh.vertices))
-    # print(args.correspondence_offset)
-    # source_corr = source_corr+args.correspondence_offset
-    # target_corr = target_corr+args.correspondence_offset
-    #
-    # source_landmarks = source_corr[data_path.landmarks]
-    # target_landmarks = target_corr[data_path.landmarks]
    
     # DEBUG: PARAMETRIZE THIS WITH mesh_baseline
     if source_rep == "pt" or target_rep == "pt":
@@ -839,22 +903,30 @@ def process_pair(
         results = run_matching_methods(
             matching_methods=matching_methods,
             target_points=target_element.vertex_points,
+            source_element=source_element,
+            target_element=target_element,
             source_mesh=source_element.mesh,
             target_mesh=target_element.mesh,
             dists=target_element.dists,
             source_corr=source_element.corr,
-            target_corr=target_element.corr
+            target_corr=target_element.corr,
+            output_dir=output_dir,
+            gts_path=data_path.gts_path if data_path.gts_path is not None else None
         )
     else:
         tqdm.write("No correspondence path provided")
         results = run_matching_methods(
             matching_methods=matching_methods,
             target_points=target_element.vertex_points,
+            source_element=source_element,
+            target_element=target_element,
             source_mesh=source_element.mesh,
             target_mesh=target_element.mesh,
             dists=target_element.dists,
             source_corr=None,
-            target_corr=None
+            target_corr=None,
+            output_dir=output_dir,
+            gts_path=data_path.gts_path if data_path.gts_path is not None else None
         )
 
     log_results(source, target, results)
@@ -957,12 +1029,18 @@ def main(args):
         dataset = "SURREAL"
         targets = get_targets_surreal(Path(config["matching_config"][dataset]["flows_path"]))
     elif args.kinect:
-        if args.source_rep != "pt" or args.target_rep != "pt":
-            raise ValueError("For KINECT dataset only 'pt' representation is supported.")
+        # if args.pt_skinning or args.source_rep != "pt" or args.target_rep != "pt":
+        #     raise ValueError("For KINECT dataset only 'pt' representation is supported.")
         dataset = "KINECT"
         targets = get_targets_kinect(Path(config["matching_config"][dataset]["flows_path"]))
+    elif args.smplx:
+        dataset = "SMPLX"
+        targets = get_targets_smplx(Path(config["matching_config"][dataset]["flows_path"]))
+    elif args.shrec20:
+        dataset = "SHREC20"
+        targets = get_targets_shrec20(Path(config["matching_config"][dataset]["flows_path"]))
     else:
-        raise ValueError("Please specify either --faust or --smal on --kinect")
+        raise ValueError("Please specify either --faust, --smal, --kinect, --surreal, or --smplx to select the dataset.")
 
     if targets is None or len(targets) == 0:
         raise ValueError("No targets found to process.")
@@ -983,8 +1061,11 @@ def main(args):
         flows_path=Path(config["matching_config"][dataset]["flows_path"]),
         flows_SDFs_path=Path(config["matching_config"][dataset]["flows_SDFs_path"]) if "flows_SDFs_path" in config["matching_config"][dataset] else None,
         sdf_path=Path(config["matching_config"][dataset]["SDFs_path"]) if "SDFs_path" in config["matching_config"][dataset] else None,
-        corr_path=Path(config["matching_config"][dataset]["corr_path"]) if "corr_path" in config["matching_config"][dataset] else None
+        corr_path=Path(config["matching_config"][dataset]["corr_path"]) if "corr_path" in config["matching_config"][dataset] else None,
+        common_landmarks_path=Path(config["matching_config"][dataset]["common_landmarks_path"]) if dataset == "SHREC20" else None,
+        gts_path=Path(config["matching_config"][dataset]["gts_path"]) if "gts_path" in config["matching_config"][dataset] else None,
     )
+
 
     results = []
     times = []
@@ -992,12 +1073,19 @@ def main(args):
 
     if args.same:
         pairs = [(t, t) for t in targets]
+
+    elif args.pt_skinning and dataset == "KINECT":
+        sources = get_targets_smplx(Path(config["matching_config"]["SMPLX"]["smplx_template_flows_path"]))
+        targets = get_targets_kinect(Path(config["matching_config"][dataset]["flows_path"]))
+        pairs = [(s, t) for s in sources for t in targets]
     else:
+        # Default case in which we match all different pairs
         pairs = [(s, t) for s in targets for t in targets if s != t]
 
     for source, target in tqdm(pairs, desc="Processing shape pairs", unit="pair", dynamic_ncols=True):
         tqdm.write(f"Processing {source} -> {target}")
         start_time = time.perf_counter()
+
         df = process_pair(
             source=source,
             target=target,
@@ -1010,6 +1098,7 @@ def main(args):
             all_methods=args.matching_methods,
             features_normalization=args.features_normalization,
             data_path=data_path,
+            output_dir=output_dir,
         )
         elapsed_time = time.perf_counter() - start_time
         tqdm.write(f"Time taken for {source} -> {target}: {elapsed_time:.2f} seconds")
@@ -1080,6 +1169,18 @@ if __name__ == "__main__":
         default=False,
     )
     parser.add_argument(
+        "--smplx",
+        action="store_true",
+        help="Run matching methods on the SMPLX template meshes",
+        default=False,
+    )
+    parser.add_argument(
+        "--shrec20",
+        action="store_true",
+        help="Run matching methods on the SHREC20 dataset",
+        default=False,
+    )
+    parser.add_argument(
         "--mesh_baseline",
         action="store_true",
         help="Use the mesh vertices features instead of randomly sampled points",
@@ -1138,16 +1239,21 @@ if __name__ == "__main__":
         default = 0,
         type = int,
         help="offset to apply to the correspondences, in case of SMAL offset : -1, otherwise default=0"
-        
     )
-
     parser.add_argument(
         "--matching_run_name",
         type=str,
         default="",
         help="Name for the matching run, used for the output directory",
     )
-    
+    parser.add_argument(
+        "--pt_skinning",
+        action="store_true",
+        default=False,
+        help="Perform the SMPLX template skinning experiment with the Kinect point clouds",
+    )
+
+
     args = parser.parse_args()
     if args.config:
         with open(args.config, "r") as f:
