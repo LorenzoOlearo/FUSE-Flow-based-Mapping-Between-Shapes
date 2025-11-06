@@ -50,6 +50,7 @@ class DataPath:
     flows_SDFs_path: Path | None
     sdf_path: Path | None
     corr_path: Optional[Path] = None
+    corr_offset: int = 0
 
     # Common landmarks CSV for SHREC20, see dataset_utils.py on how to get this file
     common_landmarks_path: Optional[Path] = None
@@ -214,7 +215,31 @@ def get_targets_surreal(flows_path) -> List[str]:
     return targets
 
 
+def get_targets_smplx(flows_path) -> List[str]:
+    targets = []
+    targets = [
+        f.name
+        for f in flows_path.iterdir()
+        if f.is_dir()
+        and f.name.startswith(("SMPLX"))
+    ]
+    return targets
+
+
 def get_targets_shrec20(flows_path) -> List[str]:
+    """Determine which targets to process."""
+    targets = [
+        f.name
+        for f in flows_path.iterdir()
+        if f.is_dir()
+        and (flows_path / f.name / 'checkpoint-9999.pth').is_file()
+    ]
+
+    tqdm.write(f"Processing targets: {targets}")
+    return targets
+
+
+def get_targets_shrec19(flows_path) -> List[str]:
     """Determine which targets to process."""
     targets = [
         f.name
@@ -321,7 +346,7 @@ def get_pt_element_features(
         features = torch.tensor(
             compute_geodesic_distances_pointcloud(
                 mesh=pt,
-                source_index=data_path.landmarks
+                source_index=data_path.explandmarks
             )
         ).T.to(device)
     elif features_path.exists() and not recompute:
@@ -372,18 +397,35 @@ def process_element(
     tqdm.write(f"Loading {element} with {representation} representation")
 
     if representation == "mesh":
+        points = None
+        vertex_points = mesh_vertex_points
+        corr = None
+        
+        # SHREC20
         if data_path.landmarks == [-1, -1, -1, -1, -1, -1] and data_path.common_landmarks_path is not None:
             landmarks_df = pd.read_csv(data_path.common_landmarks_path)
             target_landmarks = landmarks_df[landmarks_df['Model'] == f"{element}.obj"].iloc[0, 1:].values.astype(int)
             landmarks = target_landmarks.tolist()
             tqdm.write(f"[SHREC20] Loaded from common landmarks for {element}: {landmarks}")
 
-        points = None
-        vertex_points = mesh_vertex_points
-        if data_path.corr_path is not None:
+        # SHREC19
+        elif str(data_path.dataset_path).lower().find("shrec19") != -1:
+            tqdm.write("[SHREC19] Using SHREC19 correspondences from corr_path")
+            GT_DIR = Path('./data/SHREC19_MH_dataset/SHREC19_matching_humans-master/matches/FARMgt_txt')
+            faust_landmarks = np.array([412, 5891, 6593, 3323, 2119])
+            if element != "44":
+                corr = np.array(np.loadtxt(GT_DIR / f'44_{element}.txt')).astype(int) - 1
+                landmarks = corr[faust_landmarks]
+            else:
+                corr = np.arange(len(mesh.vertices))
+                landmarks = faust_landmarks
+        
+        elif data_path.corr_path is not None:
             corr = np.loadtxt(Path(data_path.corr_path, element + ".vts")).astype(int) - 1
         else:
             corr = np.arange(len(mesh.vertices))
+            landmarks = corr[data_path.landmarks]
+
         landmarks = corr[data_path.landmarks]
 
         features, vertex_features = get_mesh_element_features(
@@ -402,7 +444,6 @@ def process_element(
             )["model"],
             strict=True,
         )
-
 
     elif representation == "sdf":
         features, vertex_features = get_sdf_element_features(
@@ -715,9 +756,17 @@ def run_matching_methods(
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         p2p, elapsed = func()
-        max_euclidean_error = torch.cdist(target_points, target_points).max().item()
+       
+        # Check if the target points are less than 50k to avoid OOM in cdist, otherwise we sample 50k points to approximate the max distance
+        if target_points.shape[0] < 50_000:
+            max_euclidean_error = torch.cdist(target_points, target_points).max().item()
+        else:
+            sample_indices = torch.randperm(target_points.shape[0])[:50000]
+            sampled_points = target_points[sample_indices]
+            max_euclidean_error = torch.cdist(sampled_points, sampled_points).max().item()
 
-        if gts_path is not None:
+        # SHREC20
+        if gts_path is not None and str(output_dir).find("shrec20") != -1:
             source_gt_path = f"{gts_path}/{source_element.element}.mat"
             target_gt_path = f"{gts_path}/{target_element.element}.mat"
             if os.path.exists(source_gt_path) and os.path.exists(target_gt_path):
@@ -733,6 +782,18 @@ def run_matching_methods(
             coverage = compute_coverage(p2p, len(target_mesh.vertices))
             dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p).item()
             tqdm.write(f"[SHREC20 DEBUG] Evaluated on {len(common_source_landmarks)} common landmarks between {source_element.element} and {target_element.element}")
+        
+        # SHREC19
+        elif gts_path is not None and str(output_dir).find("shrec19") != -1:
+            matched_points = target_points[p2p]
+            gt = np.loadtxt(f"{gts_path}/{source_element.element}_{target_element.element}.txt").astype(int) - 1
+            
+            matched_points = torch.tensor(target_element.mesh.vertices[p2p], dtype=torch.float32)
+            gt_points = torch.tensor(target_element.mesh.vertices[gt], dtype=torch.float32)
+            euclidean_error = torch.norm(matched_points - gt_points, dim=-1).mean().item() / max_euclidean_error
+            geodesic_error = compute_geodesic_error(dists, p2p, source_corr, target_corr) / dists.max()
+            dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p).item()
+            coverage = compute_coverage(p2p, len(target_mesh.vertices))
 
         elif source_corr is None and target_corr is None:
             matched_points = target_points[p2p]
@@ -896,9 +957,36 @@ def process_pair(
         target_sdf_projected_vertex_points=source_element.vertex_points,
     )
 
-    if data_path.corr_path is not None:
-        source_corr = np.loadtxt(Path(data_path.corr_path, source + ".vts")).astype(int) + args.correspondence_offset
-        target_corr = np.loadtxt(Path(data_path.corr_path, target + ".vts")).astype(int) + args.correspondence_offset
+    # Dum dum way to check if we are working with SHREC19 dataset
+    if data_path.corr_path is not None and str(data_path.corr_path).lower().find("shrec19") != -1:
+        tqdm.write("Using SHREC19 correspondences from corr_path")
+        if source != "44":
+            source_element.corr = np.array(np.loadtxt(data_path.corr_path / f'44_{source}.txt')).astype(int) - 1
+        else:
+            source_element.corr = np.arange(len(source_element.mesh.vertices))
+            
+        if target != "44":
+            target_element.corr = np.array(np.loadtxt(data_path.corr_path / f'44_{target}.txt')).astype(int) - 1
+        else:
+            target_element.corr = np.arange(len(target_element.mesh.vertices))
+            
+        results = run_matching_methods(
+            matching_methods=matching_methods,
+            target_points=target_element.vertex_points,
+            source_element=source_element,
+            target_element=target_element,
+            source_mesh=source_element.mesh,
+            target_mesh=target_element.mesh,
+            dists=target_element.dists,
+            source_corr=source_element.corr,
+            target_corr=target_element.corr,
+            output_dir=output_dir,
+            gts_path=data_path.gts_path
+        )
+
+    elif data_path.corr_path is not None:
+        source_element.corr = np.loadtxt(Path(data_path.corr_path, source + ".vts")).astype(int) + data_path.corr_offset
+        target_element.corr = np.loadtxt(Path(data_path.corr_path, target + ".vts")).astype(int) + data_path.corr_offset
         
         results = run_matching_methods(
             matching_methods=matching_methods,
@@ -911,7 +999,7 @@ def process_pair(
             source_corr=source_element.corr,
             target_corr=target_element.corr,
             output_dir=output_dir,
-            gts_path=data_path.gts_path if data_path.gts_path is not None else None
+            gts_path=data_path.gts_path
         )
     else:
         tqdm.write("No correspondence path provided")
@@ -1039,8 +1127,11 @@ def main(args):
     elif args.shrec20:
         dataset = "SHREC20"
         targets = get_targets_shrec20(Path(config["matching_config"][dataset]["flows_path"]))
+    elif args.shrec19:
+        dataset = "SHREC19"
+        targets = get_targets_shrec19(Path(config["matching_config"][dataset]["flows_path"]))
     else:
-        raise ValueError("Please specify either --faust, --smal, --kinect, --surreal, or --smplx to select the dataset.")
+        raise ValueError("Please specify either --faust, --smal, --kinect, --surreal, --smplx, --shrec20, or --shrec19 to select the dataset.")
 
     if targets is None or len(targets) == 0:
         raise ValueError("No targets found to process.")
@@ -1062,10 +1153,10 @@ def main(args):
         flows_SDFs_path=Path(config["matching_config"][dataset]["flows_SDFs_path"]) if "flows_SDFs_path" in config["matching_config"][dataset] else None,
         sdf_path=Path(config["matching_config"][dataset]["SDFs_path"]) if "SDFs_path" in config["matching_config"][dataset] else None,
         corr_path=Path(config["matching_config"][dataset]["corr_path"]) if "corr_path" in config["matching_config"][dataset] else None,
+        corr_offset=config["matching_config"][dataset]["corr_offset"] if "corr_offset" in config["matching_config"][dataset] else 0,
         common_landmarks_path=Path(config["matching_config"][dataset]["common_landmarks_path"]) if dataset == "SHREC20" else None,
         gts_path=Path(config["matching_config"][dataset]["gts_path"]) if "gts_path" in config["matching_config"][dataset] else None,
     )
-
 
     results = []
     times = []
@@ -1078,10 +1169,26 @@ def main(args):
         sources = get_targets_smplx(Path(config["matching_config"]["SMPLX"]["smplx_template_flows_path"]))
         targets = get_targets_kinect(Path(config["matching_config"][dataset]["flows_path"]))
         pairs = [(s, t) for s in sources for t in targets]
+    elif dataset == "SHREC19":
+        # Only load the pairs defined in the corr_path
+        if data_path.corr_path is None:
+            raise ValueError("For SHREC19 dataset, corr_path must be provided in the config to define the matching pairs.")
+        corr_files = [f for f in os.listdir(data_path.corr_path) if f.endswith(".txt")]
+        pairs = []
+        for f in corr_files:
+            base = os.path.splitext(f)[0]
+            parts = base.split('_')
+            if len(parts) != 2:
+                tqdm.write(f"Skipping file with unexpected format (expected 'target_source.txt'): {f}")
+            source, target = parts[0], parts[1]
+            if source in targets and target in targets:
+                if source != "43" and target != "43":
+                    pairs.append((source, target))
     else:
         # Default case in which we match all different pairs
         pairs = [(s, t) for s in targets for t in targets if s != t]
 
+    tqdm.write(f"Processing {len(pairs)} shape pairs.")
     for source, target in tqdm(pairs, desc="Processing shape pairs", unit="pair", dynamic_ncols=True):
         tqdm.write(f"Processing {source} -> {target}")
         start_time = time.perf_counter()
@@ -1181,6 +1288,12 @@ if __name__ == "__main__":
         default=False,
     )
     parser.add_argument(
+        "--shrec19",
+        action="store_true",
+        help="Run matching methods on the SHREC19 dataset",
+        default=False,
+    )
+    parser.add_argument(
         "--mesh_baseline",
         action="store_true",
         help="Use the mesh vertices features instead of randomly sampled points",
@@ -1252,7 +1365,6 @@ if __name__ == "__main__":
         default=False,
         help="Perform the SMPLX template skinning experiment with the Kinect point clouds",
     )
-
 
     args = parser.parse_args()
     if args.config:
