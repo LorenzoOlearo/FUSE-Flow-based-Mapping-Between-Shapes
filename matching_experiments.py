@@ -1184,6 +1184,13 @@ def main(args):
             if source in targets and target in targets:
                 if source != "43" and target != "43":
                     pairs.append((source, target))
+
+    elif args.source_shape is not None and args.target_shape is not None:
+        if args.source_shape not in targets:
+            raise ValueError(f"Source shape '{args.source_shape}' not found in the targets list.")
+        if args.target_shape not in targets:
+            raise ValueError(f"Target shape '{args.target_shape}' not found in the targets list.")
+        pairs = [(args.source_shape, args.target_shape)]
     else:
         # Default case in which we match all different pairs
         pairs = [(s, t) for s in targets for t in targets if s != t]
@@ -1364,6 +1371,20 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="Perform the SMPLX template skinning experiment with the Kinect point clouds",
+    )
+
+    parser.add_argument(
+        "--source_shape",
+        type=str,
+        default="",
+        help="Filename of the source shape in the specified dataset. Overrides the default behavior of matching all pairs.",
+    )
+
+    parser.add_argument(
+        "--target_shape",
+        type=str,
+        default="",
+        help="Filename of the target shape in the specified dataset. Overrides the default behavior of matching all pairs.",
     )
 
     args = parser.parse_args()
