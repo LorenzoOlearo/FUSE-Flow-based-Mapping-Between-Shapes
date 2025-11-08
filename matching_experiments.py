@@ -372,143 +372,88 @@ class Element:
     corr: np.ndarray | None
     dists: np.ndarray | None
     diameter: float | None
-
-
+    
+    
 def process_element(
     element: str,
     representation: str,
     device: str,
     mesh_baseline: bool,
     features_normalization: str,
-    data_path: DataPath,
+    data_path: "DataPath",
 ):
-    # The mesh is needed both for 'mesh' and 'sdf' representations because we
-    # need to project the mesh vertices onto the SDF isosurface for evaluation
+    """
+    Process a dataset element according to the chosen representation.
+    Returns a fully populated Element object.
+    """
+    tqdm.write(f"Loading element '{element}' with representation '{representation}'")
+
     mesh_path = Path(data_path.dataset_path, element + data_path.dataset_extension)
-    if mesh_baseline:
-        mesh = trimesh.load(mesh_path, process=False)
-        mesh_vertex_points = torch.tensor(mesh.vertices.astype(np.float32)).to(device)
-        
-    model = FMCond(
-        channels=len(data_path.landmarks),
-        network=MLP(channels=len(data_path.landmarks)).to(device),
+    mesh = trimesh.load(mesh_path, process=False) if mesh_baseline else None
+
+    model = _init_model(len(data_path.landmarks), device)
+
+    # Dispatch to representation-specific processing
+    if representation == "mesh":
+        element = _process_mesh_element(element, mesh, model, device, data_path)
+    elif representation == "sdf":
+        raise NotImplementedError("SDF representation disabled.")
+        # element = _process_sdf_element(element, mesh, model, device, data_path)
+    elif representation == "pt":
+        raise NotImplementedError("Point cloud representation disabled.")
+        # element = _process_pt_element(element, mesh, model, device, data_path)
+    else:
+        raise ValueError(f"Invalid representation: '{representation}'")
+    
+    element.mesh = mesh
+
+    return element
+
+
+def _init_model(num_channels: int, device: str):
+    """Initialize the functional map conditioning model."""
+    return FMCond(
+        channels=num_channels,
+        network=MLP(channels=num_channels).to(device),
     )
 
-    tqdm.write(f"Loading {element} with {representation} representation")
 
-    if representation == "mesh":
-        points = None
-        vertex_points = mesh_vertex_points
-        corr = None
-        
-        # SHREC20
-        if data_path.landmarks == [-1, -1, -1, -1, -1, -1] and data_path.common_landmarks_path is not None:
-            landmarks_df = pd.read_csv(data_path.common_landmarks_path)
-            target_landmarks = landmarks_df[landmarks_df['Model'] == f"{element}.obj"].iloc[0, 1:].values.astype(int)
-            landmarks = target_landmarks.tolist()
-            tqdm.write(f"[SHREC20] Loaded from common landmarks for {element}: {landmarks}")
+def _process_mesh_element(element, mesh, model, device, data_path) -> Element:
+    """Process a mesh-based representation element."""
+    corr, landmarks = _load_landmarks_and_correspondences(element, mesh, data_path)
 
-        # SHREC19
-        elif str(data_path.dataset_path).lower().find("shrec19") != -1:
-            tqdm.write("[SHREC19] Using SHREC19 correspondences from corr_path")
-            GT_DIR = Path('./data/SHREC19_MH_dataset/SHREC19_matching_humans-master/matches/FARMgt_txt')
-            faust_landmarks = np.array([412, 5891, 6593, 3323, 2119])
-            if element != "44":
-                corr = np.array(np.loadtxt(GT_DIR / f'44_{element}.txt')).astype(int) - 1
-                landmarks = corr[faust_landmarks]
-            else:
-                corr = np.arange(len(mesh.vertices))
-                landmarks = faust_landmarks
-        
-        elif data_path.corr_path is not None:
-            corr = np.loadtxt(Path(data_path.corr_path, element + ".vts")).astype(int) - 1
-        else:
-            corr = np.arange(len(mesh.vertices))
-            landmarks = corr[data_path.landmarks]
+    features, vertex_features = get_mesh_element_features(
+        element=element,
+        mesh=mesh,
+        data_path=data_path,
+        landmarks=data_path.landmarks,
+        device=device,
+        recompute=True,
+    )
 
-        landmarks = corr[data_path.landmarks]
+    dists, diameter = mesh_geodesics(
+        mesh=mesh,
+        target=element,
+        recompute=True,
+        dists_path=str(data_path.dists_path),
+    )
 
-        features, vertex_features = get_mesh_element_features(
-                element=element,
-                mesh=mesh,
-                data_path=data_path,
-                landmarks=data_path.landmarks,
-                device=device,
-                recompute=True
-        )
-        dists, diameter = mesh_geodesics(mesh=mesh, target=element, recompute=False, dists_path=str(data_path.dists_path))
-        model.load_state_dict(
-            torch.load(
-                Path(data_path.flows_path, element, "checkpoint-9999.pth"),
-                weights_only=False,
-            )["model"],
-            strict=True,
-        )
+    # Apply correspondence ordering
+    features = features[corr]
+    vertex_features = vertex_features[corr]
+    vertex_points = torch.as_tensor(mesh.vertices[corr], dtype=torch.float32, device=device)
+    points, _ = trimesh.sample.sample_surface(mesh, 100_000)
+    points = torch.as_tensor(points, dtype=torch.float32, device=device)
 
-    elif representation == "sdf":
-        features, vertex_features = get_sdf_element_features(
-                element=element,
-                data_path=data_path,
-                device=device,
-        )
-
-        vertex_points_path = Path(data_path.sdf_path, element, f"{element}-vertex-voxel-projection.txt")
-        vertex_points = torch.tensor(np.loadtxt(vertex_points_path).astype(np.float32)).to(device)
-        
-        points_path = Path(data_path.sdf_path, element, f"{element}-sdf-sampled-surface-points.txt")
-        points = torch.tensor(np.loadtxt(points_path).astype(np.float32)).to(device)
-
-        # DEBUG: USING THE MESH GEODESICS FOR THE SDF EVALUATION
-        dists, diameter = mesh_geodesics(mesh=mesh, target=element, recompute=False, dists_path=str(data_path.dists_path))
-        
-        # DEBUG FOR FAUST ONLY
-        corr = None
-        landmarks = data_path.landmarks
-
-        model.load_state_dict(
-            torch.load(
-                Path(data_path.flows_SDFs_path, element, "checkpoint-9999.pth"),
-                weights_only=False,
-            )["model"],
-            strict=True,
-        )
-
-    elif representation == "pt":
-        if data_path.corr_path is not None:
-            corr = np.loadtxt(Path(data_path.corr_path, element + ".vts")).astype(int)
-        else:
-            corr = np.arange(len(mesh.vertices))
-        landmarks = corr[data_path.landmarks]
-
-        points = mesh.vertices
-        vertex_points = None
-        vertex_features = None
-        features = get_pt_element_features(
-            element=element,
-            data_path=data_path,
-            device=device,
-            recompute=False,
-        )
-
-        dists, diameter = pointcloud_geodesics(pt=mesh, target=element, recompute=False, dists_path=str(data_path.dists_path))
-        model.load_state_dict(
-            torch.load(
-                Path(data_path.flows_path, element, "checkpoint-9999.pth"),
-                weights_only=False,
-            )["model"],
-            strict=True,
-        )
-    else:
-        raise ValueError(f"Invalid representation: {representation}")
-
-    model.to(device)
-    model.eval()
+    model_path = Path(data_path.flows_path, element, "checkpoint-9999.pth")
+    model.load_state_dict(torch.load(model_path, weights_only=False)["model"], strict=True)
+    model.to(device).eval()
 
     return Element(
         element=element,
         features=features,
         vertex_features=vertex_features,
-        points=points,
+        points=torch,
         vertex_points=vertex_points,
         model=model,
         mesh=mesh,
@@ -517,6 +462,123 @@ def process_element(
         dists=dists,
         diameter=diameter,
     )
+
+
+# def _process_sdf_element(element, mesh, model, device, data_path) -> Element:
+#     """Process an SDF-based representation element."""
+#     vertex_points = np.loadtxt(
+#         Path(data_path.sdf_path, element, f"{element}-vertex-voxel-projection.txt")
+#     ).astype(np.float32)
+
+#     points = np.loadtxt(
+#         Path(data_path.sdf_path, element, f"{element}-sdf-sampled-surface-points.txt")
+#     ).astype(np.float32)
+
+#     features, vertex_features = get_sdf_element_features(
+#         element=element, data_path=data_path, device=device
+#     )
+
+#     corr = np.arange(len(vertex_points))
+#     landmarks = np.array(data_path.landmarks)
+
+#     dists, diameter = mesh_geodesics(
+#         mesh=mesh, target=element, recompute=False, dists_path=str(data_path.dists_path)
+#     )
+
+#     model_path = Path(data_path.flows_SDFs_path, element, "checkpoint-9999.pth")
+#     model.load_state_dict(torch.load(model_path, weights_only=False)["model"], strict=True)
+#     model.to(device).eval()
+
+#     return Element(
+#         element=element,
+#         features=features,
+#         vertex_features=vertex_features,
+#         points=torch.as_tensor(points, dtype=torch.float32, device=device),
+#         vertex_points=torch.as_tensor(vertex_points, dtype=torch.float32, device=device),
+#         model=model,
+#         mesh=mesh,
+#         landmarks=landmarks,
+#         corr=corr,
+#         dists=dists,
+#         diameter=diameter,
+#     )
+
+
+# def _process_pt_element(element, mesh, model, device, data_path) -> Element:
+#     """Process a point cloud-based representation element."""
+#     corr = _load_correspondence_file(element, data_path.corr_path, mesh, data_path.corr_offset)
+#     landmarks = corr[data_path.landmarks]
+
+#     features = get_pt_element_features(
+#         element=element, data_path=data_path, device=device, recompute=False
+#     )
+
+#     dists, diameter = pointcloud_geodesics(
+#         pt=mesh, target=element, recompute=False, dists_path=str(data_path.dists_path)
+#     )
+
+#     features = features[corr]
+
+#     model_path = Path(data_path.flows_path, element, "checkpoint-9999.pth")
+#     model.load_state_dict(torch.load(model_path, weights_only=False)["model"], strict=True)
+#     model.to(device).eval()
+
+#     return Element(
+#         element=element,
+#         features=features,
+#         vertex_features=None,
+#         points=torch.as_tensor(mesh.vertices[corr], dtype=torch.float32, device=device),
+#         vertex_points=None,
+#         model=model,
+#         mesh=mesh,
+#         landmarks=landmarks,
+#         corr=corr,
+#         dists=dists[corr][:, corr],
+#         diameter=diameter,
+#     )
+
+
+def _load_landmarks_and_correspondences(element, mesh, data_path):
+    """Handle SHREC19/20 dataset-specific landmark logic and default correspondences."""
+    # SHREC20 fix
+    if (
+        data_path.landmarks == [-1, -1, -1, -1, -1, -1]
+        and data_path.common_landmarks_path is not None
+    ):
+        df = pd.read_csv(data_path.common_landmarks_path)
+        row = df[df["Model"] == f"{element}.obj"]
+        if not row.empty:
+            landmarks = row.iloc[0, 1:].values.astype(int).tolist()
+            tqdm.write(f"[SHREC20] Common landmarks loaded for {element}: {landmarks}")
+            corr = np.arange(len(mesh.vertices))
+            return corr, landmarks
+
+    # SHREC19 fix
+    if "shrec19" in str(data_path.dataset_path).lower():
+        tqdm.write("[SHREC19] Using SHREC19 correspondences from GT files")
+        GT_DIR = Path("./data/SHREC19_MH_dataset/SHREC19_matching_humans-master/matches/FARMgt_txt")
+        faust_landmarks = np.array([412, 5891, 6593, 3323, 2119])
+        if element != "44":
+            corr = np.loadtxt(GT_DIR / f"44_{element}.txt").astype(int) + data_path.corr_offset
+            landmarks = corr[faust_landmarks]
+        else:
+            corr = np.arange(len(mesh.vertices))
+            landmarks = faust_landmarks
+        return corr, landmarks
+
+    # Default case
+    corr = _load_correspondence_file(element, data_path.corr_path, mesh, data_path.corr_offset)
+    landmarks = corr[data_path.landmarks]
+    return corr, landmarks
+
+
+def _load_correspondence_file(element, corr_path, mesh, corr_offset):
+    """Load correspondence indices from file if available."""
+    if corr_path is None:
+        print("[CORR] No correspondence path provided, using identity mapping.")
+        return np.arange(len(mesh.vertices))
+    path = Path(corr_path, element + ".vts")
+    return np.loadtxt(path).astype(int) + corr_offset
 
 
 @dataclass
@@ -737,78 +799,70 @@ def run_matching_methods_parallel(
     return results
 
 
+def approx_max_euclidean_distance(points: torch.Tensor, sample_size: int) -> float:
+    """Approximate the maximum Euclidean distance using random sampling."""
+    num_points = points.shape[0]
+    if num_points <= sample_size:
+        return torch.cdist(points, points).max().item()
+
+    idx1 = torch.randperm(num_points)[:sample_size]
+    sampled_points = points[idx1]
+    cd = torch.cdist(sampled_points, sampled_points)
+    max_dist = cd.max().item()
+    return max_dist
+
+
 def run_matching_methods(
-    matching_methods: Dict[str, Callable[[], torch.Tensor]],
+    matching_methods: dict[str, callable],
     target_points: torch.Tensor,
     source_element: Element,
     target_element: Element,
-    source_mesh: trimesh.Trimesh,
-    target_mesh: trimesh.Trimesh,
-    dists: np.ndarray,
+    target_element_dists: np.ndarray,
     output_dir: Path,
-    source_corr=None,
-    target_corr=None,
-    gts_path: Optional[str] = None
-) -> Dict[str, MatchingResult]:
-    """Run all P2P strategies and compute matched points + errors."""
+    gts_path: str | None = None,
+) -> dict[str, MatchingResult]:
+    """
+    Run all P2P strategies and compute matched points + errors.
+    Assumes Elements are already permuted and aligned (corr applied in process_element).
+    """
     results = {}
+
     for name, func in matching_methods.items():
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         p2p, elapsed = func()
-       
-        # Check if the target points are less than 50k to avoid OOM in cdist, otherwise we sample 50k points to approximate the max distance
-        if target_points.shape[0] < 50_000:
+        
+        matched_points = target_points[p2p]
+
+        if target_points.shape[0] <= 50_000:
             max_euclidean_error = torch.cdist(target_points, target_points).max().item()
         else:
-            sample_indices = torch.randperm(target_points.shape[0])[:50000]
-            sampled_points = target_points[sample_indices]
-            max_euclidean_error = torch.cdist(sampled_points, sampled_points).max().item()
+            max_euclidean_error = approx_max_euclidean_distance(target_points, sample_size=50_000)
 
         # SHREC20
-        if gts_path is not None and str(output_dir).find("shrec20") != -1:
-            source_gt_path = f"{gts_path}/{source_element.element}.mat"
-            target_gt_path = f"{gts_path}/{target_element.element}.mat"
-            if os.path.exists(source_gt_path) and os.path.exists(target_gt_path):
-                _, common_source_landmarks, common_target_landmarks, = get_common_landmarks_between_two_models(
-                    source_gt_path,
-                    target_gt_path
+        if gts_path is not None and "shrec20" in str(gts_path).lower():
+            source_gt_path = Path(gts_path) / f"{source_element.element}.mat"
+            target_gt_path = Path(gts_path) / f"{target_element.element}.mat"
+            if source_gt_path.exists() and target_gt_path.exists():
+                _, common_source_landmarks, common_target_landmarks = get_common_landmarks_between_two_models(
+                    source_gt_path, target_gt_path
                 )
-            matched_points = target_points[p2p]
-            matched_points = matched_points[common_source_landmarks]
-            target_subset = target_points[common_target_landmarks]
-            euclidean_error = torch.norm(matched_points - target_subset, dim=-1).mean().item() / max_euclidean_error
-            geodesic_error = compute_geodesic_error(dists, p2p, common_source_landmarks, common_target_landmarks) / dists.max()
-            coverage = compute_coverage(p2p, len(target_mesh.vertices))
-            dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p).item()
-            tqdm.write(f"[SHREC20 DEBUG] Evaluated on {len(common_source_landmarks)} common landmarks between {source_element.element} and {target_element.element}")
+                matched_points_subset = matched_points[common_source_landmarks]
+                target_subset = target_points[common_target_landmarks]
+                euclidean_error = torch.norm(matched_points_subset - target_subset, dim=-1).mean().item() / max_euclidean_error
+                geodesic_error = compute_geodesic_error(target_element_dists, p2p, common_source_landmarks, common_target_landmarks) / target_element_dists.max()
+                tqdm.write(f"[SHREC20] Evaluated on {len(common_source_landmarks)} landmarks between {source_element.element} and {target_element.element}")
+            else:
+                euclidean_error = torch.norm(matched_points - target_points, dim=-1).mean().item() / max_euclidean_error
+                geodesic_error = compute_geodesic_error(target_element_dists, p2p, None, None) / target_element_dists.max()
         
-        # SHREC19
-        elif gts_path is not None and str(output_dir).find("shrec19") != -1:
-            matched_points = target_points[p2p]
-            gt = np.loadtxt(f"{gts_path}/{source_element.element}_{target_element.element}.txt").astype(int) - 1
-            
-            matched_points = torch.tensor(target_element.mesh.vertices[p2p], dtype=torch.float32)
-            gt_points = torch.tensor(target_element.mesh.vertices[gt], dtype=torch.float32)
-            euclidean_error = torch.norm(matched_points - gt_points, dim=-1).mean().item() / max_euclidean_error
-            geodesic_error = compute_geodesic_error(dists, p2p, source_corr, target_corr) / dists.max()
-            dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p).item()
-            coverage = compute_coverage(p2p, len(target_mesh.vertices))
-
-        elif source_corr is None and target_corr is None:
-            matched_points = target_points[p2p]
-            euclidean_error = torch.norm(matched_points - target_points, dim=-1).mean().item() / max_euclidean_error
-            geodesic_error = compute_geodesic_error(dists, p2p, None, None) / dists.max()
-            dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p).item()
-            coverage = compute_coverage(p2p, len(target_mesh.vertices))
         else:
-            tqdm.write(f"Applying correspondences alignment for {name}")
-            matched_points = target_points[p2p[source_corr]]
-            target_points_corr = target_points[target_corr]
-            euclidean_error = torch.norm(matched_points - target_points_corr, dim=-1).mean().item() / max_euclidean_error
-            geodesic_error = compute_geodesic_error(dists, p2p, source_corr, target_corr) / dists.max()
-            dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p).item()
-            coverage = compute_coverage(p2p, len(target_mesh.vertices))
+            euclidean_error = torch.norm(matched_points - target_points, dim=-1).mean().item() / max_euclidean_error
+            target_element_dists = target_element.dists
+            geodesic_error = compute_geodesic_error(target_element_dists, p2p, None, None) / target_element_dists.max()
+            coverage = compute_coverage(p2p, target_element.vertex_points.shape[0])
+            # dirichlet_energy = compute_dirichlet_energy(source_element.mesh, target_element.mesh, p2p).item()
+            dirichlet_energy = -1
 
         results[name] = MatchingResult(
             indices=p2p,
@@ -820,11 +874,10 @@ def run_matching_methods(
             elapsed=elapsed,
         )
 
-        p2p_dir = Path(output_dir, "p2p")
-        os.makedirs(Path(p2p_dir), exist_ok=True)
-        p2p_save_path = p2p_dir / f"p2p-{name}-{source_element.element}-{target_element.element}.npy"
-        np.save(p2p_save_path, p2p)
-        tqdm.write(f"Saved P2P mapping for {name} at {p2p_save_path}")
+        p2p_dir = output_dir / "p2p"
+        p2p_dir.mkdir(parents=True, exist_ok=True)
+        np.save(p2p_dir / f"p2p-{name}-{source_element.element}-{target_element.element}.npy", p2p)
+        tqdm.write(f"Saved P2P mapping for {name} at {p2p_dir}")
 
     return results
 
@@ -908,12 +961,26 @@ def process_pair(
     plot_png: bool,
     all_methods: str,
     features_normalization: str,
-    data_path: DataPath,
+    data_path: "DataPath",
     output_dir: str,
 ) -> pd.DataFrame:
     """
-    Main pipeline to process a source-target pair, evaluate multiple P2P methods,
-    log and plot results, and return a DataFrame of errors.
+    Main pipeline to process a source-target pair for shape matching.
+    Handles loading, feature extraction, matching, evaluation, and visualization.
+
+    Args:
+        source, target (str): Source and target element identifiers.
+        source_rep, target_rep (str): Representation types ('mesh', 'sdf', or 'pt').
+        device (str): Device to use for computation.
+        mesh_baseline (bool): Whether to use the mesh as the base geometry.
+        plot_html, plot_png (bool): Whether to export visualization plots.
+        all_methods (str): Matching methods to evaluate.
+        features_normalization (str): Feature normalization scheme.
+        data_path (DataPath): Container for dataset paths.
+        output_dir (str): Directory to store results.
+
+    Returns:
+        pd.DataFrame: Results table containing evaluation metrics for all methods.
     """
 
     source_element = process_element(
@@ -933,14 +1000,13 @@ def process_pair(
         features_normalization=features_normalization,
         data_path=data_path,
     )
-   
-    # DEBUG: PARAMETRIZE THIS WITH mesh_baseline
+
     if source_rep == "pt" or target_rep == "pt":
         tqdm.write("[INFO] Matching with features instead of vertex_features")
         source_element.vertex_features = source_element.features
         target_element.vertex_features = target_element.features
-        source_element.vertex_points = torch.tensor(source_element.points)
-        target_element.vertex_points = torch.tensor(target_element.points)
+        source_element.vertex_points = torch.as_tensor(source_element.points, device=device, dtype=torch.float32)
+        target_element.vertex_points = torch.as_tensor(target_element.points, device=device, dtype=torch.float32)
 
     matching_methods = get_matching_methods(
         source_features=source_element.vertex_features,
@@ -953,71 +1019,22 @@ def process_pair(
         target_landmarks=target_element.landmarks,
         device=device,
         matching_methods=all_methods,
-        source_sdf_projected_vertex_points=target_element.vertex_points,
-        target_sdf_projected_vertex_points=source_element.vertex_points,
+        source_sdf_projected_vertex_points=source_element.vertex_points,
+        target_sdf_projected_vertex_points=target_element.vertex_points,
     )
 
-    # Dum dum way to check if we are working with SHREC19 dataset
-    if data_path.corr_path is not None and str(data_path.corr_path).lower().find("shrec19") != -1:
-        tqdm.write("Using SHREC19 correspondences from corr_path")
-        if source != "44":
-            source_element.corr = np.array(np.loadtxt(data_path.corr_path / f'44_{source}.txt')).astype(int) - 1
-        else:
-            source_element.corr = np.arange(len(source_element.mesh.vertices))
-            
-        if target != "44":
-            target_element.corr = np.array(np.loadtxt(data_path.corr_path / f'44_{target}.txt')).astype(int) - 1
-        else:
-            target_element.corr = np.arange(len(target_element.mesh.vertices))
-            
-        results = run_matching_methods(
-            matching_methods=matching_methods,
-            target_points=target_element.vertex_points,
-            source_element=source_element,
-            target_element=target_element,
-            source_mesh=source_element.mesh,
-            target_mesh=target_element.mesh,
-            dists=target_element.dists,
-            source_corr=source_element.corr,
-            target_corr=target_element.corr,
-            output_dir=output_dir,
-            gts_path=data_path.gts_path
-        )
-
-    elif data_path.corr_path is not None:
-        source_element.corr = np.loadtxt(Path(data_path.corr_path, source + ".vts")).astype(int) + data_path.corr_offset
-        target_element.corr = np.loadtxt(Path(data_path.corr_path, target + ".vts")).astype(int) + data_path.corr_offset
-        
-        results = run_matching_methods(
-            matching_methods=matching_methods,
-            target_points=target_element.vertex_points,
-            source_element=source_element,
-            target_element=target_element,
-            source_mesh=source_element.mesh,
-            target_mesh=target_element.mesh,
-            dists=target_element.dists,
-            source_corr=source_element.corr,
-            target_corr=target_element.corr,
-            output_dir=output_dir,
-            gts_path=data_path.gts_path
-        )
-    else:
-        tqdm.write("No correspondence path provided")
-        results = run_matching_methods(
-            matching_methods=matching_methods,
-            target_points=target_element.vertex_points,
-            source_element=source_element,
-            target_element=target_element,
-            source_mesh=source_element.mesh,
-            target_mesh=target_element.mesh,
-            dists=target_element.dists,
-            source_corr=None,
-            target_corr=None,
-            output_dir=output_dir,
-            gts_path=data_path.gts_path if data_path.gts_path is not None else None
-        )
+    results = run_matching_methods(
+        matching_methods=matching_methods,
+        target_points=target_element.vertex_points,
+        source_element=source_element,
+        target_element=target_element,
+        target_element_dists=target_element.dists,
+        output_dir=output_dir,
+        gts_path=data_path.gts_path,
+    )
 
     log_results(source, target, results)
+
     plot_results(
         source_points=source_element.vertex_points,
         target_points=target_element.vertex_points,
@@ -1030,9 +1047,8 @@ def process_pair(
         max_points=100_000,
     )
 
-    rows = []
-    for name, res in results.items():
-        rows.append(
+    df = pd.DataFrame(
+        [
             {
                 "source": source,
                 "target": target,
@@ -1043,8 +1059,9 @@ def process_pair(
                 "coverage": res.coverage,
                 "elapsed": res.elapsed,
             }
-        )
-    df = pd.DataFrame(rows)
+            for name, res in results.items()
+        ]
+    )
 
     return df
 
@@ -1376,14 +1393,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--source_shape",
         type=str,
-        default="",
+        default=None,
         help="Filename of the source shape in the specified dataset. Overrides the default behavior of matching all pairs.",
     )
 
     parser.add_argument(
         "--target_shape",
         type=str,
-        default="",
+        default=None,
         help="Filename of the target shape in the specified dataset. Overrides the default behavior of matching all pairs.",
     )
 
