@@ -778,7 +778,7 @@ def run_matching_methods(
             matched_points = matched_points[common_source_landmarks]
             target_subset = target_points[common_target_landmarks]
             euclidean_error = torch.norm(matched_points - target_subset, dim=-1).mean().item() / max_euclidean_error
-            geodesic_error = compute_geodesic_error(dists, p2p, common_source_landmarks, common_target_landmarks) / dists.max()
+            geodesic_error = compute_geodesic_error(dists, p2p, common_source_landmarks, common_target_landmarks)
             coverage = compute_coverage(p2p, len(target_mesh.vertices))
             dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p).item()
             tqdm.write(f"[SHREC20 DEBUG] Evaluated on {len(common_source_landmarks)} common landmarks between {source_element.element} and {target_element.element}")
@@ -791,14 +791,14 @@ def run_matching_methods(
             matched_points = torch.tensor(target_element.mesh.vertices[p2p], dtype=torch.float32)
             gt_points = torch.tensor(target_element.mesh.vertices[gt], dtype=torch.float32)
             euclidean_error = torch.norm(matched_points - gt_points, dim=-1).mean().item() / max_euclidean_error
-            geodesic_error = compute_geodesic_error(dists, p2p, source_corr, target_corr) / dists.max()
+            geodesic_error = compute_geodesic_error(dists, p2p, source_corr, target_corr)
             dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p).item()
             coverage = compute_coverage(p2p, len(target_mesh.vertices))
 
         elif source_corr is None and target_corr is None:
             matched_points = target_points[p2p]
             euclidean_error = torch.norm(matched_points - target_points, dim=-1).mean().item() / max_euclidean_error
-            geodesic_error = compute_geodesic_error(dists, p2p, None, None) / dists.max()
+            geodesic_error = compute_geodesic_error(dists, p2p, None, None)
             dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p).item()
             coverage = compute_coverage(p2p, len(target_mesh.vertices))
         else:
@@ -806,7 +806,7 @@ def run_matching_methods(
             matched_points = target_points[p2p[source_corr]]
             target_points_corr = target_points[target_corr]
             euclidean_error = torch.norm(matched_points - target_points_corr, dim=-1).mean().item() / max_euclidean_error
-            geodesic_error = compute_geodesic_error(dists, p2p, source_corr, target_corr) / dists.max()
+            geodesic_error = compute_geodesic_error(dists, p2p, source_corr, target_corr)
             dirichlet_energy = compute_dirichlet_energy(source_mesh, target_mesh, p2p).item()
             coverage = compute_coverage(p2p, len(target_mesh.vertices))
 
