@@ -553,10 +553,9 @@ def _load_landmarks_and_correspondences(element, mesh, data_path):
     # SHREC19 fix
     if "shrec19" in str(data_path.dataset_path).lower():
         tqdm.write("[SHREC19] Using SHREC19 correspondences from GT files")
-        GT_DIR = Path("./data/SHREC19_MH_dataset/SHREC19_matching_humans-master/matches/FARMgt_txt")
         faust_landmarks = np.array([412, 5891, 6593, 3323, 2119])
         if element != "44":
-            corr = np.loadtxt(GT_DIR / f"44_{element}.txt").astype(int) + data_path.corr_offset
+            corr = np.loadtxt(data_path.corr_path / f"44_{element}.txt").astype(int) + data_path.corr_offset
             landmarks = corr[faust_landmarks]
         else:
             corr = np.arange(len(mesh.vertices))
