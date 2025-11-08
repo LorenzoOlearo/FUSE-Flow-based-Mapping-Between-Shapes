@@ -26,9 +26,9 @@ def compute_geodesic_error(dists, p2p, corr_a=None, corr_b=None):
     """
     if corr_a is None or corr_b is None:
         p2p_gt = np.arange(len(p2p))
-        return dists[p2p, p2p_gt].mean()/dists.max()
+        return dists[p2p, p2p_gt].mean() / dists.max()
     else:
-        return dists[p2p[corr_a], corr_b].mean()/dists.max()
+        return dists[p2p[corr_a], corr_b].mean() / dists.max()
 
 
 def compute_dirichlet_energy(mesh, mesh_target, p2p):
@@ -67,12 +67,13 @@ def compute_dirichlet_energy(mesh, mesh_target, p2p):
     return total_energy / mesh_gf.n_vertices
 
 
-def compute_coverage(p2p, target_vertices_count):
+def compute_coverage(p2p, source_vertices, target_vertices):
     """
-    Compute coverage of the mapping (what percentage of target vertices are mapped to).
+    Ratio of unique target vertices covered by the mapping from source to
+    target, adjusted by the cardinality ratio.
     """
-    # Count how many unique vertices in the target are being mapped to
     unique_targets = np.unique(p2p)
-    coverage_ratio = len(unique_targets) / target_vertices_count
+    cardinality_ratio = len(target_vertices) / len(source_vertices)
+    coverage_ratio = (len(unique_targets) / len(target_vertices)) * cardinality_ratio
 
     return coverage_ratio

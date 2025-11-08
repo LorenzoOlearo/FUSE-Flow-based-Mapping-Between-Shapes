@@ -422,28 +422,25 @@ def _process_mesh_element(element, mesh, model, device, data_path) -> Element:
     """Process a mesh-based representation element."""
     corr, landmarks = _load_landmarks_and_correspondences(element, mesh, data_path)
 
+    points, _ = trimesh.sample.sample_surface(mesh, 100_000)
+    points = torch.as_tensor(points, dtype=torch.float32, device=device)
+    vertex_points = torch.as_tensor(mesh.vertices, dtype=torch.float32, device=device)
+    
     features, vertex_features = get_mesh_element_features(
         element=element,
         mesh=mesh,
         data_path=data_path,
         landmarks=data_path.landmarks,
         device=device,
-        recompute=True,
+        recompute=False,
     )
 
     dists, diameter = mesh_geodesics(
         mesh=mesh,
         target=element,
-        recompute=True,
+        recompute=False,
         dists_path=str(data_path.dists_path),
     )
-
-    # Apply correspondence ordering
-    features = features[corr]
-    vertex_features = vertex_features[corr]
-    vertex_points = torch.as_tensor(mesh.vertices[corr], dtype=torch.float32, device=device)
-    points, _ = trimesh.sample.sample_surface(mesh, 100_000)
-    points = torch.as_tensor(points, dtype=torch.float32, device=device)
 
     model_path = Path(data_path.flows_path, element, "checkpoint-9999.pth")
     model.load_state_dict(torch.load(model_path, weights_only=False)["model"], strict=True)
@@ -453,7 +450,7 @@ def _process_mesh_element(element, mesh, model, device, data_path) -> Element:
         element=element,
         features=features,
         vertex_features=vertex_features,
-        points=torch,
+        points=points,
         vertex_points=vertex_points,
         model=model,
         mesh=mesh,
@@ -832,7 +829,8 @@ def run_matching_methods(
             torch.cuda.synchronize()
         p2p, elapsed = func()
         
-        matched_points = target_points[p2p]
+        matched_points = target_points[p2p[source_element.corr]]
+        target_points_corr = target_element.vertex_points[target_element.corr]
 
         if target_points.shape[0] <= 50_000:
             max_euclidean_error = torch.cdist(target_points, target_points).max().item()
@@ -851,18 +849,14 @@ def run_matching_methods(
                 target_subset = target_points[common_target_landmarks]
                 euclidean_error = torch.norm(matched_points_subset - target_subset, dim=-1).mean().item() / max_euclidean_error
                 geodesic_error = compute_geodesic_error(target_element_dists, p2p, common_source_landmarks, common_target_landmarks) / target_element_dists.max()
+                coverage = compute_coverage(p2p[common_source_landmarks], common_source_landmarks, common_target_landmarks)
+                dirichlet_energy = compute_dirichlet_energy(source_element.mesh, target_element.mesh, p2p).item()
                 tqdm.write(f"[SHREC20] Evaluated on {len(common_source_landmarks)} landmarks between {source_element.element} and {target_element.element}")
-            else:
-                euclidean_error = torch.norm(matched_points - target_points, dim=-1).mean().item() / max_euclidean_error
-                geodesic_error = compute_geodesic_error(target_element_dists, p2p, None, None) / target_element_dists.max()
-        
         else:
-            euclidean_error = torch.norm(matched_points - target_points, dim=-1).mean().item() / max_euclidean_error
-            target_element_dists = target_element.dists
-            geodesic_error = compute_geodesic_error(target_element_dists, p2p, None, None) / target_element_dists.max()
-            coverage = compute_coverage(p2p, target_element.vertex_points.shape[0])
-            # dirichlet_energy = compute_dirichlet_energy(source_element.mesh, target_element.mesh, p2p).item()
-            dirichlet_energy = -1
+            euclidean_error = torch.norm(matched_points - target_points_corr, dim=-1).mean().item() / max_euclidean_error
+            geodesic_error = compute_geodesic_error(target_element.dists, p2p, source_element.corr, target_element.corr)
+            dirichlet_energy = compute_dirichlet_energy(source_element.mesh, target_element.mesh, p2p).item()
+            coverage = compute_coverage(p2p, source_element.vertex_points, target_element.vertex_points)
 
         results[name] = MatchingResult(
             indices=p2p,
@@ -1201,17 +1195,18 @@ def main(args):
             if source in targets and target in targets:
                 if source != "43" and target != "43":
                     pairs.append((source, target))
+    else:
+        # Default case in which we match all different pairs
+        pairs = [(s, t) for s in targets for t in targets if s != t]
 
-    elif args.source_shape is not None and args.target_shape is not None:
+    # Override pairs if specific source and target shapes are provided
+    if args.source_shape is not None and args.target_shape is not None:
         if args.source_shape not in targets:
             raise ValueError(f"Source shape '{args.source_shape}' not found in the targets list.")
         if args.target_shape not in targets:
             raise ValueError(f"Target shape '{args.target_shape}' not found in the targets list.")
         pairs = [(args.source_shape, args.target_shape)]
-    else:
-        # Default case in which we match all different pairs
-        pairs = [(s, t) for s in targets for t in targets if s != t]
-
+        
     tqdm.write(f"Processing {len(pairs)} shape pairs.")
     for source, target in tqdm(pairs, desc="Processing shape pairs", unit="pair", dynamic_ncols=True):
         tqdm.write(f"Processing {source} -> {target}")
