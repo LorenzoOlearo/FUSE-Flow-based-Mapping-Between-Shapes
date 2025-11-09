@@ -40,6 +40,7 @@ from util.mesh_utils import (
 
 @dataclass
 class DataPath:
+    dataset: str
     output_dir: Path
     landmarks: List[int]
     dataset_path: Path
@@ -51,6 +52,14 @@ class DataPath:
     sdf_path: Path | None
     corr_path: Optional[Path] = None
     corr_offset: int = 0
+    
+    # Attributes for SCAN-FAUST dataset when using point cloud representation on FAUST
+    scan_flows_path: Path | None = None
+    scan_dataset_path: Path | None = None
+    scan_dataset_extension: str | None = None
+    scan_dists_path: Path | None = None
+    scan_features_path: Path | None = None
+    scan_corr_path: Optional[Path] = None
 
     # Common landmarks CSV for SHREC20, see dataset_utils.py on how to get this file
     common_landmarks_path: Optional[Path] = None
@@ -335,26 +344,33 @@ def get_pt_element_features(
 ) -> torch.Tensor:
 
     pt = trimesh.load(
-        Path(data_path.dataset_path, element + data_path.dataset_extension),
+        Path(data_path.scan_dataset_path, element + data_path.dataset_extension),
         process=False
     )
 
-    features_path = Path(data_path.flows_path, element, f"vertex-geodesics-vnorm.txt")
+    if data_path.dataset == "KINECT":
+        features_path = Path(data_path.flows_path, element, f"vertex-geodesics-vnorm.txt")
 
-    if recompute:
-        tqdm.write(f"Computing features for {element} in {data_path.features_path} with heat method")
-        features = torch.tensor(
-            compute_geodesic_distances_pointcloud(
-                mesh=pt,
-                source_index=data_path.explandmarks
-            )
-        ).T.to(device)
-    elif features_path.exists() and not recompute:
+        if recompute:
+            tqdm.write(f"Computing features for {element} in {data_path.features_path} with heat method")
+            features = torch.tensor(
+                compute_geodesic_distances_pointcloud(
+                    mesh=pt,
+                    source_index=data_path.landmarks
+                )
+            ).T.to(device)
+        elif features_path.exists() and not recompute:
+            tqdm.write(f"Loading precomputed features for {element} from {features_path}")
+            features = np.loadtxt(features_path).astype(np.float32)
+            features = torch.tensor(features).to(device)
+        else:
+            raise ValueError(f"Features file {features_path} does not exist and recompute is set to False.")
+        
+    elif data_path.dataset == "FAUST":
+        features_path = Path(data_path.scan_features_path, element, f"vertex-geodesics-vnorm.txt")
         tqdm.write(f"Loading precomputed features for {element} from {features_path}")
         features = np.loadtxt(features_path).astype(np.float32)
-        features = torch.tensor(features).to(device)
-    else:
-        raise ValueError(f"Features file {features_path} does not exist and recompute is set to False.")
+        
 
     return features
 
@@ -372,8 +388,8 @@ class Element:
     corr: np.ndarray | None
     dists: np.ndarray | None
     diameter: float | None
-    
-    
+
+
 def process_element(
     element: str,
     representation: str,
@@ -393,19 +409,14 @@ def process_element(
 
     model = _init_model(len(data_path.landmarks), device)
 
-    # Dispatch to representation-specific processing
     if representation == "mesh":
         element = _process_mesh_element(element, mesh, model, device, data_path)
     elif representation == "sdf":
-        raise NotImplementedError("SDF representation disabled.")
-        # element = _process_sdf_element(element, mesh, model, device, data_path)
+        element = _process_sdf_element(element, mesh, model, device, data_path)
     elif representation == "pt":
-        raise NotImplementedError("Point cloud representation disabled.")
-        # element = _process_pt_element(element, mesh, model, device, data_path)
+        element = _process_pt_element(element, mesh, model, device, data_path)
     else:
         raise ValueError(f"Invalid representation: '{representation}'")
-    
-    element.mesh = mesh
 
     return element
 
@@ -425,7 +436,7 @@ def _process_mesh_element(element, mesh, model, device, data_path) -> Element:
     points, _ = trimesh.sample.sample_surface(mesh, 100_000)
     points = torch.as_tensor(points, dtype=torch.float32, device=device)
     vertex_points = torch.as_tensor(mesh.vertices, dtype=torch.float32, device=device)
-    
+
     features, vertex_features = get_mesh_element_features(
         element=element,
         mesh=mesh,
@@ -461,78 +472,135 @@ def _process_mesh_element(element, mesh, model, device, data_path) -> Element:
     )
 
 
-# def _process_sdf_element(element, mesh, model, device, data_path) -> Element:
-#     """Process an SDF-based representation element."""
-#     vertex_points = np.loadtxt(
-#         Path(data_path.sdf_path, element, f"{element}-vertex-voxel-projection.txt")
-#     ).astype(np.float32)
+def _process_sdf_element(element, mesh, model, device, data_path) -> Element:
+    """Process an SDF-based representation element."""
+    vertex_points = np.loadtxt(
+        Path(data_path.sdf_path, element, f"{element}-vertex-voxel-projection.txt")
+    ).astype(np.float32)
 
-#     points = np.loadtxt(
-#         Path(data_path.sdf_path, element, f"{element}-sdf-sampled-surface-points.txt")
-#     ).astype(np.float32)
+    points = np.loadtxt(
+        Path(data_path.sdf_path, element, f"{element}-sdf-sampled-surface-points.txt")
+    ).astype(np.float32)
 
-#     features, vertex_features = get_sdf_element_features(
-#         element=element, data_path=data_path, device=device
-#     )
+    features, vertex_features = get_sdf_element_features(
+        element=element, data_path=data_path, device=device
+    )
 
-#     corr = np.arange(len(vertex_points))
-#     landmarks = np.array(data_path.landmarks)
+    corr = np.arange(len(vertex_points))
+    landmarks = np.array(data_path.landmarks)
 
-#     dists, diameter = mesh_geodesics(
-#         mesh=mesh, target=element, recompute=False, dists_path=str(data_path.dists_path)
-#     )
+    dists, diameter = mesh_geodesics(
+        mesh=mesh, target=element, recompute=False, dists_path=str(data_path.dists_path)
+    )
 
-#     model_path = Path(data_path.flows_SDFs_path, element, "checkpoint-9999.pth")
-#     model.load_state_dict(torch.load(model_path, weights_only=False)["model"], strict=True)
-#     model.to(device).eval()
+    model_path = Path(data_path.flows_SDFs_path, element, "checkpoint-9999.pth")
+    model.load_state_dict(torch.load(model_path, weights_only=False)["model"], strict=True)
+    model.to(device).eval()
 
-#     return Element(
-#         element=element,
-#         features=features,
-#         vertex_features=vertex_features,
-#         points=torch.as_tensor(points, dtype=torch.float32, device=device),
-#         vertex_points=torch.as_tensor(vertex_points, dtype=torch.float32, device=device),
-#         model=model,
-#         mesh=mesh,
-#         landmarks=landmarks,
-#         corr=corr,
-#         dists=dists,
-#         diameter=diameter,
-#     )
+    return Element(
+        element=element,
+        features=features,
+        vertex_features=vertex_features,
+        points=torch.as_tensor(points, dtype=torch.float32, device=device),
+        vertex_points=torch.as_tensor(vertex_points, dtype=torch.float32, device=device),
+        model=model,
+        mesh=mesh,
+        landmarks=landmarks,
+        corr=corr,
+        dists=dists,
+        diameter=diameter,
+    )
 
 
-# def _process_pt_element(element, mesh, model, device, data_path) -> Element:
-#     """Process a point cloud-based representation element."""
-#     corr = _load_correspondence_file(element, data_path.corr_path, mesh, data_path.corr_offset)
-#     landmarks = corr[data_path.landmarks]
+def _process_pt_element(element, mesh, model, device, data_path) -> Element:
+    """Process a point cloud-based representation element."""
+    # Check if the dataset is kinect
+    if data_path.dataset == "KINECT":
+        # corr = _load_correspondence_file(element, data_path.corr_path, mesh, data_path.corr_offset)
+        if data_path.corr_path is None:
+            print("[CORR] No correspondence path provided, using identity mapping.")
+            return np.arange(len(mesh.vertices))
+        else:
+            corr = np.loadtxt(Path(data_path.corr_path, element + ".vts")).astype(int) + data_path.corr_offset
+            
+        landmarks = corr[data_path.landmarks]
+        
 
-#     features = get_pt_element_features(
-#         element=element, data_path=data_path, device=device, recompute=False
-#     )
+        features = get_pt_element_features(
+            element=element, data_path=data_path, device=device, recompute=False
+        )
 
-#     dists, diameter = pointcloud_geodesics(
-#         pt=mesh, target=element, recompute=False, dists_path=str(data_path.dists_path)
-#     )
+        dists, diameter = pointcloud_geodesics(
+            pt=mesh, target=element, recompute=False, dists_path=str(data_path.dists_path)
+        )
 
-#     features = features[corr]
+        model_path = Path(data_path.flows_path, element, "checkpoint-9999.pth")
+        model.load_state_dict(torch.load(model_path, weights_only=False)["model"], strict=True)
+        model.to(device).eval()
 
-#     model_path = Path(data_path.flows_path, element, "checkpoint-9999.pth")
-#     model.load_state_dict(torch.load(model_path, weights_only=False)["model"], strict=True)
-#     model.to(device).eval()
-
-#     return Element(
-#         element=element,
-#         features=features,
-#         vertex_features=None,
-#         points=torch.as_tensor(mesh.vertices[corr], dtype=torch.float32, device=device),
-#         vertex_points=None,
-#         model=model,
-#         mesh=mesh,
-#         landmarks=landmarks,
-#         corr=corr,
-#         dists=dists[corr][:, corr],
-#         diameter=diameter,
-#     )
+        return Element(
+            element=element,
+            features=features,
+            vertex_features=features,
+            points=None,
+            vertex_points=torch.as_tensor(mesh.vertices, dtype=torch.float32, device=device),
+            model=model,
+            mesh=mesh,
+            landmarks=landmarks,
+            corr=corr,
+            dists=dists,
+            diameter=diameter,
+        )
+    elif data_path.dataset == "FAUST":
+        tqdm.write("Loading FAUST element from 10k point cloud")
+        #  "scan_flows_path": "./out/flows/scan-faust/scan-faust-diameter-norm-points/",
+        #  "scan_dataset_path": "./data/SCAN-FAUST/sub/shapes/",
+        #  "scan_dists_path": "./data/SCAN-FAUST/sub/dists/",
+        #  "scan_features_path": "./out/flows/scan-faust/scan-faust-diameter-norm-points/",
+        #  "scan_dataset_extension": ".ply",
+        #  "scan_corr_path": "./data/SCAN-FAUST/sub/corres/"
+        
+        element_scan = element.replace("tr_reg", "tr_scan")
+        pt = trimesh.load(
+            Path(data_path.scan_dataset_path, element_scan + data_path.scan_dataset_extension),
+            process=False
+        )
+        pt = trimesh.Trimesh(vertices=pt.vertices, faces=[], process=False)
+        
+        vertex_points = torch.as_tensor(pt.vertices, dtype=torch.float32, device=device)
+       
+        if data_path.scan_corr_path is None:
+            print("[CORR] No correspondence path provided, using identity mapping.")
+            corr = np.arange(len(mesh.vertices))
+        else:
+            corr = np.loadtxt(Path(data_path.scan_corr_path, element.replace("reg", "scan") + ".vts")).astype(int) + 0
+        landmarks = data_path.landmarks
+        
+        features = torch.tensor(get_pt_element_features(
+            element=element_scan, data_path=data_path, device=device, recompute=False
+        ), dtype=torch.float32, device=device)
+        
+        dists, diameter = pointcloud_geodesics(
+            pt=pt, target=element_scan, recompute=False, dists_path=str(data_path.scan_dists_path)
+        )
+        
+        model_path = Path(data_path.scan_flows_path, element_scan, "checkpoint-9999.pth")
+        model.load_state_dict(torch.load(model_path, weights_only=False)["model"], strict=True)
+        model.to(device).eval()
+        
+        return Element(
+            element=element_scan,
+            features=features,
+            vertex_features=features,
+            points=None,
+            vertex_points=vertex_points,
+            model=model,
+            mesh=pt,
+            landmarks=landmarks,
+            corr=corr,
+            dists=dists,
+            diameter=diameter,
+        )
 
 
 def _load_landmarks_and_correspondences(element, mesh, data_path):
@@ -815,6 +883,7 @@ def run_matching_methods(
     target_element: Element,
     target_element_dists: np.ndarray,
     output_dir: Path,
+    data_path: DataPath,
     gts_path: str | None = None,
 ) -> dict[str, MatchingResult]:
     """
@@ -851,6 +920,17 @@ def run_matching_methods(
                 coverage = compute_coverage(p2p[common_source_landmarks], common_source_landmarks, common_target_landmarks)
                 dirichlet_energy = compute_dirichlet_energy(source_element.mesh, target_element.mesh, p2p).item()
                 tqdm.write(f"[SHREC20] Evaluated on {len(common_source_landmarks)} landmarks between {source_element.element} and {target_element.element}")
+        
+        # SHREC19
+        elif gts_path is not None and "shrec19" in str(gts_path).lower():
+            gt_path = Path(gts_path) / f"{source_element.element}_{target_element.element}.txt"
+            gt = np.loadtxt(gt_path).astype(int) + data_path.corr_offset
+            matched_points = target_element.vertex_points[p2p]
+            target_points_corr = target_element.vertex_points[gt]
+            euclidean_error = torch.norm(matched_points - target_points_corr, dim=-1).mean().item() / max_euclidean_error
+            geodesic_error = compute_geodesic_error(target_element.dists, p2p, np.arange(len(gt)), gt)
+            dirichlet_energy = compute_dirichlet_energy(source_element.mesh, target_element.mesh, p2p).item()
+            coverage = compute_coverage(p2p, source_element.vertex_points, target_element.vertex_points)
         else:
             euclidean_error = torch.norm(matched_points - target_points_corr, dim=-1).mean().item() / max_euclidean_error
             geodesic_error = compute_geodesic_error(target_element.dists, p2p, source_element.corr, target_element.corr)
@@ -994,12 +1074,12 @@ def process_pair(
         data_path=data_path,
     )
 
-    if source_rep == "pt" or target_rep == "pt":
-        tqdm.write("[INFO] Matching with features instead of vertex_features")
-        source_element.vertex_features = source_element.features
-        target_element.vertex_features = target_element.features
-        source_element.vertex_points = torch.as_tensor(source_element.points, device=device, dtype=torch.float32)
-        target_element.vertex_points = torch.as_tensor(target_element.points, device=device, dtype=torch.float32)
+    # if source_rep == "pt" or target_rep == "pt":
+    #     tqdm.write("[INFO] Matching with features instead of vertex_features")
+    #     source_element.vertex_features = source_element.features
+    #     target_element.vertex_features = target_element.features
+    #     source_element.vertex_points = torch.as_tensor(source_element.points, device=device, dtype=torch.float32)
+    #     target_element.vertex_points = torch.as_tensor(target_element.points, device=device, dtype=torch.float32)
 
     matching_methods = get_matching_methods(
         source_features=source_element.vertex_features,
@@ -1024,6 +1104,7 @@ def process_pair(
         target_element_dists=target_element.dists,
         output_dir=output_dir,
         gts_path=data_path.gts_path,
+        data_path=data_path,
     )
 
     log_results(source, target, results)
@@ -1112,8 +1193,6 @@ def main(args):
     mesh_baseline = args.mesh_baseline
 
     if args.faust:
-        if args.source_rep == "pt" or args.target_rep == "pt":
-            raise ValueError("The 'pt' representation is only supported for the KINECT dataset.")
         dataset = "FAUST"
         targets = get_targets_faust(args)
     elif args.smal:
@@ -1153,6 +1232,7 @@ def main(args):
     tqdm.write(f"Output directory: {output_dir}")
 
     data_path = DataPath(
+        dataset=dataset,
         output_dir=output_dir,
         landmarks=config["matching_config"][dataset]["landmarks"],
         dataset_path=Path(config["matching_config"][dataset]["dataset_path"]),
@@ -1166,7 +1246,14 @@ def main(args):
         corr_offset=config["matching_config"][dataset]["corr_offset"] if "corr_offset" in config["matching_config"][dataset] else 0,
         common_landmarks_path=Path(config["matching_config"][dataset]["common_landmarks_path"]) if dataset == "SHREC20" else None,
         gts_path=Path(config["matching_config"][dataset]["gts_path"]) if "gts_path" in config["matching_config"][dataset] else None,
+        scan_flows_path=Path(config["matching_config"][dataset]["scan_flows_path"]) if "scan_flows_path" in config["matching_config"][dataset] else None,
+        scan_dataset_path=Path(config["matching_config"][dataset]["scan_dataset_path"]) if "scan_dataset_path" in config["matching_config"][dataset] else None,
+        scan_dists_path=Path(config["matching_config"][dataset]["scan_dists_path"]) if "scan_dists_path" in config["matching_config"][dataset] else None,
+        scan_features_path=Path(config["matching_config"][dataset]["scan_features_path"]) if "scan_features_path" in config["matching_config"][dataset] else None,
+        scan_dataset_extension=config["matching_config"][dataset]["scan_dataset_extension"] if "scan_dataset_extension" in config["matching_config"][dataset] else None,
+        scan_corr_path=Path(config["matching_config"][dataset]["scan_corr_path"]) if "scan_corr_path" in config["matching_config"][dataset] else None,
     )
+        
 
     results = []
     times = []
