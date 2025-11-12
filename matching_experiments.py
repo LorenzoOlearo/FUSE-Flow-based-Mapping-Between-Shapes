@@ -521,12 +521,11 @@ def _process_pt_element(element, mesh, model, device, data_path) -> Element:
         # corr = _load_correspondence_file(element, data_path.corr_path, mesh, data_path.corr_offset)
         if data_path.corr_path is None:
             tqdm.write("[CORR] No correspondence path provided, using identity mapping.")
-            return np.arange(len(mesh.vertices))
+            corr = np.arange(len(mesh.vertices))
         else:
             corr = np.loadtxt(Path(data_path.corr_path, element + ".vts")).astype(int) + data_path.corr_offset
             
         landmarks = corr[data_path.landmarks]
-        
 
         features = get_pt_element_features(
             element=element, data_path=data_path, device=device, recompute=False
@@ -556,7 +555,7 @@ def _process_pt_element(element, mesh, model, device, data_path) -> Element:
         )
 
     elif data_path.dataset == "FAUST":
-        tqdm.write("Loading FAUST element from 10k point cloud")
+        tqdm.write("Loading FAUST element from scan point cloud")
         element_scan = element.replace("tr_reg", "tr_scan")
         pt = trimesh.load(
             Path(data_path.scan_dataset_path, element_scan + data_path.scan_dataset_extension),
@@ -580,10 +579,20 @@ def _process_pt_element(element, mesh, model, device, data_path) -> Element:
         vertex_features = vertex_features[corr] 
         vertex_points = vertex_points[corr]
         corr = np.arange(len(vertex_features))
-        
-        dists, diameter = pointcloud_geodesics(
+       
+        # we take the diamter of the faust pt so that we can normalize the
+        # geodesic features; we then evaluate the geodesic error on the mesh
+        # dists matrix to be consistent with the SDF case
+        _, diameter = pointcloud_geodesics(
             pt=pt, target=element_scan, recompute=False, dists_path=str(data_path.scan_dists_path)
         )
+        
+        dists, diameter_mesh = mesh_geodesics(
+            mesh=mesh, target=element, recompute=False, dists_path=str(data_path.dists_path)
+        )
+        
+        # Align the new dists over the scan diameter
+        dists = dists * (diameter / diameter_mesh)
         
         model_path = Path(data_path.scan_flows_path, element_scan, "checkpoint-9999.pth")
         model.load_state_dict(torch.load(model_path, weights_only=False)["model"], strict=True)
@@ -630,7 +639,17 @@ def _load_landmarks_and_correspondences(element, mesh, data_path):
         else:
             corr = np.arange(len(mesh.vertices))
             landmarks = faust_landmarks
-        return corr, landmarks
+
+        if element == "39":
+            corr = np.loadtxt(data_path.corr_path / f"44_{element}.txt").astype(int) + data_path.corr_offset
+            landmarks = np.array([12467, 5360, 329, 4886, 375]) - 1
+            tqdm.write(f"[SHREC19] Using custom landmarks for element {element}: {landmarks}")
+            return corr, landmarks
+        elif element == "28":
+            corr = np.loadtxt(data_path.corr_path / f"44_{element}.txt").astype(int) + data_path.corr_offset
+            landmarks = np.array([7227, 42204, 51876, 32591, 48136]) - 1
+            tqdm.write(f"[SHREC19] Using custom landmarks for element {element}: {landmarks}")
+            return corr, landmarks
 
     # Default case
     corr = _load_correspondence_file(element, data_path.corr_path, mesh, data_path.corr_offset)
@@ -681,6 +700,9 @@ def get_matching_methods(
             "knn": lambda: compute_p2p_with_knn(source_features, target_features),
             "flow": lambda: compute_p2p_with_flows_composition(
                 source_features, target_features, source_model, target_model, device
+            ),
+            "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
+                source_features, target_features, source_model, target_model
             ),
         }
     elif matching_methods == "sdf":
@@ -939,8 +961,7 @@ def run_matching_methods(
             matched_points = target_element.vertex_points[p2p]
             target_points = target_element.vertex_points
             euclidean_error = torch.norm(matched_points - target_points, dim=-1).mean().item() / max_euclidean_error
-            # geodesic_error = compute_geodesic_error(target_element.dists, p2p, source_element.corr, target_element.corr)
-            geodesic_error = - 1
+            geodesic_error = compute_geodesic_error(target_element.dists, p2p, source_element.corr, target_element.corr)
            
             # we evaluate the dirichlet energy of the p2p on the meshes
             source_mesh = trimesh.load(
