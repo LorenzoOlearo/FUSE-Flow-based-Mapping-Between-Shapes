@@ -19,6 +19,7 @@ import random
 import numpy as np
 import torch
 import trimesh
+import fpsample
 
 from util import misc
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
@@ -26,7 +27,9 @@ from util.plot import plot_points, source_target_plot
 from util.train_utils import setup_logging, initialize_device_and_seed
 from util.mesh_utils import (
     mesh_geodesics,
+    mesh_geodesics_heat_method,
     pointcloud_geodesics,
+    # compute_diameter,
     generate_embeddings,
     compute_features,
     sample_initial_distribution,
@@ -241,6 +244,13 @@ def get_inline_arg():
     )
 
     parser.add_argument(
+            "--dists_path", 
+            default=None,
+            type=str,
+            help="Path to the NxN geodesic dists folder"
+    )
+
+    parser.add_argument(
         "--features_normalization",
         default="none",
         type=str,
@@ -252,6 +262,20 @@ def get_inline_arg():
         type=int,
         default=-1,
         help="Number of points to sample for interpolating the features. If -1, no interpolation is performed and the features are used as they are.",
+    )
+    
+    parser.add_argument(
+        "--use_heat_method",
+        action="store_true",
+        help="Use the heat method for computing geodesic distances (only for meshes). If not set, Dijkstra's algorithm is used.",
+        default=False
+    )
+
+    parser.add_argument(
+        "--pt",
+        action="store_true",
+        help="If set, treat the input mesh as a point cloud by removing all faces.",
+        default=False
     )
 
     args = parser.parse_args()
@@ -266,7 +290,7 @@ def setup_data_loader(data_path, batch_size, num_points_train):
         "batch_size": batch_size,
         "epoch_size": num_points_train // batch_size,
     }
-    print(f"Data path: {data_path} | Batch size: {batch_size} | Epoch size: {data_loader_train['epoch_size']}")
+    print(f"Data path: {data_path} | Batch size: {batch_size} | epoch size: {data_loader_train['epoch_size']}")
     return data_loader_train
 
 
@@ -463,7 +487,11 @@ def train_one_epoch(
     if isinstance(data_loader, dict):
         batch_size = data_loader["batch_size"]
         data_loader = range(data_loader["epoch_size"])
-        y = features 
+        y = features
+
+        # samples_idx = fpsample.bucket_fps_kdline_sampling(features.cpu().numpy(), 10_000, h=7)
+        # features_fps = features[samples_idx]
+        # y = features_fps
     else:
         exit("Data loader must be a dictionary with 'batch_size' and 'epoch_size' keys.")
 
@@ -533,13 +561,20 @@ def train_one_epoch(
     # Synchronize metrics across processes
     metric_logger.synchronize_between_processes()
 
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    # return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
 def train(args, device):
     model, optimizer, loss_scaler = initialize_model_and_optimizer(args, device)
     misc.load_model(args=args, model_without_ddp=model, optimizer=optimizer, loss_scaler=loss_scaler)
     mesh = trimesh.load(args.data_path, process=False)
+    if isinstance(mesh, trimesh.points.PointCloud):
+        print("[OCIO] Converting PointCloud to Trimesh with no faces")
+        mesh = trimesh.Trimesh(vertices=mesh.vertices, faces=[])
+
+    if args.pt:
+        mesh = trimesh.Trimesh(vertices=mesh.vertices, faces=[])
+        print(f"[OCIO] ALL FACES REMOVED FROM THE MESH; USING POINTCLOUD WITH {len(mesh.vertices)} VERTICES AND NO FACES")
 
     if args.run_name == "SPHERE":
         print("[OCIO] Overriding mesh with a unit sphere")
@@ -603,40 +638,50 @@ def train(args, device):
         np.savetxt(os.path.join(args.output_dir, "vertex-geodesics.txt"), vertex_features.detach().cpu().numpy())
         print(f"Saved vertex vertex_features to {os.path.join(args.output_dir, 'vertex-geodesics.txt')}")
 
-        # Interpolate the features over the sampled points
-        features = generate_embeddings(
-            mesh=mesh,
-            embedding_type=args.embedding_type,
-            num_points=500000,
-            features=vertex_features,
-            device=device,
-        )
+        if args.features_interpolation > 0:
+            # Interpolate the features over the sampled points
+            features = generate_embeddings(
+                mesh=mesh,
+                embedding_type=args.embedding_type,
+                num_points=500000,
+                features=vertex_features,
+                device=device,
+            )
 
-        print("------------------------------------")
-        print(f"Features interpolated over the sampled points (shape {list(features.shape)}):")
-        print(f"  min: {features.min(dim=0).values.tolist()}")
-        print(f"  max: {features.max(dim=0).values.tolist()}")
-        print(f"  avg: {features.mean(dim=0).tolist()}")
-        print("------------------------------------")
-        np.savetxt(os.path.join(args.output_dir, "vertex-geodesics-interpolated.txt"), features.detach().cpu().numpy())
-        print(f"Saved interpolated features to {os.path.join(args.output_dir, 'vertex-geodesics-interpolated.txt')}")
+            print("------------------------------------")
+            print(f"Features interpolated over the sampled points (shape {list(features.shape)}):")
+            print(f"  min: {features.min(dim=0).values.tolist()}")
+            print(f"  max: {features.max(dim=0).values.tolist()}")
+            print(f"  avg: {features.mean(dim=0).tolist()}")
+            print("------------------------------------")
+            np.savetxt(os.path.join(args.output_dir, "vertex-geodesics-interpolated.txt"), features.detach().cpu().numpy())
+            print(f"Saved interpolated features to {os.path.join(args.output_dir, 'vertex-geodesics-interpolated.txt')}")
+        else:
+            features = vertex_features
+            print("[OCIO] No feature interpolation used; using vertex features as is.")
 
     if args.features_normalization != "none":
         target = args.data_path.split("/")[-1].split(".")[0]
-       
-        # TODO: FIX THE PATHS AND THE DATASET SELECTION MESS 
+      
         if len(mesh.faces > 0):
-            dists_path = "./data/MPI-FAUST/training/registrations/dists/"
-            print(f"USING FAUST DISTS PATH: {dists_path}")
-            os.makedirs(dists_path, exist_ok=True)
-            _, diameter = mesh_geodesics(mesh=mesh, target=target, recompute=False, dists_path=dists_path)
+            if args.use_heat_method:
+                print("[DISTS] Using heat method for geodesic distances | dists_path: {args.dists_path}")
+                os.makedirs(args.dists_path, exist_ok=True)
+                _, diameter = mesh_geodesics_heat_method(mesh=mesh, target=target, recompute=False, dists_path=args.dists_path)
+            else:
+                print(f"[DISTS] Using Dijkstra's algorithm for geodesic distances | dists_path: {args.dists_path}")
+                os.makedirs(args.dists_path, exist_ok=True)
+                _, diameter = mesh_geodesics(mesh=mesh, target=target, recompute=False, dists_path=args.dists_path, n_start=5)
+                # diameter = compute_diameter(mesh=mesh, n_sweep=50)
+                
+                # diameters_df = pd.read_csv(os.path.join(args.dists_path, "diameters.csv"))
+                # diameter_row = diameters_df[diameters_df['target'] == target]
+                # diameter = diameter_row['diameter'].values[0]
+                # print(f"Loaded diameter from CSV: {diameter}")
         else:
-            dists_path = "./data/kinect_clean/dists/"
-            print(f"USING KINECT DISTS PATH: {dists_path}")
-            os.makedirs(dists_path, exist_ok=True)
-            _, diameter = pointcloud_geodesics(pt=mesh, target=target, recompute=False, dists_path=dists_path)
-            args.batch_size = vertex_features.shape[0]
-
+            _, diameter = pointcloud_geodesics(pt=mesh, target=target, recompute=True, dists_path=args.dists_path)
+            # args.batch_size = vertex_features.shape[0]
+            
         print("Diameter used for normalization:", diameter)
         features, vertex_features = normalize_features(features, vertex_features, args.features_normalization, diameter)
         print("------------------------------------")
@@ -652,6 +697,16 @@ def train(args, device):
         print(f"output_dir: {args.output_dir}")
         np.savetxt(os.path.join(args.output_dir, "vertex-geodesics-interpolated-vnorm.txt"), features.detach().cpu().numpy())
         np.savetxt(os.path.join(args.output_dir, "vertex-geodesics-vnorm.txt"), vertex_features.detach().cpu().numpy())
+        
+        # # FPS sampling to train on a uniform subset of points
+        # print("Performing FPS sampling on the normalized features...")
+        # samples_idx = fpsample.bucket_fps_kdline_sampling(mesh.vertices, 150_000, h=3)
+        # print(f"FPS sampled {len(samples_idx)} points from {len(vertex_features)} total points.")
+        # vertex_features_fps = vertex_features[samples_idx]
+        # np.savetxt(os.path.join(args.output_dir, "fps-indices.txt"), samples_idx)
+        # np.savetxt(os.path.join(args.output_dir, "vertex-geodesics-fps.txt"), vertex_features_fps.detach().cpu().numpy())
+        # features = vertex_features_fps
+        
     else:
         print("Skipping feature normalization")
         
@@ -682,7 +737,7 @@ def train(args, device):
             loss_scaler=loss_scaler,
             step_fn=step_fn,
             max_norm=args.clip_grad,
-            features=features if len(mesh.faces) > 0 else vertex_features,
+            features=features if len(mesh.faces) > 0 else features,
             mesh=mesh,
             embedding_type=args.embedding_type,
             args=args,
@@ -709,16 +764,16 @@ def train(args, device):
                         epoch=epoch,
                     )
 
-        log_stats = {
-            **{f"train_{k}": v for k, v in train_stats.items()},
-            "epoch": epoch,
-        }
+        # log_stats = {
+        #     **{f"train_{k}": v for k, v in train_stats.items()},
+        #     "epoch": epoch,
+        # }
 
-        if args.output_dir and misc.is_main_process():
-            with open(
-                os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8"
-            ) as f:
-                f.write(json.dumps(log_stats) + "\n")
+        # if args.output_dir and misc.is_main_process():
+        #     with open(
+        #         os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8"
+        #     ) as f:
+        #         f.write(json.dumps(log_stats) + "\n")
 
     total_time = time.time() - start_time
     logging.info(
