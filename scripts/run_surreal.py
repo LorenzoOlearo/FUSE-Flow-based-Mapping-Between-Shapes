@@ -62,6 +62,7 @@ def main(args):
             "embedding_type": "features_only",
             "features_type": "landmarks",
             "features_normalization": "diameter",
+            "dists_path": "./data/SURREAL/dists/",
             "landmarks": [412, 5891, 6593, 3323, 2119]
         }
 
