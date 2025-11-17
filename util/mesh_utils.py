@@ -5,10 +5,19 @@ import torch
 import trimesh
 import os
 import networkx as nx
+import scipy
+import torch
+import fpsample
 
 import scipy.sparse
 import scipy.sparse.csgraph
 import pandas as pd
+
+import pandas as pd
+import scipy
+from scipy.spatial.distance import cdist
+from scipy.sparse.csgraph import shortest_path, connected_components
+from numpy.lib.format import open_memmap
 
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import shortest_path
@@ -19,9 +28,10 @@ from sklearn.manifold import MDS
 import numpy as np
 from scipy.sparse.csgraph import shortest_path
 from scipy.sparse import coo_matrix
+from scipy.spatial.distance import cdist
 import potpourri3d as pp3d
 
-
+import geomfum
 from geomfum.shape.mesh import TriangleMesh
 from geomfum.shape.point_cloud import PointCloud
 
@@ -33,6 +43,7 @@ from geomfum.shape.mesh import TriangleMesh
 from geomfum.metric import HeatDistanceMetric
 import potpourri3d as pp3d
 
+from numpy.core._exceptions import _ArrayMemoryError
 
 ########################FUNCTIONS FOR MESH NORMALIZATION ##########################
 def normalize_mesh_unit(mesh):
@@ -201,7 +212,7 @@ def generate_embeddings(mesh, embedding_type, num_points, features, device: str)
 
         elif embedding_type == "xyz":
             # Sample 3D points directly from mesh surface
-            samples, _ = trimesh.sample.sample_surface(mesh, num_points)
+            samples, _ = trimesh.sample.sample_surface_even(mesh, num_points)
             embedding = torch.tensor(samples, dtype=torch.float32, device=device)
 
         else:
@@ -249,7 +260,8 @@ def get_interpolated_feats(mesh, features, num_points, device):
     """
 
     # Sample points
-    samples, face_indices = trimesh.sample.sample_surface(mesh, num_points)
+    samples, face_indices = trimesh.sample.sample_surface(mesh, num_points, face_weight=mesh.area)
+    print(f"[OCIO] Sampled {len(samples)} evenly points on mesh surface for feature interpolation.")
     samples = samples.astype(np.float32)
 
     # Convert to tensors
@@ -413,7 +425,166 @@ def get_shape_diameter(
     return shape_diameter
 
 
+
 def mesh_geodesics(
+    mesh: trimesh.Trimesh,
+    target: str,
+    recompute: bool,
+    dists_path: str,
+    n_start: int = 50,
+    largest_component_only: bool = False,
+) -> tuple[np.ndarray | None, float]:
+    """
+    Compute or load the geodesic distance matrix and diameter of a mesh
+    using Dijkstra's algorithm, with caching, low-memory fallback, and
+    optional restriction to the largest connected component.
+    """
+
+    os.makedirs(dists_path, exist_ok=True)
+    dists_file = os.path.join(dists_path, f"{target}_dists.npy")
+    diameters_csv = os.path.join(dists_path, "diameters.csv")
+
+    edges, lengths = mesh.edges_unique, mesh.edges_unique_length
+    n_vertices = len(mesh.vertices)
+
+    # --- Build adjacency matrix once ---
+    adjacency = scipy.sparse.csr_matrix(
+        (lengths, (edges[:, 0], edges[:, 1])),
+        shape=(n_vertices, n_vertices),
+    )
+    adjacency = adjacency + adjacency.T  # ensure undirected
+
+    # --- Restrict to largest connected component if requested ---
+    if largest_component_only:
+        print(f"[DISTS INFO] Restricting computation to the largest connected component of '{target}'.")
+        n_components, labels = connected_components(csgraph=adjacency, directed=False)
+        sizes = np.bincount(labels)
+        largest_label = np.argmax(sizes)
+        mask = labels == largest_label
+
+        vertex_indices = np.where(mask)[0]
+        adjacency = adjacency[mask][:, mask]
+        mesh_vertices = mesh.vertices[mask]
+        n_vertices = len(mesh_vertices)
+
+        print(f"[DISTS INFO] Largest component has {n_vertices} vertices "
+              f"({sizes[largest_label]} / {len(mesh.vertices)} total).")
+    else:
+        mesh_vertices = mesh.vertices
+
+    try:
+        # --- Try loading cached matrix if available ---
+        if not recompute and os.path.exists(dists_file):
+            print(f"[DISTS] Attempting to load cached geodesic distances for '{target}' (lazy memmap)...")
+            try:
+                # Lazy load: do not read full matrix into RAM
+                shape_dists = np.load(dists_file, mmap_mode='r')
+                print(f"[DISTS INFO] Successfully memory-mapped cached distances for '{target}'.")
+            except MemoryError:
+                print(f"[DISTS WARN] MemoryError while loading cached matrix for '{target}'. "
+                      f"Falling back to recomputation...")
+                raise  # trigger fallback below
+
+        else:
+            print(f"[DISTS] Computing full geodesic distance matrix for '{target}' (Dijkstra)...")
+            shape_dists = shortest_path(
+                csgraph=adjacency, directed=False, return_predecessors=False, method='D'
+            )
+
+            # Handle disconnected components
+            if np.isinf(shape_dists).any():
+                print(f"[DISTS WARN] Disconnected components detected in '{target}'. "
+                      f"Replacing inf geodesic distances with Euclidean distances.")
+                eucl_dists = cdist(mesh_vertices, mesh_vertices)
+                inf_mask = np.isinf(shape_dists)
+                shape_dists[inf_mask] = eucl_dists[inf_mask]
+
+            np.save(dists_file, shape_dists)
+            print(f"[DISTS INFO] Saved geodesic distances to '{dists_file}'.")
+
+        finite_dists = shape_dists[np.isfinite(shape_dists)]
+        diameter = float(finite_dists.max()) if finite_dists.size else 0.0
+
+    except (MemoryError, np.core._exceptions._ArrayMemoryError):
+        # --- Low-memory fallback: streamed Dijkstra computation ---
+        print(f"[DISTS WARN] MemoryError computing or loading full matrix for '{target}'.")
+        print(f"[DISTS INFO] Falling back to incremental vertex-by-vertex Dijkstra computation "
+              f"and on-disk concatenation...")
+
+        partial_file = os.path.join(dists_path, f"{target}_dists_partial.npy")
+
+        shape_dists = open_memmap(
+            partial_file, mode='w+', dtype=np.float64, shape=(n_vertices, n_vertices)
+        )
+
+        for i in range(n_vertices):
+            if i % 100 == 0:
+                print(f"[DISTS INFO] Processing vertex {i}/{n_vertices}...")
+            try:
+                d_i = shortest_path(csgraph=adjacency, directed=False, indices=i, method='D')
+            except MemoryError:
+                print(f"[DISTS ERROR] MemoryError even for single vertex {i}. Aborting streamed computation.")
+                del shape_dists
+                os.remove(partial_file)
+                shape_dists = None
+                break
+
+            shape_dists[i, :] = d_i  # write directly to disk
+
+        if shape_dists is not None:
+            print(f"[DISTS INFO] Finished streamed Dijkstra computation for '{target}'.")
+            print(f"[DISTS INFO] Saved partial geodesic distance matrix to '{partial_file}'.")
+
+            # Handle disconnected components
+            if np.isinf(shape_dists).any():
+                print(f"[DISTS WARN] Disconnected components detected in '{target}'. "
+                      f"Replacing inf geodesic distances with Euclidean distances (streamed mode).")
+                eucl_dists = cdist(mesh_vertices, mesh_vertices)
+                inf_mask = np.isinf(shape_dists)
+                shape_dists[inf_mask] = eucl_dists[inf_mask]
+
+            final_file = os.path.join(dists_path, f"{target}_dists.npy")
+            os.replace(partial_file, final_file)
+            print(f"[DISTS INFO] Final geodesic distances saved to '{final_file}'.")
+
+            finite_dists = shape_dists[np.isfinite(shape_dists)]
+            diameter = float(finite_dists.max()) if finite_dists.size else 0.0
+
+        else:
+            print(f"[DISTS WARN] Falling back to two-sweep diameter approximation.")
+            max_dists = []
+            start_indices = np.random.choice(n_vertices, size=min(n_start, n_vertices), replace=False)
+            for idx in start_indices:
+                d_from_start = shortest_path(csgraph=adjacency, directed=False, indices=idx, method='D')
+                farthest_idx = np.nanargmax(d_from_start)
+                d_from_far = shortest_path(csgraph=adjacency, directed=False, indices=farthest_idx, method='D')
+                max_dists.append(np.nanmax(d_from_far))
+            diameter = float(np.max(max_dists))
+            shape_dists = None
+
+    # --- Save or update diameter record ---
+    if os.path.exists(diameters_csv):
+        df = pd.read_csv(diameters_csv)
+    else:
+        df = pd.DataFrame(columns=["target", "diameter"])
+
+    if target in df["target"].values:
+        if recompute:
+            df.loc[df["target"] == target, "diameter"] = diameter
+            print(f"[DISTS INFO] Updated diameter entry for '{target}'.")
+    else:
+        df = pd.concat(
+            [df, pd.DataFrame({"target": [target], "diameter": [diameter]})],
+            ignore_index=True,
+        )
+
+    df.to_csv(diameters_csv, index=False)
+    print(f"[DISTS INFO] Diameter for '{target}': {diameter:.4f}")
+
+    return shape_dists, diameter
+
+
+def mesh_geodesics_heat_method(
     mesh: trimesh.Trimesh,
     target: str,
     recompute: bool,
@@ -421,14 +592,13 @@ def mesh_geodesics(
 ) -> tuple[np.ndarray, float]:
     """
     Compute or load the geodesic distance matrix and diameter of a mesh
-    using Dijkstra's algorithm, with caching support.
+    using Heat Method, with caching support.
 
     Args:
         mesh: Trimesh object representing the mesh geometry.
         target: Unique identifier for the mesh (e.g., filename stem).
         recompute: If True, forces recomputation even if cached results exist.
         dists_path: Directory to cache/load distance matrices and diameter CSV.
-
     Returns:
         (shape_dists, diameter):
             shape_dists: (N, N) ndarray of geodesic distances between vertices.
@@ -440,23 +610,14 @@ def mesh_geodesics(
 
     # --- Load or compute full NxN distance matrix ---
     if not recompute and os.path.exists(dists_file):
-        print(f"[INFO] Loading cached geodesic distances for '{target}'.")
+        print(f"[DISTS] Loading cached geodesic distances for '{target}'.")
         shape_dists = np.load(dists_file)
     else:
-        print(f"[INFO] Computing geodesic distances for '{target}' (Dijkstra)...")
+        print(f"[DISTS] Computing geodesic distances for '{target}' (Heat Method)...")
 
-        edges, lengths = mesh.edges_unique, mesh.edges_unique_length
-        n_vertices = len(mesh.vertices)
-
-        adjacency = scipy.sparse.csr_matrix(
-            (lengths, (edges[:, 0], edges[:, 1])),
-            shape=(n_vertices, n_vertices),
-        )
-        adjacency = adjacency + adjacency.T  # ensure undirected
-
-        shape_dists = scipy.sparse.csgraph.dijkstra(
-            csgraph=adjacency, directed=False, return_predecessors=False
-        )
+        mesh_gf = TriangleMesh(mesh.vertices, np.array(mesh.faces))
+        heat = HeatDistanceMetric.from_registry(mesh_gf)
+        shape_dists = heat.dist_matrix()
 
         np.save(dists_file, shape_dists)
 
@@ -473,7 +634,7 @@ def mesh_geodesics(
     if target in df["target"].values:
         if recompute:
             df.loc[df["target"] == target, "diameter"] = diameter
-            print(f"[INFO] Updated diameter entry for '{target}'.")
+            print(f"[DISTS] Updated diameter entry for '{target}'.")
     else:
         df = pd.concat(
             [df, pd.DataFrame({"target": [target], "diameter": [diameter]})],
@@ -490,45 +651,66 @@ def pointcloud_geodesics(
     target: str,
     recompute: bool,
     dists_path: str,
-) -> tuple[np.ndarray, float]:
+    n_start: int = 5,
+) -> tuple[np.ndarray | None, float]:
     """
     Compute or load the geodesic distance matrix and diameter of a point cloud
-    using Heat Method, with caching support.
+    using the Heat Method, with caching and low-memory fallback.
 
     Args:
         pt: Trimesh object representing the point cloud geometry.
         target: Unique identifier for the point cloud (e.g., filename stem).
         recompute: If True, forces recomputation even if cached results exist.
         dists_path: Directory to cache/load distance matrices and diameter CSV.
+        n_start: Number of random start points used for fallback diameter approximation.
     Returns:
         (shape_dists, diameter):
-            shape_dists: (N, N) ndarray of geodesic distances between points.
+            shape_dists: (N, N) ndarray of geodesic distances, or None if approximated.
             diameter: Float, maximum finite distance across the point cloud.
     """
-    
+
     os.makedirs(dists_path, exist_ok=True)
     dists_file = os.path.join(dists_path, f"{target}_dists.npy")
     diameters_csv = os.path.join(dists_path, "diameters.csv")
 
-    # --- Load or compute full NxN distance matrix ---
-    if not recompute and os.path.exists(dists_file):
-        print(f"[INFO] Loading cached geodesic distances for '{target}'.")
-        shape_dists = np.load(dists_file)
-    else:
-        print(f"[INFO] Computing geodesic distances for '{target}' (Heat Method)...")
+    solver = pp3d.PointCloudHeatSolver(pt.vertices)
+    n_points = len(pt.vertices)
 
-        solver = pp3d.PointCloudHeatSolver(pt.vertices)
-        n_points = len(pt.vertices)
-        shape_dists = np.zeros((n_points, n_points), dtype=np.float32)
+    # --- Try full NxN computation ---
+    try:
+        if not recompute and os.path.exists(dists_file):
+            print(f"[DISTS] Loading cached geodesic distances for '{target}'.")
+            shape_dists = np.load(dists_file)
+        else:
+            print(f"[DISTS] Computing full geodesic distance matrix for '{target}' (Heat Method)...")
+            shape_dists = np.zeros((n_points, n_points), dtype=np.float32)
 
-        for idx in range(n_points):
-            shape_dists[idx, :] = solver.compute_distance(idx)
+            for idx in range(n_points):
+                shape_dists[idx, :] = solver.compute_distance(idx)
 
-        np.save(dists_file, shape_dists)
+            np.save(dists_file, shape_dists)
 
-    # --- Compute geodesic diameter ---
-    finite_dists = shape_dists[np.isfinite(shape_dists)]
-    diameter = float(finite_dists.max()) if finite_dists.size else 0.0
+        finite_dists = shape_dists[np.isfinite(shape_dists)]
+        diameter = float(finite_dists.max()) if finite_dists.size else 0.0
+
+    except _ArrayMemoryError:
+        # --- Low-memory fallback: approximate diameter in two-sweep fashion ---
+        print(f"[DISTS WARN] MemoryError computing full matrix for '{target}'. Falling back to two-sweep approximation.")
+
+        max_dists = []
+        start_indices = np.random.choice(n_points, size=min(n_start, n_points), replace=False)
+
+        for idx in start_indices:
+            # First sweep
+            d_from_start = solver.compute_distance(idx)
+            farthest_idx = np.nanargmax(d_from_start)
+
+            # Second sweep
+            d_from_far = solver.compute_distance(farthest_idx)
+            max_dists.append(np.nanmax(d_from_far))
+
+        diameter = float(np.max(max_dists))
+        shape_dists = None
 
     # --- Save or update diameter record ---
     if os.path.exists(diameters_csv):
@@ -539,7 +721,7 @@ def pointcloud_geodesics(
     if target in df["target"].values:
         if recompute:
             df.loc[df["target"] == target, "diameter"] = diameter
-            print(f"[INFO] Updated diameter entry for '{target}'.")
+            print(f"[DISTS] Updated diameter entry for '{target}'.")
     else:
         df = pd.concat(
             [df, pd.DataFrame({"target": [target], "diameter": [diameter]})],
@@ -578,9 +760,18 @@ def compute_features(mesh, args, device):
         return torch.tensor(mesh.vertices, device=device).float()
     if args.features_type == "landmarks":
         if len(mesh.faces) > 0:
-            features = torch.tensor(
-                compute_geodesic_distances(mesh, source_index=np.array(args.landmarks))
-            ).T.to(device)
+            if args.use_heat_method:
+                print("[FEATURES] Using Heat Method for geodesic distances computation")
+                features = torch.tensor(
+                    compute_geodesic_distances_heat_method(
+                        mesh, source_index=np.array(args.landmarks)
+                    )
+                ).T.to(device)
+            else:
+                print("[FEATURES] Using Dijkstra for geodesic distances computation")
+                features = torch.tensor(
+                    compute_geodesic_distances(mesh, source_index=np.array(args.landmarks))
+                ).T.to(device)
         else:
             features = torch.tensor(
                 compute_geodesic_distances_pointcloud(
@@ -714,11 +905,13 @@ def compute_geodesic_distances_pointcloud(mesh, source_index):
     distances : np.ndarray
         Array of geodesic distances from the source vertex to all other vertices.
     """
+    
+    
     # Create a PointCloudHeatSolver instance
     solver = pp3d.PointCloudHeatSolver(np.array(mesh.vertices))
 
-    # Compute distances for each landmark
     distances = []
+    source_index = [int(index) for index in source_index]
     for idx in source_index:
         distances.append([solver.compute_distance(int(idx))])
 
@@ -728,42 +921,97 @@ def compute_geodesic_distances_pointcloud(mesh, source_index):
 def compute_geodesic_distances(mesh, source_index):
     """
     Compute geodesic distances from a source vertex to all other vertices.
+    If the mesh is disconnected, replaces infinite distances with Euclidean ones.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     mesh : trimesh.Trimesh
-        The mesh on which to compute geodesic distances
-    source_index : int
-        Index of the source vertex
+        The mesh on which to compute geodesic distances.
+    source_index : int or sequence
+        Index or sequence of source vertex indices.
 
-    Returns:
-    --------
+    Returns
+    -------
     distances : np.ndarray
-        Array of distances from source to all vertices
+        Array of distances; shape is (S, N) where S = number of sources and
+        N = number of vertices. If a single source is provided it will still
+        be returned as a 2D array with shape (1, N).
     """
-    # Get unique edges
-    edges = mesh.edges_unique
 
-    # Calculate edge lengths
+    # --- Build adjacency ---
+    edges = mesh.edges_unique
     edge_lengths = np.linalg.norm(
         mesh.vertices[edges[:, 0]] - mesh.vertices[edges[:, 1]], axis=1
     )
-
-    # Create a sparse adjacency matrix
     n_vertices = len(mesh.vertices)
+
     graph = coo_matrix(
-        (edge_lengths, (edges[:, 0], edges[:, 1])), shape=(n_vertices, n_vertices)
+        (edge_lengths, (edges[:, 0], edges[:, 1])),
+        shape=(n_vertices, n_vertices)
+    )
+    graph = graph + graph.T  # ensure undirected
+
+    # --- Compute shortest paths ---
+    # We don't need predecessors here so disable them to avoid unused variable warnings.
+    distances = shortest_path(
+        csgraph=graph,
+        directed=False,
+        indices=source_index,
+        return_predecessors=False
     )
 
-    # Make the graph symmetric (undirected)
-    graph = graph + graph.T
+    # Ensure distances is 2D: shape (S, N)
+    if distances.ndim == 1:
+        distances = distances[np.newaxis, :]
 
-    # Compute shortest paths
-    distances, predecessors = shortest_path(
-        csgraph=graph, directed=False, indices=source_index, return_predecessors=True
-    )
+    # --- Handle disconnected components ---
+    if np.isinf(distances).any():
+        print(f"[WARN] Disconnected components detected when computing from vertex {source_index}. "
+              f"Replacing inf geodesic distances with Euclidean distances.")
+        # Normalize source_index to integer array
+        src_idx = np.atleast_1d(source_index).astype(int)
+
+        verts = np.asarray(mesh.vertices)  # shape (N, 3)
+        src_coords = verts[src_idx]        # shape (S, 3)
+
+        # Compute Euclidean distances from each source to all vertices -> shape (S, N)
+        # verts[None, :, :] -> (1, N, 3), src_coords[:, None, :] -> (S, 1, 3)
+        eucl_dists = np.linalg.norm(verts[None, :, :] - src_coords[:, None, :], axis=2)
+
+        inf_mask = np.isinf(distances)
+        # Replace only the infinite entries with Euclidean estimates
+        distances[inf_mask] = eucl_dists[inf_mask]
 
     return distances
+
+
+def compute_geodesic_distances_heat_method(mesh, source_index):
+    """
+    Compute geodesic distances from landmarks to all points in the mesh using Heat Method.
+    Parameters:
+    -----------
+    mesh : trimesh.Trimesh
+        The input mesh.
+    source_index : int
+        Index of the source vertex (landmark).
+    Returns:
+    --------
+    distances : np.ndarray
+        Array of geodesic distances from the source vertex to all other vertices.
+    """
+    # Create a TriangleMesh instance for GeomFum
+    mesh_geomfum = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
+
+    # Initialize Heat Distance Metric
+    solver = geomfum.MeshHeatSolver(mesh_geomfum)
+    
+    # Compute distances for each landmark
+    distances = []
+    for idx in source_index:
+        dist = heat.compute_distance(int(idx))
+        distances.append(dist)
+
+    return np.array(distances)
 
 
 def compute_wks(mesh):
