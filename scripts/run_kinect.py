@@ -7,7 +7,7 @@ import argparse
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = Path('./out/flows/kinect/kinect-diameter-norm-points/')
+OUTPUT_DIR = Path('./out/flows/kinect/kinect-diameter-norm-points-pt-fix/')
 KINECT_DIR = Path('./data/kinect_clean/off_clean/')
 
 
@@ -38,14 +38,13 @@ def main(args):
 
         working_dir = Path(str(Path(__file__).resolve()).split('/scripts')[0])
         data_path = Path(working_dir, KINECT_DIR, f"{target}.off")
-        features_path = Path(working_dir, 'data', 'KINECT_features_pca_20', f"{target}_features.npy")
 
         smpl_landmarks = np.array([412, 5891, 6593, 3323, 2119])
         corr = np.array(np.loadtxt(f'./data/kinect_clean/corres/{target}.vts'))
         target_landmarks = corr[smpl_landmarks]
 
         config = {
-            "device": "cuda:1",
+            "device": "cuda:0",
             "blr": 5e-7,
             "output_dir": str(target_dir),
             "log_dir": str(target_dir),
@@ -64,6 +63,8 @@ def main(args):
             "embedding_type": "features_only",
             "features_type": "landmarks",
             "features_normalization": "diameter",
+            "pt": True,
+            "dists_path": "./data/kinect_clean/dists/",
             "landmarks": target_landmarks.tolist(),
         }
 
@@ -102,7 +103,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    print("Training flows on FAUST dataset:")
+    print("Training flows on KINECT dataset:")
     for arg, value in vars(args).items():
         print(f"  {arg}: {value}")
     print("-----------------------------------------------")

@@ -343,12 +343,12 @@ def get_pt_element_features(
     recompute: bool,
 ) -> torch.Tensor:
 
-    pt = trimesh.load(
-        Path(data_path.scan_dataset_path, element + data_path.dataset_extension),
-        process=False
-    )
-
     if data_path.dataset == "KINECT":
+        pt = trimesh.load(
+            Path(data_path.dataset_path, element + data_path.dataset_extension),
+            process=False
+        )
+        pt = trimesh.Trimesh(vertices=pt.vertices, faces=[], process=False)
         features_path = Path(data_path.flows_path, element, f"vertex-geodesics-vnorm.txt")
 
         if recompute:
@@ -357,7 +357,8 @@ def get_pt_element_features(
                 compute_geodesic_distances_pointcloud(
                     mesh=pt,
                     source_index=data_path.landmarks
-                )
+                ),
+                dtype=torch.float32
             ).T.to(device)
         elif features_path.exists() and not recompute:
             tqdm.write(f"Loading precomputed features for {element} from {features_path}")
@@ -365,7 +366,7 @@ def get_pt_element_features(
             features = torch.tensor(features).to(device)
         else:
             raise ValueError(f"Features file {features_path} does not exist and recompute is set to False.")
-        
+    
     elif data_path.dataset == "FAUST":
         features_path = Path(data_path.scan_features_path, element, f"vertex-geodesics-vnorm.txt")
         tqdm.write(f"Loading precomputed features for {element} from {features_path}")
@@ -515,24 +516,29 @@ def _process_sdf_element(element, mesh, model, device, data_path) -> Element:
 
 
 def _process_pt_element(element, mesh, model, device, data_path) -> Element:
-    """Process a point cloud-based representation element."""
-    # Check if the dataset is kinect
+    """Process point cloud-based representation element."""
     if data_path.dataset == "KINECT":
-        # corr = _load_correspondence_file(element, data_path.corr_path, mesh, data_path.corr_offset)
-        if data_path.corr_path is None:
-            tqdm.write("[CORR] No correspondence path provided, using identity mapping.")
-            corr = np.arange(len(mesh.vertices))
-        else:
-            corr = np.loadtxt(Path(data_path.corr_path, element + ".vts")).astype(int) + data_path.corr_offset
-            
+        pt = trimesh.load(
+            Path(data_path.dataset_path, element + data_path.dataset_extension),
+            process=False
+        )
+        pt = trimesh.Trimesh(vertices=pt.vertices, faces=[], process=False)
+        corr = np.loadtxt(Path(data_path.corr_path, element + ".vts")).astype(int) + data_path.corr_offset
         landmarks = corr[data_path.landmarks]
+        vertex_points = torch.as_tensor(pt.vertices, dtype=torch.float32, device=device)
 
-        features = get_pt_element_features(
-            element=element, data_path=data_path, device=device, recompute=False
+        vertex_features = get_pt_element_features(
+            element=element, 
+            data_path=data_path, 
+            device=device, 
+            recompute=False
         )
 
         dists, diameter = pointcloud_geodesics(
-            pt=mesh, target=element, recompute=False, dists_path=str(data_path.dists_path)
+            pt=pt, 
+            target=element, 
+            recompute=False, 
+            dists_path=str(data_path.dists_path)
         )
 
         model_path = Path(data_path.flows_path, element, "checkpoint-9999.pth")
@@ -542,12 +548,12 @@ def _process_pt_element(element, mesh, model, device, data_path) -> Element:
         return Element(
             element=element,
             representation="pt",
-            features=features,
-            vertex_features=features,
+            features=None,
+            vertex_features=vertex_features,
             points=None,
-            vertex_points=torch.as_tensor(mesh.vertices, dtype=torch.float32, device=device),
+            vertex_points=vertex_points,
             model=model,
-            mesh=mesh,
+            mesh=pt,
             landmarks=landmarks,
             corr=corr,
             dists=dists,
@@ -690,19 +696,28 @@ def get_matching_methods(
     target_landmarks,
     device: str,
     matching_methods: str,
+    backward_steps: int,
+    forward_steps: int,
     source_sdf_projected_vertex_points=None,
     target_sdf_projected_vertex_points=None,
 ):
     """Return mapping of strategy names to their compute functions."""
 
+    source_features = source_features.to(device)
+    target_features = target_features.to(device)
+    source_model = source_model.to(device)
+    target_model = target_model.to(device)
+
     if matching_methods == "fast":
         return {
             "knn": lambda: compute_p2p_with_knn(source_features, target_features),
             "flow": lambda: compute_p2p_with_flows_composition(
-                source_features, target_features, source_model, target_model, device
-            ),
-            "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
-                source_features, target_features, source_model, target_model
+                source_features,
+                target_features,
+                source_model,
+                target_model, 
+                backward_steps=backward_steps,
+                forward_steps=forward_steps
             ),
         }
     elif matching_methods == "sdf":
@@ -710,7 +725,12 @@ def get_matching_methods(
             "knn": lambda: compute_p2p_with_knn(source_features, target_features),
             "ot": lambda: compute_p2p_with_ot(source_features, target_features),
             "flow": lambda: compute_p2p_with_flows_composition(
-                source_features, target_features, source_model, target_model, device
+                source_features,
+                target_features,
+                source_model,
+                target_model, 
+                backward_steps=backward_steps,
+                forward_steps=forward_steps
             ),
             "ndp-sdf": lambda: compute_p2p_with_ndp_sdf(
                 source_vertex=source_sdf_projected_vertex_points,
@@ -719,7 +739,12 @@ def get_matching_methods(
                 target_landmarks=target_landmarks,
             ),
             "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
-                source_features, target_features, source_model, target_model
+                source_features,
+                target_features,
+                source_model,
+                target_model,
+                backward_steps=backward_steps,
+                forward_steps=forward_steps
             ),
         }
     elif matching_methods == "all":
@@ -748,10 +773,20 @@ def get_matching_methods(
                 target_landmarks=target_landmarks,
             ),
             "flow": lambda: compute_p2p_with_flows_composition(
-                source_features, target_features, source_model, target_model, device
+                source_features,
+                target_features,
+                source_model,
+                target_model, 
+                backward_steps=backward_steps,
+                forward_steps=forward_steps
             ),
             "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
-                source_features, target_features, source_model, target_model
+                source_features,
+                target_features,
+                source_model,
+                target_model,
+                backward_steps=backward_steps,
+                forward_steps=forward_steps
             ),
             "flow-zoomout": lambda: compute_p2p_with_flows_composition_zoomout(
                 source_path,
@@ -760,7 +795,9 @@ def get_matching_methods(
                 target_features,
                 source_model,
                 target_model,
-                device,
+                backward_steps=backward_steps,
+                forward_steps=forward_steps,
+                device=device,
             ),
             "flow-neural-zoomout": lambda: compute_p2p_with_flows_composition_neural_zoomout(
                 source_path,
@@ -769,7 +806,9 @@ def get_matching_methods(
                 target_features,
                 source_model,
                 target_model,
-                device,
+                backward_steps=backward_steps,
+                forward_steps=forward_steps,
+                device=device,
             ),
         }
     elif matching_methods == "baselines":
@@ -777,7 +816,12 @@ def get_matching_methods(
             "knn": lambda: compute_p2p_with_knn(source_features, target_features),
             "ot": lambda: compute_p2p_with_ot(source_features, target_features),
             "flow": lambda: compute_p2p_with_flows_composition(
-                source_features, target_features, source_model, target_model, device
+                source_features,
+                target_features,
+                source_model,
+                target_model, 
+                backward_steps=backward_steps,
+                forward_steps=forward_steps
             ),
             "fmaps": lambda: compute_p2p_with_fmaps(
                 source_path, target_path, source_features, target_features
@@ -789,7 +833,12 @@ def get_matching_methods(
                 source_path, target_path, source_features, target_features
             ),
             "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
-                source_features, target_features, source_model, target_model
+                source_features,
+                target_features,
+                source_model,
+                target_model,
+                backward_steps=backward_steps,
+                forward_steps=forward_steps
             ),
             "ndp-landmarks": lambda: ndp_with_ldmks(
                 source_path,
@@ -810,13 +859,23 @@ def get_matching_methods(
             "knn": lambda: compute_p2p_with_knn(source_features, target_features),
             "ot": lambda: compute_p2p_with_ot(source_features, target_features),
             "flow": lambda: compute_p2p_with_flows_composition(
-                source_features, target_features, source_model, target_model, device
+                source_features,
+                target_features,
+                source_model,
+                target_model, 
+                backward_steps=backward_steps,
+                forward_steps=forward_steps
             ),
             "fmaps": lambda: compute_p2p_with_fmaps(
                 source_path, target_path, source_features, target_features
             ),
             "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
-                source_features, target_features, source_model, target_model
+                source_features,
+                target_features,
+                source_model,
+                target_model,
+                backward_steps=backward_steps,
+                forward_steps=forward_steps
             ),
             "ndp-landmarks": lambda: ndp_with_ldmks(
                 source_path,
@@ -922,6 +981,7 @@ def run_matching_methods(
         p2p, elapsed = func()
         
         matched_points = target_points[p2p[source_element.corr]]
+        
         target_points_corr = target_element.vertex_points[target_element.corr]
 
         if target_points.shape[0] <= 50_000:
@@ -937,11 +997,14 @@ def run_matching_methods(
                 _, common_source_landmarks, common_target_landmarks = get_common_landmarks_between_two_models(
                     source_gt_path, target_gt_path
                 )
+                
                 matched_points_subset = matched_points[common_source_landmarks]
                 target_subset = target_points[common_target_landmarks]
                 euclidean_error = torch.norm(matched_points_subset - target_subset, dim=-1).mean().item() / max_euclidean_error
-                geodesic_error = compute_geodesic_error(target_element_dists, p2p, common_source_landmarks, common_target_landmarks) / target_element_dists.max()
-                coverage = compute_coverage(p2p[common_source_landmarks], common_source_landmarks, common_target_landmarks)
+                geodesic_error = compute_geodesic_error(target_element_dists, p2p, common_source_landmarks, common_target_landmarks)
+                
+                # Evaluate the p2p on the entire map
+                coverage = compute_coverage(p2p, source_element.vertex_points, target_element.vertex_points)
                 dirichlet_energy = compute_dirichlet_energy(source_element.mesh, target_element.mesh, p2p).item()
                 tqdm.write(f"[SHREC20] Evaluated on {len(common_source_landmarks)} landmarks between {source_element.element} and {target_element.element}")
         
@@ -1080,6 +1143,8 @@ def process_pair(
     features_normalization: str,
     data_path: "DataPath",
     output_dir: str,
+    backward_steps: int,
+    forward_steps: int,
 ) -> pd.DataFrame:
     """
     Main pipeline to process a source-target pair for shape matching.
@@ -1117,6 +1182,14 @@ def process_pair(
         features_normalization=features_normalization,
         data_path=data_path,
     )
+    
+    # # DEBUG: save for each element its vertex_features and vertex_points
+    # os.makedirs(output_dir / "vertex_features", exist_ok=True)
+    # os.makedirs(output_dir / "vertex_points", exist_ok=True)
+    # np.save(output_dir / "vertex_features" / f"{source_element.element}-vertex_features.npy", source_element.vertex_features.cpu().numpy())
+    # np.save(output_dir / "vertex_points" / f"{source_element.element}-vertex_points.npy", source_element.vertex_points.cpu().numpy())
+    # np.save(output_dir / "vertex_features" / f"{target_element.element}-vertex_features.npy", target_element.vertex_features.cpu().numpy())
+    # np.save(output_dir / "vertex_points" / f"{target_element.element}-vertex_points.npy", target_element.vertex_points.cpu().numpy())
 
     matching_methods = get_matching_methods(
         source_features=source_element.vertex_features,
@@ -1129,6 +1202,8 @@ def process_pair(
         target_landmarks=target_element.landmarks,
         device=device,
         matching_methods=all_methods,
+        backward_steps=backward_steps,
+        forward_steps=forward_steps,
         source_sdf_projected_vertex_points=source_element.vertex_points,
         target_sdf_projected_vertex_points=target_element.vertex_points,
     )
@@ -1303,6 +1378,7 @@ def main(args):
         sources = get_targets_smplx(Path(config["matching_config"]["SMPLX"]["smplx_template_flows_path"]))
         targets = get_targets_kinect(Path(config["matching_config"][dataset]["flows_path"]))
         pairs = [(s, t) for s in sources for t in targets]
+
     elif dataset == "SHREC19":
         # Only load the pairs defined in the corr_path
         if data_path.corr_path is None:
@@ -1314,6 +1390,7 @@ def main(args):
             parts = base.split('_')
             if len(parts) != 2:
                 tqdm.write(f"Skipping file with unexpected format (expected 'target_source.txt'): {f}")
+                continue
             source, target = parts[0], parts[1]
             if source in targets and target in targets:
                 if source != "43" and target != "43":
@@ -1322,14 +1399,24 @@ def main(args):
         # Default case in which we match all different pairs
         pairs = [(s, t) for s in targets for t in targets if s != t]
 
-    # Override pairs if specific source and target shapes are provided
+    # Override pairs if specific source/target shapes are provided
     if args.source_shape is not None and args.target_shape is not None:
         if args.source_shape not in targets:
             raise ValueError(f"Source shape '{args.source_shape}' not found in the targets list.")
         if args.target_shape not in targets:
             raise ValueError(f"Target shape '{args.target_shape}' not found in the targets list.")
         pairs = [(args.source_shape, args.target_shape)]
-        
+    elif args.source_shape is not None:
+        if args.source_shape not in targets:
+            raise ValueError(f"Source shape '{args.source_shape}' not found in the targets list.")
+        # match the provided source to all other available targets (excluding itself)
+        pairs = [(args.source_shape, t) for t in targets if t != args.source_shape]
+    elif args.target_shape is not None:
+        if args.target_shape not in targets:
+            raise ValueError(f"Target shape '{args.target_shape}' not found in the targets list.")
+        # match all other shapes to the provided target (excluding itself)
+        pairs = [(s, args.target_shape) for s in targets if s != args.target_shape]
+
     tqdm.write(f"Processing {len(pairs)} shape pairs.")
     for source, target in tqdm(pairs, desc="Processing shape pairs", unit="pair", dynamic_ncols=True):
         tqdm.write(f"Processing {source} -> {target}")
@@ -1348,6 +1435,8 @@ def main(args):
             features_normalization=args.features_normalization,
             data_path=data_path,
             output_dir=output_dir,
+            backward_steps=args.backward_steps,
+            forward_steps=args.forward_steps,
         )
         elapsed_time = time.perf_counter() - start_time
         tqdm.write(f"Time taken for {source} -> {target}: {elapsed_time:.2f} seconds")
@@ -1520,6 +1609,20 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Filename of the target shape in the specified dataset. Overrides the default behavior of matching all pairs.",
+    )
+
+    parser.add_argument(
+        "--backward_steps",
+        type=int,
+        default=64,
+        help="Number of backward steps for flow-based matching methods",
+    )
+
+    parser.add_argument(
+        "--forward_steps",
+        type=int,
+        default=64,
+        help="Number of forward steps for flow-based matching methods",
     )
 
     args = parser.parse_args()
