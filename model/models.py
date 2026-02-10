@@ -4,10 +4,14 @@ In this file we define the model used for training the flow matching model and t
 
 import torch
 import torch.nn as nn
+from torch import Tensor
 import math
 import numpy as np
 import torch.nn.functional
 from .networks import *
+from tqdm import tqdm
+
+from typing import Optional, Tuple, List, Union
 
 from flow_matching.solver import ODESolver
 
@@ -36,9 +40,9 @@ class EDMPrecond(torch.nn.Module):
 
         self.sigma_data = sigma_data
         if network is not None:
-            self.model = network
+            self.net = network
         else:
-            self.model = MLP(channels=channels, hidden_size=512, depth=depth)
+            self.net = MLP(channels=channels, hidden_size=512, depth=depth)
 
     def forward(self, x, sigma, force_fp32=False, **model_kwargs):
 
@@ -51,7 +55,7 @@ class EDMPrecond(torch.nn.Module):
         c_in = 1 / (self.sigma_data ** 2 + sigma ** 2).sqrt()
         c_noise = sigma.log() / 4
     
-        F_x = self.model((c_in * x).to(dtype), c_noise, **model_kwargs).to(dtype)
+        F_x = self.net((c_in * x).to(dtype), c_noise, **model_kwargs).to(dtype)
         assert F_x.dtype == dtype
         D_x = c_skip * x + c_out * F_x.to(torch.float32)
 
@@ -229,50 +233,196 @@ class FMCond(torch.nn.Module):
     def round_sigma(self, sigma):
         return torch.as_tensor(sigma)
 
-    #@torch.no_grad()
-    def sample(self, noise=None, num_steps=64,enable_grad=False, intermediate=False):
-
+    def sample(self, noise, num_steps, enable_grad=False, intermediate=False):
         device = noise.device
-
         noise = noise.float().to(device)
 
         if intermediate:
-            sample,sol=ot_sampler(self.net, noise, num_steps=num_steps,enable_grad=enable_grad, intermediate=intermediate)
+            sample, sol = ot_sampler(self.net, noise, num_steps=num_steps, enable_grad=enable_grad, intermediate=intermediate)
             return sample, sol
         else:
-            sample=ot_sampler(self.net, noise, num_steps=num_steps,enable_grad=enable_grad,intermediate=intermediate)
+            tqdm.write("[INTEGRATION] Integrating forward with num_steps:", num_steps)
+            sample = ot_sampler(self.net, noise, num_steps=num_steps, enable_grad=enable_grad, intermediate=intermediate)
             return sample
     
-    def inverse(self, samples=None, num_steps=64,enable_grad=False,intermediate=False):
-
+    def inverse(self, samples, num_steps, enable_grad=False, intermediate=False):
         device = samples.device
         samples = samples.float().to(device)
 
         if intermediate:
-            sample,sol=ot_inverse(self.net, samples, num_steps=num_steps,enable_grad=enable_grad, intermediate=intermediate)
-            
+            sample, sol = ot_inverse(self.net, samples, num_steps=num_steps, enable_grad=enable_grad, intermediate=intermediate)
             return sample, sol
+
         else:
-            sample=ot_inverse(self.net, samples, num_steps=num_steps,enable_grad=enable_grad, intermediate=intermediate)
-            
+            tqdm.write("[INTEGRATION] Integrating backward with num_steps:", num_steps)
+            sample = ot_inverse(self.net, samples, num_steps=num_steps, enable_grad=enable_grad, intermediate=intermediate)
             return sample
 
 
-
 def ot_sampler(
-    net, latents,num_steps=18, enable_grad=False, intermediate=False):  
+    net,
+    latents,
+    num_steps,
+    enable_grad=False,
+    intermediate=False
+):
     """Function to integrate a model from 0 to 1"""
-
-    # Time step discretization.
     t_steps = torch.linspace(0, 1, num_steps+1)
-    # Main sampling loop.
     solver = ODESolver(velocity_model=net)
-    solutions = solver.sample(time_grid=t_steps, x_init=latents, method='midpoint', step_size=1/num_steps, return_intermediates=intermediate,enable_grad=enable_grad)
+    solutions = solver.sample(
+        time_grid=t_steps,
+        x_init=latents,
+        method='midpoint',
+        step_size=1/num_steps,
+        return_intermediates=intermediate,
+        enable_grad=enable_grad
+    )
 
     if intermediate:
         return solutions[-1], solutions
     else:
         return solutions
+
+
+# class FMCond(nn.Module):
+#     def __init__(
+#         self,
+#         channels: int = 3,
+#         use_fp16: bool = False,
+#         depth: int = 6,
+#         network: Optional[nn.Module] = None,
+#     ) -> None:
+#         super().__init__()
+
+#         self.use_fp16 = use_fp16
+
+#         # Use provided network or default MLP
+#         self.net: nn.Module = (
+#             network if network is not None else MLP(channels=channels, hidden_size=512, depth=depth)
+#         )
+
+#     def forward(self, x: Tensor, sigma: Tensor) -> Tensor:
+#         """
+#         Forward pass for conditional velocity model.
+
+#         Parameters
+#         ----------
+#         x : Tensor
+#             Input latent tensor.
+#         sigma : Tensor
+#             Conditioning noise level.
+
+#         Returns
+#         -------
+#         Tensor
+#             Output velocity V(x, sigma).
+#         """
+#         sigma = sigma.to(torch.float32).reshape(-1, 1)
+#         return self.net(x, sigma).to(torch.float32)
+
+#     def round_sigma(self, sigma: Tensor) -> Tensor:
+#         """Round/convert sigma to tensor."""
+#         return torch.as_tensor(sigma)
+
+#     def sample(
+#         self,
+#         noise: Tensor,
+#         num_steps: int = 64,
+#         enable_grad: bool = False,
+#         return_intermediates: bool = False,
+#         solver_method: str = "midpoint",
+#     ) -> Tuple[Tensor, Optional[List[Tensor]]]:
+#         """
+#         Forward integration from noise to sample.
+#         """
+
+#         final, intermediates = integrate_model(
+#             net=self.net,
+#             latents=noise,
+#             num_steps=num_steps,
+#             enable_grad=enable_grad,
+#             return_intermediates=return_intermediates,
+#             solver_method=solver_method,
+#         )
+
+#         return final, intermediates
+
+#     def inverse(
+#         self,
+#         samples: Tensor,
+#         num_steps: int = 64,
+#         enable_grad: bool = False,
+#         return_intermediates: bool = False,
+#         solver_method: str = "midpoint",
+#     ) -> Tuple[Tensor, Optional[List[Tensor]]]:
+#         """
+#         Reverse integration: map samples back to noise space.
+#         """
+
+#         samples = samples.to(torch.float32).to(samples.device)
+
+#         final, intermediates = integrate_model(
+#             net=self.net,
+#             latents=samples,
+#             num_steps=num_steps,
+#             enable_grad=enable_grad,
+#             return_intermediates=return_intermediates,
+#             solver_method=solver_method,
+#         )
+
+#         return final, intermediates
+
+
+# def integrate_model(
+#     net: torch.nn.Module,
+#     latents: Tensor,
+#     num_steps: int = 18,
+#     enable_grad: bool = False,
+#     return_intermediates: bool = False,
+#     solver_method: str = "midpoint",
+# ) -> Tuple[Tensor, Optional[List[Tensor]]]:
+#     """
+#     Integrate a velocity-based model from time t=0 to t=1.
+
+#     Parameters
+#     ----------
+#     net : torch.nn.Module
+#         The velocity model to integrate.
+#     latents : torch.Tensor
+#         Initial latent variables.
+#     num_steps : int, optional
+#         Number of discretization steps in [0, 1], by default 18.
+#     enable_grad : bool, optional
+#         Whether gradients should be enabled during integration.
+#     return_intermediates : bool, optional
+#         If True, return all intermediate solutions in addition to the final one.
+#     solver_method : str, optional
+#         Numerical ODE solver method name (e.g., "midpoint", "modeleuler", etc.).
+
+#     Returns
+#     -------
+#     (torch.Tensor, Optional[List[torch.Tensor]])
+#         A tuple containing:
+#         - final solution (Tensor)
+#         - list of intermediate solutions, or None if not requested
+#     """
+
+#     time_grid: Tensor = torch.linspace(0.0, 1.0, num_steps + 1).to(latents.device)
+
+#     solver = ODESolver(velocity_model=net)
+#     sol: List[Tensor] = solver.sample(
+#         time_grid=time_grid,
+#         x_init=latents,
+#         method=solver_method,
+#         step_size=1/num_steps,
+#         return_intermediates=return_intermediates,
+#         enable_grad=enable_grad,
+#     )
+
+#     if return_intermediates:
+#         return sol[-1], sol
+#     else:
+#         return sol, None
 
 
 class InverseModel(torch.nn.Module):
@@ -287,13 +437,15 @@ class InverseModel(torch.nn.Module):
             return torch.zeros_like(x)
         return -self.vector_field(x,1-t)
 
-def ot_inverse(    net, sample,
-    num_steps=18, enable_grad=False, intermediate=False):
+def ot_inverse(
+    net,
+    sample,
+    num_steps,
+    enable_grad=False,
+    intermediate=False
+):
     """Function to integrate a model from 1 to 0"""
-    
-    # Time step discretization.
     t_steps = torch.linspace(0, 1, num_steps+1)
-    # Main sampling loop.
     inverse_net=InverseModel(net)
     solver = ODESolver(velocity_model=inverse_net)
     solutions = solver.sample(time_grid=t_steps, x_init=sample, method='midpoint', step_size=1/num_steps, return_intermediates=intermediate,enable_grad=enable_grad)
