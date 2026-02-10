@@ -152,22 +152,125 @@ def sample_sphere_volume_multidimensional(radius, center, num_points, device="cu
     return points
 
 
-def sample_initial_distribution(num_points: int, embedding_dim: int, distribution: str, device: str):
+def sample_sphere_surface_multidimensional(radius, center, num_points, device="cuda"):
     """
-    Generate random samples based on the specified distribution.
+    Sample points uniformly from the surface of a d-dimensional sphere.
+
     Args:
-        args (argparse.Namespace): Command-line arguments containing distribution type and other parameters.
-        device (str): Device to use for tensor operations ('cuda' or 'cpu').
+        radius (float): Radius of the sphere.
+        center (tuple/list): Center of the sphere (length = dimension d).
+        num_points (int): Number of points to sample.
+        device (str): Device for tensor operations.
+
     Returns:
-        torch.Tensor: Generated samples of shape (num_points, embedding_dim).
+        torch.Tensor: Sampled points of shape (num_points, d).
     """
+    center = torch.tensor(center, dtype=torch.float32, device=device)
+    d = len(center)  # Dimensionality inferred from center
+
+    # Sample Gaussian vectors
+    directions = torch.randn(num_points, d, device=device)
+
+    # Normalize to get points on the unit sphere
+    directions = directions / directions.norm(dim=1, keepdim=True)
+
+    # Scale by radius and shift by center
+    points = directions * radius + center
+
+    return points
+
+
+def sample_cube_multidimensional(side_length, center, num_points, device="cuda"):
+    """
+    Sample uniformly from a d-dimensional cube.
+    
+    The cube ranges from:
+        center[i] - side_length/2  to  center[i] + side_length/2
+    """
+
+    center = torch.as_tensor(center, dtype=torch.float32, device=device)
+    d = len(center)
+
+    half = side_length / 2.0
+
+    # Uniform in [-half, half]^d
+    offsets = (torch.rand(num_points, d, device=device) - 0.5) * (2 * half)
+
+    return center + offsets
+
+
+def sample_fitted_gaussian(num_points: int, target_data: torch.Tensor, device: str):
+    """
+    Sample points from a Gaussian distribution fitted to the target data.
+    Args:
+        num_points (int): Number of points to sample.
+        target_data (torch.Tensor): Target data to fit the Gaussian to. Shape (N, embedding_dim).
+        device (str): Device for tensor operations.
+    Returns:
+        torch.Tensor: Sampled points of shape (num_points, embedding_dim).
+    """
+    mean = torch.mean(target_data, dim=0)
+    cov = torch.from_numpy(np.cov(target_data.cpu().numpy(), rowvar=False)).to(device)
+
+    # Sample from multivariate normal distribution
+    samples = torch.distributions.MultivariateNormal(mean, covariance_matrix=cov).sample((num_points,))
+
+    return samples
+
+
+def sample_initial_distribution(
+    num_points: int,
+    embedding_dim: int,
+    distribution: str,
+    device: str,
+    target_data: torch.Tensor = None,
+):
+    """
+    Sample points from the specified initial distribution.
+    Args:
+        num_points (int): Number of points to sample.
+        embedding_dim (int): Dimensionality of the embedding space.
+        distribution (str): Type of distribution to sample from. One of {"gaussian", "fitted_gaussian", "sphere", "cube"}.
+        device (str): Device for tensor operations.
+        target_data (torch.Tensor, optional): Target data for fitted Gaussian distribution. Shape (N, embedding_dim).
+    Returns:
+        torch.Tensor: Sampled points of shape (num_points, embedding_dim).
+    """
+
+    center = (0,) * embedding_dim
+
     if distribution == "gaussian":
         samples = torch.randn(num_points, embedding_dim).to(device)
+
+    elif distribution == "fitted_gaussian":
+        if target_data is None:
+            raise ValueError("target_data must be provided for fitted_gaussian distribution.")
+        samples = sample_fitted_gaussian(
+            num_points=num_points,
+            target_data=target_data,
+            device=device,
+        )
 
     elif distribution == "sphere":
         samples = sample_sphere_volume_multidimensional(
             radius=1,
-            center=(0.5, 0.5, 0.5, 0.5, 0.5),
+            center=center,
+            num_points=num_points,
+            device=device,
+        )
+
+    elif distribution == "cube":
+        samples = sample_cube_multidimensional(
+            side_length=1.0,
+            center=center,
+            num_points=num_points,
+            device=device,
+        )
+
+    elif distribution == "sphere_surface":
+        samples = sample_sphere_surface_multidimensional(
+            radius=1,
+            center=center,
             num_points=num_points,
             device=device,
         )
@@ -260,8 +363,10 @@ def get_interpolated_feats(mesh, features, num_points, device):
     """
 
     # Sample points
-    samples, face_indices = trimesh.sample.sample_surface(mesh, num_points, face_weight=mesh.area)
-    print(f"[OCIO] Sampled {len(samples)} evenly points on mesh surface for feature interpolation.")
+    # samples, face_indices = trimesh.sample.sample_surface_even(mesh, num_points)
+    # samples, face_indices = trimesh.sample.sample_surface(mesh, num_points, face_weight=mesh.area)
+    samples, face_indices = trimesh.sample.sample_surface(mesh, num_points)
+    print(f"[OCIO] Sampled {len(samples)} points on mesh surface for feature interpolation.")
     samples = samples.astype(np.float32)
 
     # Convert to tensors
