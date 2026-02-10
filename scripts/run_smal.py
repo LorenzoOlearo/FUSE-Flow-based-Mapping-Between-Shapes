@@ -15,7 +15,7 @@ def get_targets(overwrite) -> List[str]:
     targets = []
 
     for file in os.listdir(SMAL_DIR):
-        if file.endswith(".off"):
+        if file.endswith(".off") and file.startswith(("cougar", "hippo", "horse")):
             shape_name = os.path.splitext(file)[0]
             os.makedirs(OUTPUT_DIR, exist_ok=True)
             os.makedirs(Path(OUTPUT_DIR, shape_name), exist_ok=True)
@@ -45,7 +45,7 @@ def main(args):
         target_landmarks = corr[smal_landmarks]
         
         config = {
-            "device": "cuda:1",
+            "device": "cuda:0",
             "blr": 5e-7,
             "output_dir": str(target_dir),
             "log_dir": str(target_dir),
@@ -54,7 +54,7 @@ def main(args):
             "inference": True,
             "epochs": 10000,
             "num_steps": 64,
-            "method": "FM",
+            "method": args.method,
             "network": "MLP",
             "batch_size": 50000,
             "num_points_train": 50000,
@@ -83,6 +83,7 @@ def main(args):
             command = [
                 "python", "main.py",
                 "--config", config_path,
+                "--features_interpolation", str(50000),
             ]
 
         command_str = " ".join(command)
@@ -100,6 +101,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a flow on all SMAL meshes")
     parser.add_argument('--overwrite', action='store_true', help="Overwrite if an existing flow model \"checkpoint-9999.pth\" is found", default='False')
     parser.add_argument('--external', action='store_true', help="Use external precomputed features", default='False')
+    parser.add_argument('--method', type=str, default=None, help="Method to use to construct the flows: FM or Diffusion (DDIM)")
 
     args = parser.parse_args()
 

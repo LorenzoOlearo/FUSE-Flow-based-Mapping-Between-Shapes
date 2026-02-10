@@ -7,7 +7,7 @@ import argparse
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = Path('./out/flows/kinect/kinect-diameter-norm-points-pt-fix/')
+OUTPUT_DIR = Path('./out/flows/kinect/kinect-diameter-norm-points/')
 KINECT_DIR = Path('./data/kinect_clean/off_clean/')
 
 
@@ -53,7 +53,7 @@ def main(args):
             "inference": True,
             "epochs": 10000,
             "num_steps": 64,
-            "method": "FM",
+            "method": args.method,
             "network": "MLP",
             "batch_size": 50000,
             "num_points_train": 50000,
@@ -100,6 +100,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a flow on all KINECT meshes")
     parser.add_argument('--overwrite', action='store_true', help="Overwrite if an existing flow model \"checkpoint-9999.pth\" is found", default='False')
     parser.add_argument('--external', action='store_true', help="Use external precomputed features", default='False')
+    parser.add_argument('--method', type=str, default="FM", help="Method to use to construct the flows: FM or Diffusion (DDIM)")
 
     args = parser.parse_args()
 

@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = Path('./out/flows/faust/faust-diameter-norm-CONTROL')
+OUTPUT_DIR = Path('./out/flows/faust/faust-diameter-norm')
 FAUST_DIR = Path('./data/MPI-FAUST/training/registrations')
 
 
@@ -44,7 +44,7 @@ def main(args):
         features_path = Path(working_dir, 'data', 'FAUST_features_pca_20', f"{target}_features.npy")
 
         config = {
-            "device": "cuda:0",
+            "device": "cuda:1",
             "blr": 5e-7,
             "output_dir": str(target_dir),
             "log_dir": str(target_dir),
@@ -53,7 +53,7 @@ def main(args):
             "inference": True,
             "epochs": 10000,
             "num_steps": 64,
-            "method": "FM",
+            "method": args.method,
             "network": "MLP",
             "batch_size": 50000,
             "num_points_train": 50000,
@@ -63,6 +63,7 @@ def main(args):
             "embedding_type": "features_only",
             "features_type": "landmarks",
             "use_heat_method": False,
+            "distribution": "gaussian",
             "features_normalization": "diameter",
             "dists_path": "./data/MPI-FAUST/training/registrations/dists/",
             "landmarks": [412, 5891, 6593, 3323, 2119]
@@ -83,6 +84,7 @@ def main(args):
             command = [
                 "python", "main.py",
                 "--config", config_path,
+                "--features_interpolation", str(50000),
             ]
 
         command_str = " ".join(command)
@@ -100,6 +102,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a flow on all FAUST meshes")
     parser.add_argument('--overwrite', action='store_true', help="Overwrite if an existing flow model \"checkpoint-9999.pth\" is found", default='False')
     parser.add_argument('--external', action='store_true', help="Use external precomputed features", default='False')
+    parser.add_argument('--method', type=str, default="FM", help="Method to use to construct the flows: FM or Diffusion (DDIM)")
 
     args = parser.parse_args()
 
