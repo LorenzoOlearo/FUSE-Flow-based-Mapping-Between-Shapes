@@ -44,7 +44,7 @@ from scipy.optimize import linear_sum_assignment
 from lapjv import lapjv
 from torch.distributions import Normal
 
-device = "cuda:1"
+device = "cuda:0"
 torch.cuda.set_device(device)
 
 
@@ -52,7 +52,12 @@ torch.cuda.set_device(device)
 
 
 def compute_p2p_with_flows_composition(
-    source_input, target_input, source_model, target_model, device="cuda:1"
+    source_input,
+    target_input,
+    source_model,
+    target_model,
+    backward_steps: int,
+    forward_steps: int,
 ):
     """
     Compute point-to-point maps using flow composition.
@@ -66,22 +71,21 @@ def compute_p2p_with_flows_composition(
     """
     tqdm.write("> computing p2p with flows composition")
     start_time = time.time()
-    source_input = source_input.to(device)
-    target_input = target_input.to(device)
-    source_model = source_model.to(device)
-    target_model = target_model.to(device)
 
     with torch.no_grad():
-        emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
-        sample = target_model.sample(noise=emb1_pullback, num_steps=64)
+        emb1_pullback = source_model.inverse(samples=source_input, num_steps=backward_steps)
+        sample = target_model.sample(noise=emb1_pullback, num_steps=forward_steps)
 
     # Move to cpu for sklearn
-    sample_cpu = sample.cpu().numpy()
-    target_input_cpu = target_input.cpu().numpy()
+    # sample_cpu = sample.cpu().numpy()
+    # target_input_cpu = target_input.cpu().numpy()
 
-    nbrs = NearestNeighbors(n_neighbors=1, algorithm="auto").fit(target_input_cpu)
-    _, p2p = nbrs.kneighbors(sample_cpu)
-    p2p = p2p[:, 0]
+    # nbrs = NearestNeighbors(n_neighbors=1, algorithm="auto").fit(target_input_cpu)
+    # _, p2p = nbrs.kneighbors(sample_cpu)
+    # p2p = p2p[:, 0]
+
+    dists = torch.cdist(sample, target_input)  # [N, M]
+    p2p = torch.argmin(dists, dim=1).cpu().numpy()
 
     end_time = time.time()
     elapsed_time = end_time - start_time
@@ -89,74 +93,79 @@ def compute_p2p_with_flows_composition(
 
     return p2p, elapsed_time
 
-
 def compute_p2p_with_flows_composition_hungarian(
-    source_input, target_input, source_model, target_model
+    source_input,
+    target_input,
+    source_model,
+    target_model,
+    backward_steps: int,
+    forward_steps: int,
 ):
     """
     Compute point-to-point maps using flow composition with Hungarian algorithm.
-
     Args:
         source_input: Source input tensor
         target_input: Target input tensor
         source_model: Source model
         target_model: Target model
+        backward_steps: Number of steps for inverse flow
+        forward_steps: Number of steps for forward flow
     """
-
     tqdm.write("> computing p2p with flows composition + hungarian")
     start_time = time.time()
-
     with torch.no_grad():
-        emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
-        sample = target_model.sample(noise=emb1_pullback, num_steps=64)
-
-    # Compute the pairwise distances between sample and target_input
+        emb1_pullback = source_model.inverse(samples=source_input, num_steps=backward_steps)
+        sample = target_model.sample(noise=emb1_pullback, num_steps=forward_steps)
+    
     dists = torch.cdist(sample, target_input)
-
     row_ind, col_ind = linear_sum_assignment(dists.cpu().numpy())
-
     p2p = col_ind[np.argsort(row_ind)]
-
     end_time = time.time()
     elapsed_time = end_time - start_time
     tqdm.write(f">>>> compute_p2p_with_flows_composition_hungarian elapsed {elapsed_time:.4f}s")
-
     return p2p, elapsed_time
 
 
 def compute_p2p_with_flows_composition_lapjv(
-    source_input, target_input, source_model, target_model
+    source_input,
+    target_input,
+    source_model,
+    target_model,
+    backward_steps: int,
+    forward_steps: int,
 ):
     """
-    Compute point-to-point maps using flow composition with Hungarian algorithm.
-
+    Compute point-to-point maps using flow composition with LAPJV algorithm.
     Args:
         source_input: Source input tensor
         target_input: Target input tensor
         source_model: Source model
         target_model: Target model
+        backward_steps: Number of steps for inverse flow
+        forward_steps: Number of steps for forward flow
     """
     tqdm.write("> computing p2p with flows composition + lapjv")
     start_time = time.time()
     with torch.no_grad():
-        emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
-        sample = target_model.sample(noise=emb1_pullback, num_steps=64)
-
-    # Compute the pairwise distances between sample and target_input
+        emb1_pullback = source_model.inverse(samples=source_input, num_steps=backward_steps)
+        sample = target_model.sample(noise=emb1_pullback, num_steps=forward_steps)
+    
     dists = torch.cdist(sample, target_input)
-
     row_ind, col_ind, _ = lapjv(dists.cpu().numpy())
     p2p = col_ind[np.argsort(row_ind)]
-
     end_time = time.time()
     elapsed_time = end_time - start_time
     tqdm.write(f">>>> compute_p2p_with_flows_composition_lapjv elapsed {elapsed_time:.4f}s")
-
     return p2p, elapsed_time
 
 
 def compute_p2p_with_inverted_flows_in_gauss(
-    source_input, target_input, source_model, target_model
+    source_input,
+    target_input,
+    source_model,
+    target_model,
+    backward_steps: int,
+    forward_steps: int,
 ):
     """
     Compute point-to-point maps using nearest neighbor between the gaussians.
@@ -169,8 +178,8 @@ def compute_p2p_with_inverted_flows_in_gauss(
     tqdm.write("> computing p2p with inverted flows in gauss")
     start_time = time.time()
     with torch.no_grad():
-        emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
-        emb2_pullback = target_model.inverse(samples=target_input, num_steps=64)
+        emb1_pullback = source_model.inverse(samples=source_input, num_steps=backward_steps)
+        emb2_pullback = target_model.inverse(samples=target_input, num_steps=forward_steps)
 
     nbrs = NearestNeighbors(n_neighbors=1, algorithm="auto").fit(
         emb2_pullback.cpu().numpy()
@@ -228,7 +237,9 @@ def compute_p2p_with_flows_composition_zoomout(
     target_input,
     source_model,
     target_model,
-    device,
+    backward_steps: int,
+    forward_steps: int,
+    device: str,
 ):
     """
     Compute point-to-point maps using flow composition and zoomout
@@ -244,14 +255,10 @@ def compute_p2p_with_flows_composition_zoomout(
     """
     tqdm.write("> computing p2p with flows composition + zoomout")
     start_time = time.time()
-    source_input = source_input.to(device)
-    target_input = target_input.to(device)
-    source_model = source_model.to(device)
-    target_model = target_model.to(device)
 
     with torch.no_grad():
-        emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
-        sample = target_model.sample(noise=emb1_pullback, num_steps=64)
+        emb1_pullback = source_model.inverse(samples=source_input, num_steps=backward_steps)
+        sample = target_model.sample(noise=emb1_pullback, num_steps=forward_steps)
 
     # Move to cpu for sklearn
     sample_cpu = sample
@@ -275,6 +282,8 @@ def compute_p2p_with_flows_composition_neural_zoomout(
     target_input,
     source_model,
     target_model,
+    backward_steps: int,
+    forward_steps: int,
     device,
 ):
     """
@@ -291,14 +300,10 @@ def compute_p2p_with_flows_composition_neural_zoomout(
     """
     tqdm.write("> computing p2p with flows composition + neural zoomout")
     start_time = time.time()
-    source_input = source_input.to(device)
-    target_input = target_input.to(device)
-    source_model = source_model.to(device)
-    target_model = target_model.to(device)
 
     with torch.no_grad():
-        emb1_pullback = source_model.inverse(samples=source_input, num_steps=64)
-        sample = target_model.sample(noise=emb1_pullback, num_steps=64)
+        emb1_pullback = source_model.inverse(samples=source_input, num_steps=backward_steps)
+        sample = target_model.sample(noise=emb1_pullback, num_steps=forward_steps)
 
     # Move to cpu for sklearn
     sample_cpu = sample
