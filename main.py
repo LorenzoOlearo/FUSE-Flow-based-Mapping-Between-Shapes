@@ -33,6 +33,7 @@ from util.mesh_utils import (
     generate_embeddings,
     compute_features,
     sample_initial_distribution,
+    normalize_mesh_unit,
 )
 import util.lr_sched as lr_sched
 
@@ -114,7 +115,7 @@ def get_inline_arg():
     parser.add_argument(
         "--distribution",
         default="gaussian",
-        choices=["gaussian", "uniform", "sphere"],
+        choices=["gaussian", "sphere", "cube", "sphere_surface"],
         type=str,
     )
 
@@ -568,12 +569,15 @@ def train(args, device):
     model, optimizer, loss_scaler = initialize_model_and_optimizer(args, device)
     misc.load_model(args=args, model_without_ddp=model, optimizer=optimizer, loss_scaler=loss_scaler)
     mesh = trimesh.load(args.data_path, process=False)
+
+    # mesh = normalize_mesh_unit(mesh)
+
     if isinstance(mesh, trimesh.points.PointCloud):
         print("[OCIO] Converting PointCloud to Trimesh with no faces")
-        mesh = trimesh.Trimesh(vertices=mesh.vertices, faces=[])
+        mesh = trimesh.Trimesh(vertices=mesh.vertices, faces=[], process=False)
 
     if args.pt:
-        mesh = trimesh.Trimesh(vertices=mesh.vertices, faces=[])
+        mesh = trimesh.Trimesh(vertices=mesh.vertices, faces=[], process=False)
         print(f"[OCIO] ALL FACES REMOVED FROM THE MESH; USING POINTCLOUD WITH {len(mesh.vertices)} VERTICES AND NO FACES")
 
     if args.run_name == "SPHERE":
@@ -643,7 +647,7 @@ def train(args, device):
             features = generate_embeddings(
                 mesh=mesh,
                 embedding_type=args.embedding_type,
-                num_points=500000,
+                num_points=args.features_interpolation,
                 features=vertex_features,
                 device=device,
             )
@@ -672,15 +676,8 @@ def train(args, device):
                 print(f"[DISTS] Using Dijkstra's algorithm for geodesic distances | dists_path: {args.dists_path}")
                 os.makedirs(args.dists_path, exist_ok=True)
                 _, diameter = mesh_geodesics(mesh=mesh, target=target, recompute=False, dists_path=args.dists_path, n_start=5)
-                # diameter = compute_diameter(mesh=mesh, n_sweep=50)
-                
-                # diameters_df = pd.read_csv(os.path.join(args.dists_path, "diameters.csv"))
-                # diameter_row = diameters_df[diameters_df['target'] == target]
-                # diameter = diameter_row['diameter'].values[0]
-                # print(f"Loaded diameter from CSV: {diameter}")
         else:
-            _, diameter = pointcloud_geodesics(pt=mesh, target=target, recompute=True, dists_path=args.dists_path)
-            # args.batch_size = vertex_features.shape[0]
+            _, diameter = pointcloud_geodesics(pt=mesh, target=target, recompute=False, dists_path=args.dists_path)
             
         print("Diameter used for normalization:", diameter)
         features, vertex_features = normalize_features(features, vertex_features, args.features_normalization, diameter)
