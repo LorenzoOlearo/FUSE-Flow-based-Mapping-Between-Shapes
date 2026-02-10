@@ -1,4 +1,6 @@
 import os
+
+from scripts.run_shrec20 import LANDMARKS_FILE
 os.environ["GEOMSTATS_BACKEND"] = "pytorch"
 from pathlib import Path
 from typing import List
@@ -708,202 +710,147 @@ def get_matching_methods(
     source_model = source_model.to(device)
     target_model = target_model.to(device)
 
-    if matching_methods == "fast":
-        return {
-            "knn": lambda: compute_p2p_with_knn(source_features, target_features),
-            "flow": lambda: compute_p2p_with_flows_composition(
-                source_features,
-                target_features,
-                source_model,
-                target_model, 
-                backward_steps=backward_steps,
-                forward_steps=forward_steps
-            ),
-        }
-    elif matching_methods == "sdf":
-        return {
-            "knn": lambda: compute_p2p_with_knn(source_features, target_features),
-            "ot": lambda: compute_p2p_with_ot(source_features, target_features),
-            "flow": lambda: compute_p2p_with_flows_composition(
-                source_features,
-                target_features,
-                source_model,
-                target_model, 
-                backward_steps=backward_steps,
-                forward_steps=forward_steps
-            ),
-            "ndp-sdf": lambda: compute_p2p_with_ndp_sdf(
-                source_vertex=source_sdf_projected_vertex_points,
-                target_vertex=target_sdf_projected_vertex_points,
-                source_landmarks=source_landmarks,
-                target_landmarks=target_landmarks,
-            ),
-            "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
-                source_features,
-                target_features,
-                source_model,
-                target_model,
-                backward_steps=backward_steps,
-                forward_steps=forward_steps
-            ),
-        }
-    elif matching_methods == "all":
-        return {
-            "knn": lambda: compute_p2p_with_knn(source_features, target_features),
-            "ot": lambda: compute_p2p_with_ot(source_features, target_features),
-            "fmaps": lambda: compute_p2p_with_fmaps(
-                source_path, target_path, source_features, target_features
-            ),
-            "fmap-zoomout": lambda: compute_p2p_with_fmap_zoomout(
-                source_path, target_path, source_features, target_features
-            ),
-            "fmap-neural-zoomout": lambda: compute_p2p_with_fmap_neural_zoomout(
-                source_path, target_path, source_features, target_features
-            ),
-            "ndp-landmarks": lambda: ndp_with_ldmks(
-                source_path,
-                target_path,
-                source_landmarks=source_landmarks,
-                target_landmarks=target_landmarks,
-            ),
-            "fmap-wks": lambda: compute_p2p_with_fmaps_wks(
-                source_path,
-                target_path,
-                source_landmarks=source_landmarks,
-                target_landmarks=target_landmarks,
-            ),
-            "flow": lambda: compute_p2p_with_flows_composition(
-                source_features,
-                target_features,
-                source_model,
-                target_model, 
-                backward_steps=backward_steps,
-                forward_steps=forward_steps
-            ),
-            "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
-                source_features,
-                target_features,
-                source_model,
-                target_model,
-                backward_steps=backward_steps,
-                forward_steps=forward_steps
-            ),
-            "flow-zoomout": lambda: compute_p2p_with_flows_composition_zoomout(
-                source_path,
-                target_path,
-                source_features,
-                target_features,
-                source_model,
-                target_model,
-                backward_steps=backward_steps,
-                forward_steps=forward_steps,
-                device=device,
-            ),
-            "flow-neural-zoomout": lambda: compute_p2p_with_flows_composition_neural_zoomout(
-                source_path,
-                target_path,
-                source_features,
-                target_features,
-                source_model,
-                target_model,
-                backward_steps=backward_steps,
-                forward_steps=forward_steps,
-                device=device,
-            ),
-        }
-    elif matching_methods == "baselines":
-        return {
-            "knn": lambda: compute_p2p_with_knn(source_features, target_features),
-            "ot": lambda: compute_p2p_with_ot(source_features, target_features),
-            "flow": lambda: compute_p2p_with_flows_composition(
-                source_features,
-                target_features,
-                source_model,
-                target_model, 
-                backward_steps=backward_steps,
-                forward_steps=forward_steps
-            ),
-            "fmaps": lambda: compute_p2p_with_fmaps(
-                source_path, target_path, source_features, target_features
-            ),
-            "fmap-zoomout": lambda: compute_p2p_with_fmap_zoomout(
-                source_path, target_path, source_features, target_features
-            ),
-            "fmap-neural-zoomout": lambda: compute_p2p_with_fmap_neural_zoomout(
-                source_path, target_path, source_features, target_features
-            ),
-            "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
-                source_features,
-                target_features,
-                source_model,
-                target_model,
-                backward_steps=backward_steps,
-                forward_steps=forward_steps
-            ),
-            "ndp-landmarks": lambda: ndp_with_ldmks(
-                source_path,
-                target_path,
-                source_landmarks=source_landmarks,
-                target_landmarks=target_landmarks,
-            ),
-            "fmap-wks": lambda: compute_p2p_with_fmaps_wks(
-                source_path,
-                target_path,
-                source_landmarks=source_landmarks,
-                target_landmarks=target_landmarks,
-            ),
-        }
+    all_methods = {
+        "knn": lambda: compute_p2p_with_knn(source_features, target_features),
+        
+        "ot": lambda: compute_p2p_with_ot(source_features, target_features),
+        
+        "flow": lambda: compute_p2p_with_flows_composition(
+            source_features,
+            target_features,
+            source_model,
+            target_model,
+            backward_steps=backward_steps,
+            forward_steps=forward_steps
+        ),
+        
+        "fmaps": lambda: compute_p2p_with_fmaps(
+            source_path, target_path, source_features, target_features
+        ),
+        
+        "fmap-zoomout": lambda: compute_p2p_with_fmap_zoomout(
+            source_path, target_path, source_features, target_features
+        ),
+        
+        "fmap-neural-zoomout": lambda: compute_p2p_with_fmap_neural_zoomout(
+            source_path, target_path, source_features, target_features
+        ),
+        
+        "ndp-landmarks": lambda: ndp_with_ldmks(
+            source_path,
+            target_path,
+            source_landmarks=source_landmarks,
+            target_landmarks=target_landmarks,
+        ),
+        
+        "fmap-wks": lambda: compute_p2p_with_fmaps_wks(
+            source_path,
+            target_path,
+            source_landmarks=source_landmarks,
+            target_landmarks=target_landmarks,
+        ),
+        
+        "ndp-sdf": lambda: compute_p2p_with_ndp_sdf(
+            source_vertex=source_sdf_projected_vertex_points,
+            target_vertex=target_sdf_projected_vertex_points,
+            source_landmarks=source_landmarks,
+            target_landmarks=target_landmarks,
+        ),
+        
+        "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
+            source_features,
+            target_features,
+            source_model,
+            target_model,
+            backward_steps=backward_steps,
+            forward_steps=forward_steps
+        ),
+        
+        "flow-zoomout": lambda: compute_p2p_with_flows_composition_zoomout(
+            source_path,
+            target_path,
+            source_features,
+            target_features,
+            source_model,
+            target_model,
+            backward_steps=backward_steps,
+            forward_steps=forward_steps,
+            device=device,
+        ),
+        
+        "flow-neural-zoomout": lambda: compute_p2p_with_flows_composition_neural_zoomout(
+            source_path,
+            target_path,
+            source_features,
+            target_features,
+            source_model,
+            target_model,
+            backward_steps=backward_steps,
+            forward_steps=forward_steps,
+            device=device,
+        ),
+        
+        "flow-hungarian": lambda: compute_p2p_with_flows_composition_hungarian(
+            source_features,
+            target_features,
+            source_model,
+            target_model,
+            backward_steps=backward_steps,
+            forward_steps=forward_steps,
+        ),
+        
+        "flow-lapjv": lambda: compute_p2p_with_flows_composition_lapjv(
+            source_features,
+            target_features,
+            source_model,
+            target_model,
+            backward_steps=backward_steps,
+            forward_steps=forward_steps,
+        ), 
+        
+        "hungarian": lambda: compute_p2p_with_hungarian(
+            source_features,
+            target_features,
+        ),
+        
+        "lapjv": lambda: compute_p2p_with_lapjv(
+            source_features,
+            target_features,
+        ),
+            
+    }
 
-    elif matching_methods == "baselines-no-zoomout":
-        return {
-            "knn": lambda: compute_p2p_with_knn(source_features, target_features),
-            "ot": lambda: compute_p2p_with_ot(source_features, target_features),
-            "flow": lambda: compute_p2p_with_flows_composition(
-                source_features,
-                target_features,
-                source_model,
-                target_model, 
-                backward_steps=backward_steps,
-                forward_steps=forward_steps
-            ),
-            "fmaps": lambda: compute_p2p_with_fmaps(
-                source_path, target_path, source_features, target_features
-            ),
-            "knn-in-gauss": lambda: compute_p2p_with_inverted_flows_in_gauss(
-                source_features,
-                target_features,
-                source_model,
-                target_model,
-                backward_steps=backward_steps,
-                forward_steps=forward_steps
-            ),
-            "ndp-landmarks": lambda: ndp_with_ldmks(
-                source_path,
-                target_path,
-                source_landmarks=source_landmarks,
-                target_landmarks=target_landmarks,
-            ),
-            "fmap-wks": lambda: compute_p2p_with_fmaps_wks(
-                source_path,
-                target_path,
-                source_landmarks=source_landmarks,
-                target_landmarks=target_landmarks,
-            ),
-        }
-    elif matching_methods == "zoomout":
-        return {
-            "fmap": lambda: compute_p2p_with_fmaps(
-                source_path, target_path, source_features, target_features
-            ),
-            "fmap-zoomout": lambda: compute_p2p_with_fmap_zoomout(
-                source_path, target_path, source_features, target_features
-            ),
-            "fmap-neural-zoomout": lambda: compute_p2p_with_fmap_neural_zoomout(
-                source_path, target_path, source_features, target_features
-            ),
-        }
-    else:
+    method_groups = {
+        "fast": ["knn", "flow"],
+        
+        "sdf": ["knn", "ot", "flow", "ndp-sdf", "knn-in-gauss"],
+        
+        "all": [
+            "knn", "ot", "fmaps", "fmap-zoomout", "fmap-neural-zoomout",
+            "ndp-landmarks", "fmap-wks", "flow", "knn-in-gauss",
+            "flow-zoomout", "flow-neural-zoomout"
+        ],
+        
+        "baselines": [
+            "knn", "ot", "flow", "fmaps", "fmap-zoomout", "fmap-neural-zoomout",
+            "knn-in-gauss", "ndp-landmarks", "fmap-wks"
+        ],
+        
+        "baselines-no-zoomout": [
+            "knn", "ot", "flow", "fmaps", "knn-in-gauss",
+            "ndp-landmarks", "fmap-wks"
+        ],
+        
+        "zoomout": ["fmaps", "fmap-zoomout", "fmap-neural-zoomout"],
+        
+        "la": ["knn", "flow", "hungarian", "lapjv", "flow-hungarian", "flow-lapjv"],
+    }
+
+    if matching_methods not in method_groups:
         raise ValueError(f"Unknown matching methods option: {matching_methods}")
+    
+    selected_keys = method_groups[matching_methods]
+    return {key: all_methods[key] for key in selected_keys}
 
 
 def run_matching_methods_parallel(
@@ -998,8 +945,17 @@ def run_matching_methods(
                     source_gt_path, target_gt_path
                 )
                 
+                # Get the indices of source_element.landmarks and target_element.landmarks in the common landmarks arrays
+                source_landmark_indices = [np.where(common_source_landmarks == lmk)[0][0] for lmk in source_element.landmarks if lmk in common_source_landmarks]
+                target_landmark_indices = [np.where(common_target_landmarks == lmk)[0][0] for lmk in target_element.landmarks if lmk in common_target_landmarks]
+                
                 matched_points_subset = matched_points[common_source_landmarks]
                 target_subset = target_points[common_target_landmarks]
+                
+                # Remove the landmarks used to compute the features from the evaluation
+                matched_points_subset = torch.tensor(np.delete(matched_points_subset.cpu().numpy(), source_landmark_indices, axis=0)).to(matched_points.device)
+                target_subset = torch.tensor(np.delete(target_subset.cpu().numpy(), target_landmark_indices, axis=0)).to(target_subset.device)
+                
                 euclidean_error = torch.norm(matched_points_subset - target_subset, dim=-1).mean().item() / max_euclidean_error
                 geodesic_error = compute_geodesic_error(target_element_dists, p2p, common_source_landmarks, common_target_landmarks)
                 
