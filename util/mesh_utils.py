@@ -35,7 +35,12 @@ import geomfum
 from geomfum.shape.mesh import TriangleMesh
 from geomfum.shape.point_cloud import PointCloud
 
-from geomfum.descriptor.spectral import WaveKernelSignature
+from geomfum.descriptor.spectral import (
+    WaveKernelSignature,
+    LandmarkWaveKernelSignature,
+    HeatKernelSignature,
+    LandmarkHeatKernelSignature,
+)
 from geomfum.descriptor.pipeline import DescriptorPipeline, ArangeSubsampler
 from geomfum.laplacian import LaplacianFinder, LaplacianSpectrumFinder
 
@@ -44,6 +49,7 @@ from geomfum.metric import HeatDistanceMetric
 import potpourri3d as pp3d
 
 from numpy.core._exceptions import _ArrayMemoryError
+
 
 ########################FUNCTIONS FOR MESH NORMALIZATION ##########################
 def normalize_mesh_unit(mesh):
@@ -128,26 +134,26 @@ def sample_sphere_volume(radius, center, num_points, device="cuda"):
 def sample_sphere_volume_multidimensional(radius, center, num_points, device="cuda"):
     """
     Sample points uniformly within a d-dimensional sphere of given radius and center.
-    
+
     Args:
         radius (float): Radius of the sphere.
         center (tuple or list): Center of the sphere (length = dimension d).
         num_points (int): Number of points to sample.
         device (str): Device for tensor operations.
-    
+
     Returns:
         torch.Tensor: Sampled points of shape (num_points, d).
     """
     center = torch.tensor(center, dtype=torch.float32, device=device)
     d = len(center)  # Dimension inferred from center
-    
+
     # Sample radius with proper scaling for uniform distribution in d dimensions
-    r = radius * torch.rand(num_points, device=device) ** (1/d)
-    
+    r = radius * torch.rand(num_points, device=device) ** (1 / d)
+
     # Sample directions by normalizing Gaussian vectors
     directions = torch.randn(num_points, d, device=device)
     directions = directions / directions.norm(dim=1, keepdim=True)
-    
+
     points = directions * r.view(-1, 1) + center
     return points
 
@@ -183,7 +189,7 @@ def sample_sphere_surface_multidimensional(radius, center, num_points, device="c
 def sample_cube_multidimensional(side_length, center, num_points, device="cuda"):
     """
     Sample uniformly from a d-dimensional cube.
-    
+
     The cube ranges from:
         center[i] - side_length/2  to  center[i] + side_length/2
     """
@@ -213,7 +219,9 @@ def sample_fitted_gaussian(num_points: int, target_data: torch.Tensor, device: s
     cov = torch.from_numpy(np.cov(target_data.cpu().numpy(), rowvar=False)).to(device)
 
     # Sample from multivariate normal distribution
-    samples = torch.distributions.MultivariateNormal(mean, covariance_matrix=cov).sample((num_points,))
+    samples = torch.distributions.MultivariateNormal(
+        mean, covariance_matrix=cov
+    ).sample((num_points,))
 
     return samples
 
@@ -244,7 +252,9 @@ def sample_initial_distribution(
 
     elif distribution == "fitted_gaussian":
         if target_data is None:
-            raise ValueError("target_data must be provided for fitted_gaussian distribution.")
+            raise ValueError(
+                "target_data must be provided for fitted_gaussian distribution."
+            )
         samples = sample_fitted_gaussian(
             num_points=num_points,
             target_data=target_data,
@@ -281,7 +291,9 @@ def sample_initial_distribution(
 
 
 ############################### FUNCTIONS FOR MESH EMBEDDINGS #############################
-def generate_embeddings(mesh, embedding_type, num_points, features, device: str) -> torch.Tensor:
+def generate_embeddings(
+    mesh, embedding_type, num_points, features, device: str
+) -> torch.Tensor:
     """
     Generate point embeddings from a mesh using the specified embedding strategy.
 
@@ -298,7 +310,7 @@ def generate_embeddings(mesh, embedding_type, num_points, features, device: str)
         - features (torch.Tensor | np.ndarray): Per-vertex features aligned with `mesh.vertices`.
         - embedding_type (str): One of {"xyz", "features", "features_only"}.
         - num_points_ (int): Number of points to sample.
-        - device (str): Target device for returned embeddings 
+        - device (str): Target device for returned embeddings
 
     Returns:
         torch.Tensor: Tensor of shape (num_points, embedding_dim).
@@ -307,7 +319,9 @@ def generate_embeddings(mesh, embedding_type, num_points, features, device: str)
     if len(mesh.faces) > 0:
         if embedding_type in {"features", "features_only"}:
             # Interpolated features sampled across faces
-            embedding = get_interpolated_feats(mesh, features, num_points, device=device)
+            embedding = get_interpolated_feats(
+                mesh, features, num_points, device=device
+            )
 
             if embedding_type == "features_only":
                 # Drop XYZ coords, keep only feature channels
@@ -334,7 +348,11 @@ def generate_embeddings(mesh, embedding_type, num_points, features, device: str)
         elif embedding_type == "features":
             # Concatenate XYZ coordinates with features
             samples = torch.tensor(mesh.vertices, dtype=torch.float32, device=device)
-            feat_tensor = features if torch.is_tensor(features) else torch.tensor(features, dtype=torch.float32, device=device)
+            feat_tensor = (
+                features
+                if torch.is_tensor(features)
+                else torch.tensor(features, dtype=torch.float32, device=device)
+            )
             full_embedding = torch.cat([samples, feat_tensor], dim=-1)
             embedding = full_embedding[indices]
 
@@ -366,7 +384,9 @@ def get_interpolated_feats(mesh, features, num_points, device):
     # samples, face_indices = trimesh.sample.sample_surface_even(mesh, num_points)
     # samples, face_indices = trimesh.sample.sample_surface(mesh, num_points, face_weight=mesh.area)
     samples, face_indices = trimesh.sample.sample_surface(mesh, num_points)
-    print(f"[OCIO] Sampled {len(samples)} points on mesh surface for feature interpolation.")
+    print(
+        f"[OCIO] Sampled {len(samples)} points on mesh surface for feature interpolation."
+    )
     samples = samples.astype(np.float32)
 
     # Convert to tensors
@@ -516,7 +536,9 @@ def get_shape_diameter(
             np.save(dist_cache_path, dist)
             shape_diameter = float(np.max(dist))
         else:
-            print(f"Computing approximate geodesic distances for {target} using potpourri3d...")
+            print(
+                f"Computing approximate geodesic distances for {target} using potpourri3d..."
+            )
             solver = pp3d.PointCloudHeatSolver(mesh.vertices)
             max_dist = 0.0
             for idx in range(len(mesh.vertices)):
@@ -528,7 +550,6 @@ def get_shape_diameter(
         shape_diameter = float(np.max(dist)) if dist.ndim > 0 else float(dist)
 
     return shape_diameter
-
 
 
 def mesh_geodesics(
@@ -561,7 +582,9 @@ def mesh_geodesics(
 
     # --- Restrict to largest connected component if requested ---
     if largest_component_only:
-        print(f"[DISTS INFO] Restricting computation to the largest connected component of '{target}'.")
+        print(
+            f"[DISTS INFO] Restricting computation to the largest connected component of '{target}'."
+        )
         n_components, labels = connected_components(csgraph=adjacency, directed=False)
         sizes = np.bincount(labels)
         largest_label = np.argmax(sizes)
@@ -572,34 +595,46 @@ def mesh_geodesics(
         mesh_vertices = mesh.vertices[mask]
         n_vertices = len(mesh_vertices)
 
-        print(f"[DISTS INFO] Largest component has {n_vertices} vertices "
-              f"({sizes[largest_label]} / {len(mesh.vertices)} total).")
+        print(
+            f"[DISTS INFO] Largest component has {n_vertices} vertices "
+            f"({sizes[largest_label]} / {len(mesh.vertices)} total)."
+        )
     else:
         mesh_vertices = mesh.vertices
 
     try:
         # --- Try loading cached matrix if available ---
         if not recompute and os.path.exists(dists_file):
-            print(f"[DISTS] Attempting to load cached geodesic distances for '{target}' (lazy memmap)...")
+            print(
+                f"[DISTS] Attempting to load cached geodesic distances for '{target}' (lazy memmap)..."
+            )
             try:
                 # Lazy load: do not read full matrix into RAM
-                shape_dists = np.load(dists_file, mmap_mode='r')
-                print(f"[DISTS INFO] Successfully memory-mapped cached distances for '{target}'.")
+                shape_dists = np.load(dists_file, mmap_mode="r")
+                print(
+                    f"[DISTS INFO] Successfully memory-mapped cached distances for '{target}'."
+                )
             except MemoryError:
-                print(f"[DISTS WARN] MemoryError while loading cached matrix for '{target}'. "
-                      f"Falling back to recomputation...")
+                print(
+                    f"[DISTS WARN] MemoryError while loading cached matrix for '{target}'. "
+                    f"Falling back to recomputation..."
+                )
                 raise  # trigger fallback below
 
         else:
-            print(f"[DISTS] Computing full geodesic distance matrix for '{target}' (Dijkstra)...")
+            print(
+                f"[DISTS] Computing full geodesic distance matrix for '{target}' (Dijkstra)..."
+            )
             shape_dists = shortest_path(
-                csgraph=adjacency, directed=False, return_predecessors=False, method='D'
+                csgraph=adjacency, directed=False, return_predecessors=False, method="D"
             )
 
             # Handle disconnected components
             if np.isinf(shape_dists).any():
-                print(f"[DISTS WARN] Disconnected components detected in '{target}'. "
-                      f"Replacing inf geodesic distances with Euclidean distances.")
+                print(
+                    f"[DISTS WARN] Disconnected components detected in '{target}'. "
+                    f"Replacing inf geodesic distances with Euclidean distances."
+                )
                 eucl_dists = cdist(mesh_vertices, mesh_vertices)
                 inf_mask = np.isinf(shape_dists)
                 shape_dists[inf_mask] = eucl_dists[inf_mask]
@@ -612,23 +647,31 @@ def mesh_geodesics(
 
     except (MemoryError, np.core._exceptions._ArrayMemoryError):
         # --- Low-memory fallback: streamed Dijkstra computation ---
-        print(f"[DISTS WARN] MemoryError computing or loading full matrix for '{target}'.")
-        print(f"[DISTS INFO] Falling back to incremental vertex-by-vertex Dijkstra computation "
-              f"and on-disk concatenation...")
+        print(
+            f"[DISTS WARN] MemoryError computing or loading full matrix for '{target}'."
+        )
+        print(
+            f"[DISTS INFO] Falling back to incremental vertex-by-vertex Dijkstra computation "
+            f"and on-disk concatenation..."
+        )
 
         partial_file = os.path.join(dists_path, f"{target}_dists_partial.npy")
 
         shape_dists = open_memmap(
-            partial_file, mode='w+', dtype=np.float64, shape=(n_vertices, n_vertices)
+            partial_file, mode="w+", dtype=np.float64, shape=(n_vertices, n_vertices)
         )
 
         for i in range(n_vertices):
             if i % 100 == 0:
                 print(f"[DISTS INFO] Processing vertex {i}/{n_vertices}...")
             try:
-                d_i = shortest_path(csgraph=adjacency, directed=False, indices=i, method='D')
+                d_i = shortest_path(
+                    csgraph=adjacency, directed=False, indices=i, method="D"
+                )
             except MemoryError:
-                print(f"[DISTS ERROR] MemoryError even for single vertex {i}. Aborting streamed computation.")
+                print(
+                    f"[DISTS ERROR] MemoryError even for single vertex {i}. Aborting streamed computation."
+                )
                 del shape_dists
                 os.remove(partial_file)
                 shape_dists = None
@@ -637,13 +680,19 @@ def mesh_geodesics(
             shape_dists[i, :] = d_i  # write directly to disk
 
         if shape_dists is not None:
-            print(f"[DISTS INFO] Finished streamed Dijkstra computation for '{target}'.")
-            print(f"[DISTS INFO] Saved partial geodesic distance matrix to '{partial_file}'.")
+            print(
+                f"[DISTS INFO] Finished streamed Dijkstra computation for '{target}'."
+            )
+            print(
+                f"[DISTS INFO] Saved partial geodesic distance matrix to '{partial_file}'."
+            )
 
             # Handle disconnected components
             if np.isinf(shape_dists).any():
-                print(f"[DISTS WARN] Disconnected components detected in '{target}'. "
-                      f"Replacing inf geodesic distances with Euclidean distances (streamed mode).")
+                print(
+                    f"[DISTS WARN] Disconnected components detected in '{target}'. "
+                    f"Replacing inf geodesic distances with Euclidean distances (streamed mode)."
+                )
                 eucl_dists = cdist(mesh_vertices, mesh_vertices)
                 inf_mask = np.isinf(shape_dists)
                 shape_dists[inf_mask] = eucl_dists[inf_mask]
@@ -658,11 +707,17 @@ def mesh_geodesics(
         else:
             print(f"[DISTS WARN] Falling back to two-sweep diameter approximation.")
             max_dists = []
-            start_indices = np.random.choice(n_vertices, size=min(n_start, n_vertices), replace=False)
+            start_indices = np.random.choice(
+                n_vertices, size=min(n_start, n_vertices), replace=False
+            )
             for idx in start_indices:
-                d_from_start = shortest_path(csgraph=adjacency, directed=False, indices=idx, method='D')
+                d_from_start = shortest_path(
+                    csgraph=adjacency, directed=False, indices=idx, method="D"
+                )
                 farthest_idx = np.nanargmax(d_from_start)
-                d_from_far = shortest_path(csgraph=adjacency, directed=False, indices=farthest_idx, method='D')
+                d_from_far = shortest_path(
+                    csgraph=adjacency, directed=False, indices=farthest_idx, method="D"
+                )
                 max_dists.append(np.nanmax(d_from_far))
             diameter = float(np.max(max_dists))
             shape_dists = None
@@ -787,7 +842,9 @@ def pointcloud_geodesics(
             print(f"[DISTS] Loading cached geodesic distances for '{target}'.")
             shape_dists = np.load(dists_file)
         else:
-            print(f"[DISTS] Computing full geodesic distance matrix for '{target}' (Heat Method)...")
+            print(
+                f"[DISTS] Computing full geodesic distance matrix for '{target}' (Heat Method)..."
+            )
             shape_dists = np.zeros((n_points, n_points), dtype=np.float32)
 
             for idx in range(n_points):
@@ -800,10 +857,14 @@ def pointcloud_geodesics(
 
     except _ArrayMemoryError:
         # --- Low-memory fallback: approximate diameter in two-sweep fashion ---
-        print(f"[DISTS WARN] MemoryError computing full matrix for '{target}'. Falling back to two-sweep approximation.")
+        print(
+            f"[DISTS WARN] MemoryError computing full matrix for '{target}'. Falling back to two-sweep approximation."
+        )
 
         max_dists = []
-        start_indices = np.random.choice(n_points, size=min(n_start, n_points), replace=False)
+        start_indices = np.random.choice(
+            n_points, size=min(n_start, n_points), replace=False
+        )
 
         for idx in start_indices:
             # First sweep
@@ -875,7 +936,9 @@ def compute_features(mesh, args, device):
             else:
                 print("[FEATURES] Using Dijkstra for geodesic distances computation")
                 features = torch.tensor(
-                    compute_geodesic_distances(mesh, source_index=np.array(args.landmarks))
+                    compute_geodesic_distances(
+                        mesh, source_index=np.array(args.landmarks)
+                    )
                 ).T.to(device)
         else:
             features = torch.tensor(
@@ -904,8 +967,31 @@ def compute_features(mesh, args, device):
         features = torch.tensor(
             compute_biharmonic_distances(mesh, source_index=np.array(args.landmarks))
         ).T.to(device)
-    elif args.features_type == "wks":
-        features = torch.tensor(compute_wks(mesh)).to(device)
+    elif args.features_type == "wks_5":
+        features = torch.tensor(compute_wks(mesh, num_desc=5)).to(device)
+    elif args.features_type == "wks_10":
+        features = torch.tensor(compute_wks(mesh, num_desc=10)).to(device)
+    elif args.features_type == "wks_20":
+        features = torch.tensor(compute_wks(mesh, num_desc=20)).to(device)
+    elif args.features_type == "wks_40":
+        features = torch.tensor(compute_wks(mesh, num_desc=40)).to(device)
+    elif args.features_type == "hks_5":
+        features = torch.tensor(compute_wks(mesh, num_desc=5, hks=True)).to(device)
+    elif args.features_type == "hks_10":
+        features = torch.tensor(compute_wks(mesh, num_desc=10, hks=True)).to(device)
+    elif args.features_type == "hks_20":
+        features = torch.tensor(compute_wks(mesh, num_desc=20, hks=True)).to(device)
+    elif args.features_type == "hks_40":
+        features = torch.tensor(compute_wks(mesh, num_desc=40, hks=True)).to(device)
+    elif args.features_type == "hks_plus_ldmk_5":
+        features = torch.tensor(compute_wks(mesh, num_desc=5, ldmk=True)).to(device)
+    elif args.features_type == "hks_plus_ldmk_10":
+        features = torch.tensor(compute_wks(mesh, num_desc=10, ldmk=True)).to(device)
+    elif args.features_type == "hks_plus_ldmk_20":
+        features = torch.tensor(compute_wks(mesh, num_desc=20, ldmk=True)).to(device)
+    elif args.features_type == "hks_plus_ldmk_40":
+        features = torch.tensor(compute_wks(mesh, num_desc=40, ldmk=True)).to(device)
+
     elif args.features_type == "wks_plus_ldmk":
         if len(mesh.faces) > 0:
             ldmk = torch.tensor(
@@ -1010,8 +1096,7 @@ def compute_geodesic_distances_pointcloud(mesh, source_index):
     distances : np.ndarray
         Array of geodesic distances from the source vertex to all other vertices.
     """
-    
-    
+
     # Create a PointCloudHeatSolver instance
     solver = pp3d.PointCloudHeatSolver(np.array(mesh.vertices))
 
@@ -1051,18 +1136,14 @@ def compute_geodesic_distances(mesh, source_index):
     n_vertices = len(mesh.vertices)
 
     graph = coo_matrix(
-        (edge_lengths, (edges[:, 0], edges[:, 1])),
-        shape=(n_vertices, n_vertices)
+        (edge_lengths, (edges[:, 0], edges[:, 1])), shape=(n_vertices, n_vertices)
     )
     graph = graph + graph.T  # ensure undirected
 
     # --- Compute shortest paths ---
     # We don't need predecessors here so disable them to avoid unused variable warnings.
     distances = shortest_path(
-        csgraph=graph,
-        directed=False,
-        indices=source_index,
-        return_predecessors=False
+        csgraph=graph, directed=False, indices=source_index, return_predecessors=False
     )
 
     # Ensure distances is 2D: shape (S, N)
@@ -1071,13 +1152,15 @@ def compute_geodesic_distances(mesh, source_index):
 
     # --- Handle disconnected components ---
     if np.isinf(distances).any():
-        print(f"[WARN] Disconnected components detected when computing from vertex {source_index}. "
-              f"Replacing inf geodesic distances with Euclidean distances.")
+        print(
+            f"[WARN] Disconnected components detected when computing from vertex {source_index}. "
+            f"Replacing inf geodesic distances with Euclidean distances."
+        )
         # Normalize source_index to integer array
         src_idx = np.atleast_1d(source_index).astype(int)
 
         verts = np.asarray(mesh.vertices)  # shape (N, 3)
-        src_coords = verts[src_idx]        # shape (S, 3)
+        src_coords = verts[src_idx]  # shape (S, 3)
 
         # Compute Euclidean distances from each source to all vertices -> shape (S, N)
         # verts[None, :, :] -> (1, N, 3), src_coords[:, None, :] -> (S, 1, 3)
@@ -1109,7 +1192,7 @@ def compute_geodesic_distances_heat_method(mesh, source_index):
 
     # Initialize Heat Distance Metric
     solver = geomfum.MeshHeatSolver(mesh_geomfum)
-    
+
     # Compute distances for each landmark
     distances = []
     for idx in source_index:
@@ -1119,13 +1202,19 @@ def compute_geodesic_distances_heat_method(mesh, source_index):
     return np.array(distances)
 
 
-def compute_wks(mesh):
+def compute_wks(mesh, num_desc=20, hks=False, ldmk=False):
     """
     Compute Wave Kernel Signature (WKS) for the mesh.
     Parameters:
     -----------
     mesh : trimesh.Trimesh
         The input mesh.
+    num_desc : int
+        Number of WKS descriptors to compute.
+    hks : bool
+        If True, compute Heat Kernel Signature instead of WKS.
+    ldmk : bool
+        If True, concatenate WKS with landmark based descriptors.
     Returns:
     --------
     --------
@@ -1144,10 +1233,30 @@ def compute_wks(mesh):
             mesh1_geomfum, as_basis=False, recompute=True
         )
 
-        wks = [
-            WaveKernelSignature.from_registry(n_domain=20),
-            ArangeSubsampler(subsample_step=4),
-        ]
+        if hks:
+            if ldmk:
+                wks = [
+                    HeatKernelSignature.from_registry(n_domain=200),
+                    LandmarkHeatKernelSignature.from_registry(n_domain=200),
+                    ArangeSubsampler(subsample_step=400 / num_desc),
+                ]
+            else:
+                wks = [
+                    HeatKernelSignature.from_registry(n_domain=200),
+                    ArangeSubsampler(subsample_step=200 / num_desc),
+                ]
+        else:
+            if ldmk:
+                wks = [
+                    WaveKernelSignature.from_registry(n_domain=200),
+                    LandmarkWaveKernelSignature.from_registry(n_domain=200),
+                    ArangeSubsampler(subsample_step=400 / num_desc),
+                ]
+            else:
+                wks = [
+                    WaveKernelSignature.from_registry(n_domain=200),
+                    ArangeSubsampler(subsample_step=200 / num_desc),
+                ]
 
         wks = DescriptorPipeline(wks)
     else:
@@ -1162,10 +1271,30 @@ def compute_wks(mesh):
             mesh1_geomfum, as_basis=False, recompute=True
         )
 
-        wks = [
-            WaveKernelSignature.from_registry(n_domain=20),
-            ArangeSubsampler(subsample_step=4),
-        ]
+        if hks:
+            if ldmk:
+                wks = [
+                    HeatKernelSignature.from_registry(n_domain=200),
+                    LandmarkHeatKernelSignature.from_registry(n_domain=200),
+                    ArangeSubsampler(subsample_step=400 / num_desc),
+                ]
+            else:
+                wks = [
+                    HeatKernelSignature.from_registry(n_domain=200),
+                    ArangeSubsampler(subsample_step=200 / num_desc),
+                ]
+        else:
+            if ldmk:
+                wks = [
+                    WaveKernelSignature.from_registry(n_domain=200),
+                    LandmarkWaveKernelSignature.from_registry(n_domain=200),
+                    ArangeSubsampler(subsample_step=400 / num_desc),
+                ]
+            else:
+                wks = [
+                    WaveKernelSignature.from_registry(n_domain=200),
+                    ArangeSubsampler(subsample_step=200 / num_desc),
+                ]
 
         wks = DescriptorPipeline(wks)
 
