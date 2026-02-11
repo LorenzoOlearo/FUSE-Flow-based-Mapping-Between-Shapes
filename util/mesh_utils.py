@@ -1273,24 +1273,24 @@ def compute_wks(mesh, num_desc=20, hks=False, ldmk=False, indices=None):
                 wks = [
                     HeatKernelSignature.from_registry(n_domain=200),
                     LandmarkHeatKernelSignature.from_registry(n_domain=200),
-                    ArangeSubsampler(subsample_step=400 / num_desc),
+                    ArangeSubsampler(subsample_step=int(400 / num_desc)),
                 ]
             else:
                 wks = [
                     HeatKernelSignature.from_registry(n_domain=200),
-                    ArangeSubsampler(subsample_step=200 / num_desc),
+                    ArangeSubsampler(subsample_step=int(200 / num_desc)),
                 ]
         else:
             if ldmk:
                 wks = [
                     WaveKernelSignature.from_registry(n_domain=200),
                     LandmarkWaveKernelSignature.from_registry(n_domain=200),
-                    ArangeSubsampler(subsample_step=400 / num_desc),
+                    ArangeSubsampler(subsample_step=int(400 / num_desc)),
                 ]
             else:
                 wks = [
                     WaveKernelSignature.from_registry(n_domain=200),
-                    ArangeSubsampler(subsample_step=200 / num_desc),
+                    ArangeSubsampler(subsample_step=int(200 / num_desc)),
                 ]
 
         wks = DescriptorPipeline(wks)
@@ -1312,24 +1312,24 @@ def compute_wks(mesh, num_desc=20, hks=False, ldmk=False, indices=None):
                 wks = [
                     HeatKernelSignature.from_registry(n_domain=200),
                     LandmarkHeatKernelSignature.from_registry(n_domain=200),
-                    ArangeSubsampler(subsample_step=400 / num_desc),
+                    ArangeSubsampler(subsample_step=int(400 / num_desc)),
                 ]
             else:
                 wks = [
                     HeatKernelSignature.from_registry(n_domain=200),
-                    ArangeSubsampler(subsample_step=200 / num_desc),
+                    ArangeSubsampler(subsample_step=int(200 / num_desc)),
                 ]
         else:
             if ldmk:
                 wks = [
                     WaveKernelSignature.from_registry(n_domain=200),
                     LandmarkWaveKernelSignature.from_registry(n_domain=200),
-                    ArangeSubsampler(subsample_step=400 / num_desc),
+                    ArangeSubsampler(subsample_step=int(400 / num_desc)),
                 ]
             else:
                 wks = [
                     WaveKernelSignature.from_registry(n_domain=200),
-                    ArangeSubsampler(subsample_step=200 / num_desc),
+                    ArangeSubsampler(subsample_step=int(200 / num_desc)),
                 ]
 
         wks = DescriptorPipeline(wks)
