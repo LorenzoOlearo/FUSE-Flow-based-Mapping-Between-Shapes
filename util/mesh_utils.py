@@ -984,13 +984,45 @@ def compute_features(mesh, args, device):
     elif args.features_type == "hks_40":
         features = torch.tensor(compute_wks(mesh, num_desc=40, hks=True)).to(device)
     elif args.features_type == "hks_plus_ldmk_5":
-        features = torch.tensor(compute_wks(mesh, num_desc=5, ldmk=True)).to(device)
+        features = torch.tensor(
+            compute_wks(
+                mesh, num_desc=5, hks=True, ldmk=True, indices=np.array(args.landmarks)
+            )
+        ).to(device)
     elif args.features_type == "hks_plus_ldmk_10":
-        features = torch.tensor(compute_wks(mesh, num_desc=10, ldmk=True)).to(device)
+        features = torch.tensor(
+            compute_wks(
+                mesh, num_desc=10, hks=True, ldmk=True, indices=np.array(args.landmarks)
+            )
+        ).to(device)
     elif args.features_type == "hks_plus_ldmk_20":
-        features = torch.tensor(compute_wks(mesh, num_desc=20, ldmk=True)).to(device)
+        features = torch.tensor(
+            compute_wks(
+                mesh, num_desc=20, hks=True, ldmk=True, indices=np.array(args.landmarks)
+            )
+        ).to(device)
     elif args.features_type == "hks_plus_ldmk_40":
-        features = torch.tensor(compute_wks(mesh, num_desc=40, ldmk=True)).to(device)
+        features = torch.tensor(
+            compute_wks(
+                mesh, num_desc=40, hks=True, ldmk=True, indices=np.array(args.landmarks)
+            )
+        ).to(device)
+    elif args.features_type == "wks_plus_ldmk_5":
+        features = torch.tensor(
+            compute_wks(mesh, num_desc=5, ldmk=True, indices=np.array(args.landmarks))
+        ).to(device)
+    elif args.features_type == "wks_plus_ldmk_10":
+        features = torch.tensor(
+            compute_wks(mesh, num_desc=10, ldmk=True, indices=np.array(args.landmarks))
+        ).to(device)
+    elif args.features_type == "wks_plus_ldmk_20":
+        features = torch.tensor(
+            compute_wks(mesh, num_desc=20, ldmk=True, indices=np.array(args.landmarks))
+        ).to(device)
+    elif args.features_type == "wks_plus_ldmk_40":
+        features = torch.tensor(
+            compute_wks(mesh, num_desc=40, ldmk=True, indices=np.array(args.landmarks))
+        ).to(device)
 
     elif args.features_type == "wks_plus_ldmk":
         if len(mesh.faces) > 0:
@@ -1202,7 +1234,7 @@ def compute_geodesic_distances_heat_method(mesh, source_index):
     return np.array(distances)
 
 
-def compute_wks(mesh, num_desc=20, hks=False, ldmk=False):
+def compute_wks(mesh, num_desc=20, hks=False, ldmk=False, indices=None):
     """
     Compute Wave Kernel Signature (WKS) for the mesh.
     Parameters:
@@ -1215,6 +1247,8 @@ def compute_wks(mesh, num_desc=20, hks=False, ldmk=False):
         If True, compute Heat Kernel Signature instead of WKS.
     ldmk : bool
         If True, concatenate WKS with landmark based descriptors.
+    indices:    np.ndarray
+        Array of landmark vertex indices to use if ldmk is True.
     Returns:
     --------
     --------
@@ -1235,6 +1269,7 @@ def compute_wks(mesh, num_desc=20, hks=False, ldmk=False):
 
         if hks:
             if ldmk:
+                mesh1_geomfum.landmark_indices = indices
                 wks = [
                     HeatKernelSignature.from_registry(n_domain=200),
                     LandmarkHeatKernelSignature.from_registry(n_domain=200),
@@ -1273,6 +1308,7 @@ def compute_wks(mesh, num_desc=20, hks=False, ldmk=False):
 
         if hks:
             if ldmk:
+                mesh1_geomfum.landmark_indices = indices
                 wks = [
                     HeatKernelSignature.from_registry(n_domain=200),
                     LandmarkHeatKernelSignature.from_registry(n_domain=200),
