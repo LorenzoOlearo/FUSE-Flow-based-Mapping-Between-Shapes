@@ -158,18 +158,14 @@ def sample_sphere_volume_multidimensional(radius, center, num_points, device="cu
     return points
 
 
-def sample_sphere_surface_multidimensional(radius, center, num_points, device="cuda"):
+def sample_initial_distribution(num_points: int, embedding_dim: int, distribution: str, device: str):
     """
-    Sample points uniformly from the surface of a d-dimensional sphere.
-
+    Generate random samples based on the specified distribution.
     Args:
-        radius (float): Radius of the sphere.
-        center (tuple/list): Center of the sphere (length = dimension d).
-        num_points (int): Number of points to sample.
-        device (str): Device for tensor operations.
-
+        args (argparse.Namespace): Command-line arguments containing distribution type and other parameters.
+        device (str): Device to use for tensor operations ('cuda' or 'cpu').
     Returns:
-        torch.Tensor: Sampled points of shape (num_points, d).
+        torch.Tensor: Generated samples of shape (num_points, embedding_dim).
     """
     center = torch.tensor(center, dtype=torch.float32, device=device)
     d = len(center)  # Dimensionality inferred from center
@@ -264,23 +260,7 @@ def sample_initial_distribution(
     elif distribution == "sphere":
         samples = sample_sphere_volume_multidimensional(
             radius=1,
-            center=center,
-            num_points=num_points,
-            device=device,
-        )
-
-    elif distribution == "cube":
-        samples = sample_cube_multidimensional(
-            side_length=1.0,
-            center=center,
-            num_points=num_points,
-            device=device,
-        )
-
-    elif distribution == "sphere_surface":
-        samples = sample_sphere_surface_multidimensional(
-            radius=1,
-            center=center,
+            center=(0.5, 0.5, 0.5, 0.5, 0.5),
             num_points=num_points,
             device=device,
         )
