@@ -24,7 +24,6 @@ from scipy.sparse.csgraph import shortest_path
 from sklearn import neighbors
 from sklearn.manifold import MDS
 
-# Add this to a new cell in your notebook
 import numpy as np
 from scipy.sparse.csgraph import shortest_path
 from scipy.sparse import coo_matrix
@@ -881,164 +880,131 @@ def pointcloud_geodesics(
 
 ######################## # FUNCTIONS FOR COMPUTING FEATURES ########################
 
-
 def compute_features(mesh, args, device):
     """
-    Compute geodesic distances from each vertex to the landmarks, return them normalized on axis 0.
+    Compute feature embeddings for mesh vertices based on the specified feature type.
 
     Parameters:
     -----------
     mesh : trimesh.Trimesh
         The input mesh
-    lm : numpy.ndarray
-        Array of landmark vertex indices
+    args : Namespace
+        Configuration object containing:
+        - embedding_type: Type of embedding (e.g., "xyz")
+        - features_type: Type of features to compute
+        - landmarks: Array of landmark vertex indices
+        - use_heat_method: Whether to use heat method for geodesic computation
+        - embedding_dim: Dimension of the embedding space
+    device : torch.device
+        Device to place tensors on
 
     Returns:
     --------
     torch.Tensor
-        Tensor of shape (num_vertices, len(lm)) containing geodesic distances
-        from each vertex to each landmark vertex, normalized along axis 0.
+        Feature tensor of shape (num_vertices, feature_dim)
     """
-
-    features = None
-
+    
     if args.embedding_type == "xyz":
-        return torch.tensor(mesh.vertices, device=device).float()
+        features = torch.tensor(mesh.vertices, device=device, dtype=torch.float32)
+        return features
+    
+    has_faces = len(mesh.faces) > 0
+    landmarks_array = np.array(args.landmarks)
+    
     if args.features_type == "landmarks":
-        if len(mesh.faces) > 0:
+        if has_faces:
             if args.use_heat_method:
                 print("[FEATURES] Using Heat Method for geodesic distances computation")
-                features = torch.tensor(
-                    compute_geodesic_distances_heat_method(
-                        mesh, source_index=np.array(args.landmarks)
-                    )
-                ).T.to(device)
+                distances = compute_geodesic_distances_heat_method(mesh, source_index=landmarks_array)
             else:
                 print("[FEATURES] Using Dijkstra for geodesic distances computation")
-                features = torch.tensor(
-                    compute_geodesic_distances(
-                        mesh, source_index=np.array(args.landmarks)
-                    )
-                ).T.to(device)
+                distances = compute_geodesic_distances(mesh, source_index=landmarks_array)
         else:
-            features = torch.tensor(
-                compute_geodesic_distances_pointcloud(
-                    mesh, source_index=np.array(args.landmarks)
-                )
-            ).T.to(device)
+            distances = compute_geodesic_distances_pointcloud(mesh, source_index=landmarks_array)
+        
+        features = torch.tensor(distances, device=device, dtype=torch.float32).T
+        return features
+    
     elif args.features_type == "landmarks_exp":
-        if len(mesh.faces) > 0:
-            features = torch.exp(
-                -torch.tensor(
-                    compute_geodesic_distances(
-                        mesh, source_index=np.array(args.landmarks)
-                    )
-                ).T.to(device)
-            )
+        if has_faces:
+            distances = compute_geodesic_distances(mesh, source_index=landmarks_array)
         else:
-            features = torch.exp(
-                -torch.tensor(
-                    compute_geodesic_distances_pointcloud(
-                        mesh, source_index=np.array(args.landmarks)
-                    )
-                ).T.to(device)
-            )
+            distances = compute_geodesic_distances_pointcloud(mesh, source_index=landmarks_array)
+        
+        features = torch.exp(-torch.tensor(distances, device=device, dtype=torch.float32).T)
+        return features
+    
     elif args.features_type == "landmarks_biharmonic":
-        features = torch.tensor(
-            compute_biharmonic_distances(mesh, source_index=np.array(args.landmarks))
-        ).T.to(device)
-    elif args.features_type == "wks_5":
-        features = torch.tensor(compute_wks(mesh, num_desc=5)).to(device)
-    elif args.features_type == "wks_10":
-        features = torch.tensor(compute_wks(mesh, num_desc=10)).to(device)
-    elif args.features_type == "wks_20":
-        features = torch.tensor(compute_wks(mesh, num_desc=20)).to(device)
-    elif args.features_type == "wks_40":
-        features = torch.tensor(compute_wks(mesh, num_desc=40)).to(device)
-    elif args.features_type == "hks_5":
-        features = torch.tensor(compute_wks(mesh, num_desc=5, hks=True)).to(device)
-    elif args.features_type == "hks_10":
-        features = torch.tensor(compute_wks(mesh, num_desc=10, hks=True)).to(device)
-    elif args.features_type == "hks_20":
-        features = torch.tensor(compute_wks(mesh, num_desc=20, hks=True)).to(device)
-    elif args.features_type == "hks_40":
-        features = torch.tensor(compute_wks(mesh, num_desc=40, hks=True)).to(device)
-    elif args.features_type == "hks_plus_ldmk_5":
-        features = torch.tensor(
-            compute_wks(
-                mesh, num_desc=5, hks=True, ldmk=True, indices=np.array(args.landmarks)
-            )
-        ).to(device)
-    elif args.features_type == "hks_plus_ldmk_10":
-        features = torch.tensor(
-            compute_wks(
-                mesh, num_desc=10, hks=True, ldmk=True, indices=np.array(args.landmarks)
-            )
-        ).to(device)
-    elif args.features_type == "hks_plus_ldmk_20":
-        features = torch.tensor(
-            compute_wks(
-                mesh, num_desc=20, hks=True, ldmk=True, indices=np.array(args.landmarks)
-            )
-        ).to(device)
-    elif args.features_type == "hks_plus_ldmk_40":
-        features = torch.tensor(
-            compute_wks(
-                mesh, num_desc=40, hks=True, ldmk=True, indices=np.array(args.landmarks)
-            )
-        ).to(device)
-    elif args.features_type == "wks_plus_ldmk_5":
-        features = torch.tensor(
-            compute_wks(mesh, num_desc=5, ldmk=True, indices=np.array(args.landmarks))
-        ).to(device)
-    elif args.features_type == "wks_plus_ldmk_10":
-        features = torch.tensor(
-            compute_wks(mesh, num_desc=10, ldmk=True, indices=np.array(args.landmarks))
-        ).to(device)
-    elif args.features_type == "wks_plus_ldmk_20":
-        features = torch.tensor(
-            compute_wks(mesh, num_desc=20, ldmk=True, indices=np.array(args.landmarks))
-        ).to(device)
-    elif args.features_type == "wks_plus_ldmk_40":
-        features = torch.tensor(
-            compute_wks(mesh, num_desc=40, ldmk=True, indices=np.array(args.landmarks))
-        ).to(device)
-
+        distances = compute_biharmonic_distances(mesh, source_index=landmarks_array)
+        features = torch.tensor(distances, device=device, dtype=torch.float32).T
+        return features
+    
+    elif args.features_type == "wks":
+        wks_features = compute_wks(mesh, ldmk=False, num_desc=args.embedding_dim)
+        features = torch.tensor(wks_features, device=device, dtype=torch.float32)
+        return features
+    
+    elif args.features_type == "hks":
+        hks_features = compute_hks(mesh, num_desc=args.embedding_dim)
+        features = torch.tensor(hks_features, device=device, dtype=torch.float32)
+        return features
+    
+    elif args.features_type == "landmarks_plus_wks":
+        if has_faces:
+            ldmk_distances = compute_geodesic_distances(mesh, source_index=landmarks_array)
+        else:
+            ldmk_distances = compute_geodesic_distances_pointcloud(mesh, source_index=landmarks_array)
+        
+        ldmk = torch.tensor(ldmk_distances, device=device, dtype=torch.float32).T
+        num_spectral_desc = args.embedding_dim - len(args.landmarks)
+        spectral_features = compute_wks(mesh, ldmk=False, num_desc=num_spectral_desc)
+        spectral = torch.tensor(spectral_features, device=device, dtype=torch.float32)
+        features = torch.cat([spectral, ldmk], dim=-1)
+        return features
+    
+    elif args.features_type == "landmarks_plus_hks":
+        if has_faces:
+            ldmk_distances = compute_geodesic_distances(mesh, source_index=landmarks_array)
+        else:
+            ldmk_distances = compute_geodesic_distances_pointcloud(mesh, source_index=landmarks_array)
+        
+        ldmk = torch.tensor(ldmk_distances, device=device, dtype=torch.float32).T
+        num_spectral_desc = args.embedding_dim - len(args.landmarks)
+        spectral_features = compute_hks(mesh, num_desc=num_spectral_desc)
+        spectral = torch.tensor(spectral_features, device=device, dtype=torch.float32)
+        features = torch.cat([spectral, ldmk], dim=-1)
+        return features
+    
     elif args.features_type == "wks_plus_ldmk":
-        if len(mesh.faces) > 0:
-            ldmk = torch.tensor(
-                compute_geodesic_distances(mesh, source_index=np.array(args.landmarks))
-            ).T.to(device)
-            geodesic = torch.tensor(compute_wks(mesh)).to(device)
+        if has_faces:
+            ldmk_distances = compute_geodesic_distances(mesh, source_index=landmarks_array)
         else:
-            ldmk = torch.tensor(
-                compute_geodesic_distances_pointcloud(
-                    mesh, source_index=np.array(args.landmarks)
-                )
-            ).T.to(device)
-            geodesic = torch.tensor(compute_wks(mesh)).to(device)
-        features = torch.cat([geodesic, ldmk], -1)
+            ldmk_distances = compute_geodesic_distances_pointcloud(mesh, source_index=landmarks_array)
+        
+        ldmk = torch.tensor(ldmk_distances, device=device, dtype=torch.float32).T
+        wks_features = compute_wks(mesh, ldmk=False)
+        geodesic = torch.tensor(wks_features, device=device, dtype=torch.float32)
+        features = torch.cat([geodesic, ldmk], dim=-1)
+        return features
+    
     elif args.features_type == "wks_plus_ldmk_exp":
-        if len(mesh.faces) > 0:
-            ldmk = torch.tensor(
-                compute_geodesic_distances(mesh, source_index=np.array(args.landmarks))
-            ).T.to(device)
-            geodesic = torch.exp(-torch.tensor(compute_wks(mesh)).to(device))
+        if has_faces:
+            ldmk_distances = compute_geodesic_distances(mesh, source_index=landmarks_array)
         else:
-            ldmk = torch.tensor(
-                compute_geodesic_distances_pointcloud(
-                    mesh, source_index=np.array(args.landmarks)
-                )
-            ).T.to(device)
-            geodesic = torch.exp(-torch.tensor(compute_wks(mesh)).to(device))
-        features = torch.cat([geodesic, ldmk], -1)
+            ldmk_distances = compute_geodesic_distances_pointcloud(mesh, source_index=landmarks_array)
+        
+        ldmk = torch.tensor(ldmk_distances, device=device, dtype=torch.float32).T
+        wks_features = compute_wks(mesh)
+        geodesic = torch.exp(-torch.tensor(wks_features, device=device, dtype=torch.float32))
+        features = torch.cat([geodesic, ldmk], dim=-1)
+        return features
+    
     elif args.features_type == "mds":
         print("Computing MDS embedding")
-        features = torch.tensor(
-            compute_mds(mesh.vertices, mesh.faces, k=args.embedding_type_dim - 3)
-        ).to(device)
-
-    return features
+        mds_dim = args.embedding_type_dim - 3
+        mds_features = compute_mds(mesh.vertices, mesh.faces, k=mds_dim)
+        features = torch.tensor(mds_features, device=device, dtype=torch.float32)
+        return features
 
 
 def compute_geodesic_distmat(verts, faces):
@@ -1214,107 +1180,134 @@ def compute_geodesic_distances_heat_method(mesh, source_index):
     return np.array(distances)
 
 
-def compute_wks(mesh, num_desc=20, hks=False, ldmk=False, indices=None):
+def compute_wks(mesh, num_desc, ldmk, indices=None):
     """
     Compute Wave Kernel Signature (WKS) for the mesh.
+    
     Parameters:
     -----------
     mesh : trimesh.Trimesh
         The input mesh.
     num_desc : int
         Number of WKS descriptors to compute.
-    hks : bool
-        If True, compute Heat Kernel Signature instead of WKS.
     ldmk : bool
         If True, concatenate WKS with landmark based descriptors.
-    indices:    np.ndarray
+    indices : np.ndarray
         Array of landmark vertex indices to use if ldmk is True.
+    
     Returns:
-    --------
     --------
     np.ndarray
         Array of WKS features for the mesh.
     """
-    if len(mesh.faces) > 0:
-        mesh1_geomfum = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
-
+    
+    has_faces = len(mesh.faces) > 0
+    
+    # Create geometry object and compute spectrum
+    if has_faces:
+        mesh_geom = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
         spectrum_finder = LaplacianSpectrumFinder(
             nonzero=False,
             fix_sign=False,
             laplacian_finder=LaplacianFinder.from_registry(which="robust"),
         )
-        eigvals, eigvecs = spectrum_finder(
-            mesh1_geomfum, as_basis=False, recompute=True
-        )
-
-        if hks:
-            if ldmk:
-                mesh1_geomfum.landmark_indices = indices
-                wks = [
-                    HeatKernelSignature.from_registry(n_domain=200),
-                    LandmarkHeatKernelSignature.from_registry(n_domain=200),
-                    ArangeSubsampler(subsample_step=int(400 / num_desc)),
-                ]
-            else:
-                wks = [
-                    HeatKernelSignature.from_registry(n_domain=200),
-                    ArangeSubsampler(subsample_step=int(200 / num_desc)),
-                ]
-        else:
-            if ldmk:
-                wks = [
-                    WaveKernelSignature.from_registry(n_domain=200),
-                    LandmarkWaveKernelSignature.from_registry(n_domain=200),
-                    ArangeSubsampler(subsample_step=int(400 / num_desc)),
-                ]
-            else:
-                wks = [
-                    WaveKernelSignature.from_registry(n_domain=200),
-                    ArangeSubsampler(subsample_step=int(200 / num_desc)),
-                ]
-
-        wks = DescriptorPipeline(wks)
     else:
-        mesh1_geomfum = PointCloud(np.array(mesh.vertices))
-
+        mesh_geom = PointCloud(np.array(mesh.vertices))
         spectrum_finder = LaplacianSpectrumFinder(
             nonzero=False,
             fix_sign=False,
             laplacian_finder=LaplacianFinder.from_registry(mesh=False, which="robust"),
         )
-        eigvals, eigvecs = spectrum_finder(
-            mesh1_geomfum, as_basis=False, recompute=True
+    
+    eigvals, eigvecs = spectrum_finder(mesh_geom, as_basis=False, recompute=True)
+    
+    # Build descriptor pipeline
+    if ldmk:
+        mesh_geom.landmark_indices = indices
+        subsample_step = int(400 / num_desc)
+        pipeline_components = [
+            WaveKernelSignature.from_registry(n_domain=200),
+            LandmarkWaveKernelSignature.from_registry(n_domain=(200 // len(indices))),
+            ArangeSubsampler(subsample_step=subsample_step),
+        ]
+        descriptor_pipeline = DescriptorPipeline(pipeline_components)
+        features = descriptor_pipeline.apply(mesh_geom).T
+        return features
+    
+    else:
+        subsample_step = int(200 / num_desc)
+        pipeline_components = [
+            WaveKernelSignature.from_registry(n_domain=200),
+            ArangeSubsampler(subsample_step=subsample_step),
+        ]
+        descriptor_pipeline = DescriptorPipeline(pipeline_components)
+        features = descriptor_pipeline.apply(mesh_geom).T
+        return features
+
+
+def compute_hks(mesh, num_desc, ldmk, indices=None):
+    """
+    Compute Heat Kernel Signature (HKS) for the mesh.
+    
+    Parameters:
+    -----------
+    mesh : trimesh.Trimesh
+        The input mesh.
+    num_desc : int
+        Number of HKS descriptors to compute.
+    ldmk : bool
+        If True, concatenate HKS with landmark based descriptors.
+    indices : np.ndarray
+        Array of landmark vertex indices to use if ldmk is True.
+    
+    Returns:
+    --------
+    np.ndarray
+        Array of HKS features for the mesh.
+    """
+    
+    has_faces = len(mesh.faces) > 0
+    
+    # Create geometry object and compute spectrum
+    if has_faces:
+        mesh_geom = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
+        spectrum_finder = LaplacianSpectrumFinder(
+            nonzero=False,
+            fix_sign=False,
+            laplacian_finder=LaplacianFinder.from_registry(which="robust"),
         )
-
-        if hks:
-            if ldmk:
-                mesh1_geomfum.landmark_indices = indices
-                wks = [
-                    HeatKernelSignature.from_registry(n_domain=200),
-                    LandmarkHeatKernelSignature.from_registry(n_domain=200),
-                    ArangeSubsampler(subsample_step=int(400 / num_desc)),
-                ]
-            else:
-                wks = [
-                    HeatKernelSignature.from_registry(n_domain=200),
-                    ArangeSubsampler(subsample_step=int(200 / num_desc)),
-                ]
-        else:
-            if ldmk:
-                wks = [
-                    WaveKernelSignature.from_registry(n_domain=200),
-                    LandmarkWaveKernelSignature.from_registry(n_domain=200),
-                    ArangeSubsampler(subsample_step=int(400 / num_desc)),
-                ]
-            else:
-                wks = [
-                    WaveKernelSignature.from_registry(n_domain=200),
-                    ArangeSubsampler(subsample_step=int(200 / num_desc)),
-                ]
-
-        wks = DescriptorPipeline(wks)
-
-    return wks.apply(mesh1_geomfum).T
+    else:
+        mesh_geom = PointCloud(np.array(mesh.vertices))
+        spectrum_finder = LaplacianSpectrumFinder(
+            nonzero=False,
+            fix_sign=False,
+            laplacian_finder=LaplacianFinder.from_registry(mesh=False, which="robust"),
+        )
+    
+    eigvals, eigvecs = spectrum_finder(mesh_geom, as_basis=False, recompute=True)
+    
+    # Build descriptor pipeline
+    if ldmk:
+        mesh_geom.landmark_indices = indices
+        subsample_step = int(400 / num_desc)
+        pipeline_components = [
+            HeatKernelSignature.from_registry(n_domain=200),
+            LandmarkHeatKernelSignature.from_registry(n_domain=(200 // len(indices))),
+            ArangeSubsampler(subsample_step=subsample_step),
+        ]
+        descriptor_pipeline = DescriptorPipeline(pipeline_components)
+        features = descriptor_pipeline.apply(mesh_geom).T
+        return features
+    
+    else:
+        subsample_step = int(200 / num_desc)
+        pipeline_components = [
+            HeatKernelSignature.from_registry(n_domain=200),
+            ArangeSubsampler(subsample_step=subsample_step),
+        ]
+        descriptor_pipeline = DescriptorPipeline(pipeline_components)
+        features = descriptor_pipeline.apply(mesh_geom).T
+        return features
 
 
 def compute_biharmonic_distances(mesh, source_index):
