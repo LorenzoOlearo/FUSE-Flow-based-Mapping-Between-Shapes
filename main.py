@@ -479,7 +479,7 @@ def train_one_epoch(
     metric_logger = misc.MetricLogger(delimiter="  ")
     metric_logger.add_meter("lr", misc.SmoothedValue(window_size=1, fmt="{value:.6f}"))
     header = f"Epoch: [{epoch}]"
-    print_freq = 200
+    print_freq = 500
 
     # Gradient accumulation setup
     accum_iter = args.accum_iter
@@ -496,13 +496,9 @@ def train_one_epoch(
     else:
         exit("Data loader must be a dictionary with 'batch_size' and 'epoch_size' keys.")
 
-    # Wrap data loader with logger if verbose
-    iterator = (
-        metric_logger.log_every(data_loader, print_freq, header)
-        if args.verbose else data_loader
-    )
+    logger_iterator = metric_logger.log_every(data_loader, print_freq, header)
 
-    for data_iter_step, batch in enumerate(iterator):
+    for data_iter_step, batch in enumerate(logger_iterator):
         # Adjust LR during warmup
         if data_iter_step % accum_iter == 0:
             lr_sched.adjust_learning_rate(
@@ -562,7 +558,7 @@ def train_one_epoch(
     # Synchronize metrics across processes
     metric_logger.synchronize_between_processes()
 
-    # return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
 def train(args, device):
@@ -724,6 +720,7 @@ def train(args, device):
     else:
         raise ValueError(f"Unknown method {args.method}")
 
+    loss_history = []
     for epoch in trange(args.start_epoch, args.epochs, desc="Epochs"):
         train_stats = train_one_epoch(
             model=model,
@@ -739,6 +736,8 @@ def train(args, device):
             embedding_type=args.embedding_type,
             args=args,
         )
+        
+        loss_history.append(train_stats["loss"])
 
         if args.output_dir and (epoch % 100 == 0 or epoch + 1 == args.epochs):
             if epoch + 1 == args.epochs:
@@ -761,18 +760,9 @@ def train(args, device):
                         epoch=epoch,
                     )
 
-        # log_stats = {
-        #     **{f"train_{k}": v for k, v in train_stats.items()},
-        #     "epoch": epoch,
-        # }
-
-        # if args.output_dir and misc.is_main_process():
-        #     with open(
-        #         os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8"
-        #     ) as f:
-        #         f.write(json.dumps(log_stats) + "\n")
-
     total_time = time.time() - start_time
+    misc.plot_loss(loss_history, args.output_dir, args.start_epoch)
+    
     logging.info(
         f"Training completed in {str(datetime.timedelta(seconds=int(total_time)))}"
     )

@@ -241,7 +241,7 @@ class FMCond(torch.nn.Module):
             sample, sol = ot_sampler(self.net, noise, num_steps=num_steps, enable_grad=enable_grad, intermediate=intermediate)
             return sample, sol
         else:
-            tqdm.write("[INTEGRATION] Integrating forward with num_steps:", num_steps)
+            tqdm.write(f"[INTEGRATION] Integrating forward with num_steps: {num_steps}")
             sample = ot_sampler(self.net, noise, num_steps=num_steps, enable_grad=enable_grad, intermediate=intermediate)
             return sample
     
@@ -254,7 +254,7 @@ class FMCond(torch.nn.Module):
             return sample, sol
 
         else:
-            tqdm.write("[INTEGRATION] Integrating backward with num_steps:", num_steps)
+            tqdm.write(f"[INTEGRATION] Integrating backward with num_steps: {num_steps}")
             sample = ot_inverse(self.net, samples, num_steps=num_steps, enable_grad=enable_grad, intermediate=intermediate)
             return sample
 

@@ -11,6 +11,8 @@ import os
 import time
 from collections import defaultdict, deque
 from pathlib import Path
+from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 import torch
 import torch.distributed as dist
@@ -149,13 +151,13 @@ class MetricLogger(object):
                 eta_seconds = iter_time.global_avg * (len(iterable) - i)
                 eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
                 if torch.cuda.is_available():
-                    print(log_msg.format(
+                    tqdm.write(log_msg.format(
                         i, len(iterable), eta=eta_string,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time),
                         memory=torch.cuda.max_memory_allocated() / MB))
                 else:
-                    print(log_msg.format(
+                    tqdm.write(log_msg.format(
                         i, len(iterable), eta=eta_string,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time)))
@@ -165,6 +167,33 @@ class MetricLogger(object):
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
         print('{} Total time: {} ({:.4f} s / it)'.format(
             header, total_time_str, total_time / len(iterable)))
+        
+        
+def plot_loss(loss_history, output_dir, start_epoch=0):
+    """
+    Plot training loss over epochs and save to output directory.
+    
+    Args:
+        loss_history: List of loss values per epoch
+        output_dir: Directory to save the plot
+        start_epoch: Starting epoch number (for x-axis labeling)
+    """
+    plt.figure(figsize=(10, 6))
+    epochs = range(start_epoch, start_epoch + len(loss_history))
+    
+    plt.plot(epochs, loss_history, 'b-', linewidth=2, label='Training Loss')
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('Loss', fontsize=12)
+    plt.title('Training Loss over Epochs', fontsize=14, fontweight='bold')
+    plt.grid(True, alpha=0.3)
+    plt.legend(fontsize=10)
+    
+    os.makedirs(output_dir, exist_ok=True)
+    save_path = os.path.join(output_dir, 'loss_history.png')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Loss plot saved to: {save_path}")
 
 
 def setup_for_distributed(is_master):
