@@ -35,12 +35,16 @@ from util.mesh_utils import (
     sample_initial_distribution,
     normalize_mesh_unit,
 )
-import util.lr_sched as lr_sched
+
+# import util.lr_sched as lr_sched
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+
 
 from flow_matching.path import AffineProbPath
 from flow_matching.path.scheduler import CondOTScheduler
 
 from model import models, networks
+from model.networks import MLP
 from model.models import EDMPrecond, FMCond
 
 
@@ -72,7 +76,7 @@ def get_inline_arg():
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=0.01,
+        default=0.0001,
         metavar="LR",
         help="learning rate (absolute lr)",
     )
@@ -103,7 +107,7 @@ def get_inline_arg():
         help="Accumulate gradient iterations (for increasing the effective batch size under memory constraints)",
     )
     parser.add_argument("--num-steps", default=64, type=int)
-    parser.add_argument("--depth", default=6, type=int, metavar="MODEL")
+    # parser.add_argument("--depth", default=6, type=int, metavar="MODEL")
 
     parser.add_argument(
         "--data_path",
@@ -381,9 +385,13 @@ def initialize_model_and_optimizer(args, device):
     if args.method == "FM":
         model = FMCond(
             channels=args.embedding_dim,
-            depth=args.depth,
-            network=networks.__dict__[args.network](channels=args.embedding_dim),
-        )
+            network=MLP(
+                channels=args.embedding_dim,
+                hidden_size=256,
+                depth=4,
+                num_frequencies=-1
+            )
+        ).to(device) 
     elif args.method == "diffusion":
         model = EDMPrecond(
             channels=args.embedding_dim,
@@ -395,8 +403,8 @@ def initialize_model_and_optimizer(args, device):
 
     # Initialize the optimizer and loss scaler (If distributed training different behaviour)
     eff_batch_size = args.batch_size * args.accum_iter * misc.get_world_size()
-    if args.learning_rate is None:  # only base_lr is specified
-        args.learning_rate = args.blr * eff_batch_size / 128
+    # if args.learning_rate is None:  # only base_lr is specified
+    #     args.learning_rate = args.blr * eff_batch_size / 128
 
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(
@@ -410,13 +418,25 @@ def initialize_model_and_optimizer(args, device):
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
 
     loss_scaler = NativeScaler(device)
+    
+    scheduler = ReduceLROnPlateau(
+        optimizer,
+        mode='min',
+        factor=0.5,
+        patience=1000,
+        threshold=1e-3,
+        threshold_mode='rel',
+        cooldown=0,
+        min_lr=1e-4,
+        eps=1e-8,
+    )
 
     print("base lr: %.2e" % (args.learning_rate * 128 / eff_batch_size))
     print("actual lr: %.2e" % args.learning_rate)
     print("accumulate grad iterations: %d" % args.accum_iter)
     print("effective batch size: %d" % eff_batch_size)
 
-    return model, optimizer, loss_scaler
+    return model, optimizer, loss_scaler, scheduler
 
 
 def diffusion_step(model, y, device, args):
@@ -500,10 +520,10 @@ def train_one_epoch(
 
     for data_iter_step, batch in enumerate(logger_iterator):
         # Adjust LR during warmup
-        if data_iter_step % accum_iter == 0:
-            lr_sched.adjust_learning_rate(
-                optimizer, data_iter_step / len(data_loader) + epoch, args
-            )
+        # if data_iter_step % accum_iter == 0:
+        #     lr_sched.adjust_learning_rate(
+        #         optimizer, data_iter_step / len(data_loader) + epoch, args
+        #     )
 
         # Prepare input batch
         if isinstance(batch, int):
@@ -562,7 +582,7 @@ def train_one_epoch(
 
 
 def train(args, device):
-    model, optimizer, loss_scaler = initialize_model_and_optimizer(args, device)
+    model, optimizer, loss_scaler, scheduler = initialize_model_and_optimizer(args, device)
     misc.load_model(args=args, model_without_ddp=model, optimizer=optimizer, loss_scaler=loss_scaler)
     mesh = trimesh.load(args.data_path, process=False)
 
@@ -721,6 +741,9 @@ def train(args, device):
         raise ValueError(f"Unknown method {args.method}")
 
     loss_history = []
+    best_loss = float('inf')
+    best_epoch = -1
+    
     for epoch in trange(args.start_epoch, args.epochs, desc="Epochs"):
         train_stats = train_one_epoch(
             model=model,
@@ -738,27 +761,30 @@ def train(args, device):
         )
         
         loss_history.append(train_stats["loss"])
-
-        if args.output_dir and (epoch % 100 == 0 or epoch + 1 == args.epochs):
-            if epoch + 1 == args.epochs:
-                if args.distributed:
-                    misc.save_model(
-                        args=args,
-                        model=model,
-                        model_without_ddp=model.module,
-                        optimizer=optimizer,
-                        loss_scaler=loss_scaler,
-                        epoch=epoch,
-                    )
-                else:
-                    misc.save_model(
-                        args=args,
-                        model=model,
-                        model_without_ddp=model,
-                        optimizer=optimizer,
-                        loss_scaler=loss_scaler,
-                        epoch=epoch,
-                    )
+        scheduler.step(train_stats["loss"])
+       
+        if args.output_dir is not None:
+            if train_stats["loss"] < best_loss:
+                best_loss = train_stats["loss"]
+                misc.save_model(
+                    args=args,
+                    model=model,
+                    model_without_ddp=model,
+                    optimizer=optimizer,
+                    loss_scaler=loss_scaler,
+                    epoch=epoch,
+                    best=True,
+                )
+            # Save the last checkpoint regardless of the loss value
+            if epoch == args.epochs - 1:
+                misc.save_model(
+                    args=args,
+                    model=model,
+                    model_without_ddp=model,
+                    optimizer=optimizer,
+                    loss_scaler=loss_scaler,
+                    epoch=epoch,
+                )
 
     total_time = time.time() - start_time
     misc.plot_loss(loss_history, args.output_dir, args.start_epoch)
@@ -772,9 +798,13 @@ def inference(args, device):
     if args.method == "FM":
         model = FMCond(
             channels=args.embedding_dim,
-            depth=args.depth,
-            network=models.__dict__[args.network](channels=args.embedding_dim),
-        )
+            network=MLP(
+                channels=args.embedding_dim,
+                hidden_size=256,
+                depth=4,
+                num_frequencies=-1
+            )
+        ).to(device) 
     elif args.method == "diffusion":
         model = EDMPrecond(
             channels=args.embedding_dim,
@@ -782,9 +812,11 @@ def inference(args, device):
             network=models.__dict__[args.network](channels=args.embedding_dim),
         )
     model.to(device)
+    # model_path = args.output_dir + "/checkpoint-" + str(args.epochs - 1) + ".pth"
+    model_path = args.output_dir + "/checkpoint-best.pth"
     model.load_state_dict(
         torch.load(
-            args.output_dir + "/checkpoint-" + str(args.epochs - 1) + ".pth",
+            model_path,
             map_location=device,
             weights_only=False,
         )["model"],

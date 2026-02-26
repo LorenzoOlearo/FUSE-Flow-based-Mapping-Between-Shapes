@@ -32,7 +32,7 @@ import potpourri3d as pp3d
 from util.matching_utils import *
 from util.metrics import *
 from util.dataset_utils import *
-from util.plot import plot_points, start_end_subplot
+from util.plot import plot_points, start_end_subplot, plot_error
 from util.mesh_utils import (
     mesh_geodesics,
     pointcloud_geodesics,
@@ -263,6 +263,32 @@ def get_targets_shrec19(flows_path) -> List[str]:
     return targets
 
 
+def get_targets_tosca(flows_path) -> List[str]:
+    """Determine which targets to process."""
+    targets = [
+        f.name
+        for f in flows_path.iterdir()
+        if f.is_dir()
+        and f.name.startswith("cat")
+        and (flows_path / f.name / 'checkpoint-9999.pth').is_file()
+    ]
+
+    tqdm.write(f"Processing targets: {targets}")
+    return targets
+
+
+def get_targets_faust_r(args) -> List[str]:
+    """Determine which targets to process."""
+
+    targets = []
+    for i in range(80, 100):
+        target = f"tr_reg_{i:03d}"
+        targets.append(target)
+
+    tqdm.write(f"Processing all targets: {targets}")
+    return targets
+
+
 def get_mesh_element_features(
     element: str,
     mesh: trimesh.Trimesh,
@@ -272,10 +298,12 @@ def get_mesh_element_features(
     device: str,
 ) -> torch.Tensor:
 
-    vertex_features_path = Path(data_path.flows_path, element, f"vertex-geodesics-vnorm.txt")
+    # vertex_features_path = Path(data_path.flows_path, element, f"vertex-geodesics-vnorm.txt")
+    vertex_features_path = Path(data_path.flows_path, element, f"vertex-geodesics.txt")
     vertex_features = torch.tensor(np.loadtxt(vertex_features_path).astype(np.float32)).to(device)
     
-    features_path = Path(data_path.flows_path, element, f"vertex-geodesics-interpolated-vnorm.txt")
+    # features_path = Path(data_path.flows_path, element, f"vertex-geodesics-interpolated-vnorm.txt")
+    features_path = Path(data_path.flows_path, element, f"vertex-geodesics-interpolated.txt")
     features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
     
     tqdm.write("------------------------------------")
@@ -410,7 +438,15 @@ def process_element(
     mesh_path = Path(data_path.dataset_path, element + data_path.dataset_extension)
     mesh = trimesh.load(mesh_path, process=False) if mesh_baseline else None
 
-    model = _init_model(len(data_path.landmarks), device)
+    model = FMCond(
+        channels=config['embedding_dim'],
+        network=MLP(
+            channels=config['embedding_dim'],
+            hidden_size=256,
+            depth=4,
+            num_frequencies=-1
+        )
+    ).to(device)
 
     if representation == "mesh":
         element = _process_mesh_element(element, mesh, model, device, data_path)
@@ -422,14 +458,6 @@ def process_element(
         raise ValueError(f"Invalid representation: '{representation}'")
 
     return element
-
-
-def _init_model(num_channels: int, device: str):
-    """Initialize the functional map conditioning model."""
-    return FMCond(
-        channels=num_channels,
-        network=MLP(channels=num_channels).to(device),
-    )
 
 
 def _process_mesh_element(element, mesh, model, device, data_path) -> Element:
@@ -456,7 +484,7 @@ def _process_mesh_element(element, mesh, model, device, data_path) -> Element:
         dists_path=str(data_path.dists_path),
     )
 
-    model_path = Path(data_path.flows_path, element, "checkpoint-9999.pth")
+    model_path = Path(data_path.flows_path, element, "checkpoint-best.pth")
     model.load_state_dict(torch.load(model_path, weights_only=False)["model"], strict=True)
     model.to(device).eval()
 
@@ -670,7 +698,14 @@ def _load_correspondence_file(element, corr_path, mesh, corr_offset):
     if corr_path is None:
         tqdm.write("[CORR] No correspondence path provided, using identity mapping.")
         return np.arange(len(mesh.vertices))
-    path = Path(corr_path, element + ".vts")
+    
+    # TODO: special case for TOSCA 
+    if corr_path.name == "sym":
+        element_name = "".join(filter(str.isalpha, element))
+        path = Path(corr_path, element_name + ".sym.labels")
+    else:
+        path = Path(corr_path, element + ".vts")
+    
     return np.loadtxt(path).astype(int) + corr_offset
 
 
@@ -821,7 +856,7 @@ def get_matching_methods(
     }
 
     method_groups = {
-        "fast": ["knn", "flow"],
+        "fast": ["knn", "flow", "knn-in-gauss"],
         
         "sdf": ["knn", "ot", "flow", "ndp-sdf", "knn-in-gauss"],
         
@@ -928,7 +963,6 @@ def run_matching_methods(
         p2p, elapsed = func()
         
         matched_points = target_points[p2p[source_element.corr]]
-        
         target_points_corr = target_element.vertex_points[target_element.corr]
 
         if target_points.shape[0] <= 50_000:
@@ -1050,7 +1084,18 @@ def plot_results(
             html=plot_html,
             png=plot_png,
         )
-
+        
+        # plot_error(
+        #     source_points,
+        #     target_points[:max_points],                     # ground truth
+        #     target_points[res.indices[:max_points]],        # estimated via matching
+        #     plots_path=str(output_dir),
+        #     run_name=f"{name}-{source}-{target}",
+        #     show=False,
+        #     html=plot_html,
+        #     png=plot_png,
+        # )
+        
 
 def get_geodesic_dists(
     mesh: trimesh.Trimesh,
@@ -1287,8 +1332,14 @@ def main(args):
     elif args.shrec19:
         dataset = "SHREC19"
         targets = get_targets_shrec19(Path(config["matching_config"][dataset]["flows_path"]))
+    elif args.tosca:
+        dataset = "TOSCA"
+        targets = get_targets_tosca(Path(config["matching_config"][dataset]["flows_path"]))
+    elif args.faust_r:
+        dataset = "FAUST_R"
+        targets = get_targets_faust_r(args)
     else:
-        raise ValueError("Please specify either --faust, --smal, --kinect, --surreal, --smplx, --shrec20, or --shrec19 to select the dataset.")
+        raise ValueError("Please specify either --faust, --smal, --kinect, --surreal, --smplx, --shrec20, or --shrec19, tosca to select the dataset.")
 
     if targets is None or len(targets) == 0:
         raise ValueError("No targets found to process.")
@@ -1478,6 +1529,18 @@ if __name__ == "__main__":
         "--shrec19",
         action="store_true",
         help="Run matching methods on the SHREC19 dataset",
+        default=False,
+    )
+    parser.add_argument(
+        "--tosca",
+        action="store_true",
+        help="Run matching methods on the TOSCA SYM dataset",
+        default=False,
+    )
+    parser.add_argument(
+        "--faust_r",
+        action="store_true",
+        help="Run matching methods on the TOSCA_R SYM dataset",
         default=False,
     )
     parser.add_argument(
