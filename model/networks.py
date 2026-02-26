@@ -372,44 +372,59 @@ class MLP_3D(nn.Module):
 
 
 class MLP(nn.Module):
-    """MLP time+features with Swish activations."""
+    """Simple parameterized MLP with optional Fourier features and Swish activations."""
 
     def __init__(
         self,
         channels=3,
         hidden_size=256,
         depth=6,
+        num_frequencies=6,
     ):
-        # input_dim: int = 3, time_dim: int = 1, hidden_dim: int = 128, fourier_encoding: str = 'FF', fourier_dim: int = 0):
         super().__init__()
+
+        assert depth >= 2, "depth must be at least 2 (input + output layer)"
+
         self.input_dim = channels
         self.hidden_dim = hidden_size
-        self.ff_module = FourierFeatsEncoding(
-            in_dim=channels + 1, num_frequencies=6, include_input=True
-        )
-        self.fourier_dim = ((channels + 1) * 6 * 2) + (channels + 1)
-        self.rff_module = nn.Identity()
+        self.num_frequencies = num_frequencies
 
-        self.main = nn.Sequential(
-            nn.Linear(self.fourier_dim, self.hidden_dim),
-            Swish(),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            Swish(),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            Swish(),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            Swish(),
-            nn.Linear(self.hidden_dim, self.input_dim),
-        )
+        raw_input_dim = channels + 1  # x + t
+
+        if num_frequencies > 0:
+            self.ff_module = FourierFeatsEncoding(
+                in_dim=raw_input_dim,
+                num_frequencies=num_frequencies,
+                include_input=True,
+            )
+            self.input_feature_dim = (
+                raw_input_dim * num_frequencies * 2
+            ) + raw_input_dim
+        else:
+            self.ff_module = nn.Identity()
+            self.input_feature_dim = raw_input_dim
+
+        layers = []
+        layers.append(nn.Linear(self.input_feature_dim, hidden_size))
+        layers.append(Swish())
+
+        for _ in range(depth - 2):
+            layers.append(nn.Linear(hidden_size, hidden_size))
+            layers.append(Swish())
+
+        layers.append(nn.Linear(hidden_size, self.input_dim))
+
+        self.main = nn.Sequential(*layers)
 
     def forward(self, x, t):
-        sz = x.size()
-        t = t.reshape(-1, 1)
-        t = t.reshape(-1, 1).expand(x.shape[0], 1)
+        dtype = self.main[0].weight.dtype
+        device = self.main[0].weight.device
+
+        x = x.to(device=device, dtype=dtype)
+        t = t.view(-1, 1).to(device=device, dtype=dtype)
+        t = t.expand(x.shape[0], -1)
+
         h = torch.cat([x, t], dim=1)
-
-        h = self.rff_module(h)
         h = self.ff_module(h)
-        output = self.main(h)
 
-        return output
+        return self.main(h)

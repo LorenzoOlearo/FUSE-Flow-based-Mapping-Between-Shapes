@@ -218,9 +218,15 @@ class FMCond(torch.nn.Module):
 
         self.use_fp16 = use_fp16
 
+        # if network is not None:
+        #     self.net = network
+        # else:
+        #     self.net = MLP(channels=channels, hidden_size=1024, depth=depth)
+        
         if network is not None:
             self.net = network
         else:
+            print(f"[WARNING] Using default MLP with channels={channels}, hidden_size=512, depth={depth}")
             self.net = MLP(channels=channels, hidden_size=512, depth=depth)
 
     def forward(self, x, sigma):
