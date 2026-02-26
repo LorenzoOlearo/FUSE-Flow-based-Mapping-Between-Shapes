@@ -240,8 +240,6 @@ def sample_initial_distribution(
         torch.Tensor: Sampled points of shape (num_points, embedding_dim).
     """
 
-    center = (0,) * embedding_dim
-
     if distribution == "gaussian":
         samples = torch.randn(num_points, embedding_dim).to(device)
 
@@ -257,9 +255,10 @@ def sample_initial_distribution(
         )
 
     elif distribution == "sphere":
+        center = (0.5,) * embedding_dim
         samples = sample_sphere_volume_multidimensional(
             radius=1,
-            center=(0.5, 0.5, 0.5, 0.5, 0.5),
+            center=center,
             num_points=num_points,
             device=device,
         )
@@ -940,7 +939,7 @@ def compute_features(mesh, args, device):
         return features
     
     elif args.features_type == "wks":
-        wks_features = compute_wks(mesh, ldmk=False, num_desc=args.embedding_dim)
+        wks_features = compute_wks(mesh, num_desc=args.embedding_dim)
         features = torch.tensor(wks_features, device=device, dtype=torch.float32)
         return features
     
