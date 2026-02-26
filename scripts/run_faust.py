@@ -6,7 +6,8 @@ import argparse
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = Path('./out/flows/faust/faust-diameter-norm')
+# OUTPUT_DIR = Path('./out/flows/faust/faust-diameter-norm-WKS-EXPERIMENTS-NO-FF-BIGGER-but-still-256/')
+OUTPUT_DIR = Path('./out/flows/faust/faust-wks-landmark-20-SPHERE/')
 FAUST_DIR = Path('./data/MPI-FAUST/training/registrations')
 
 
@@ -41,30 +42,29 @@ def main(args):
 
         working_dir = Path(str(Path(__file__).resolve()).split('/scripts')[0])
         data_path = Path(working_dir, FAUST_DIR, f"{target}.ply")
-        features_path = Path(working_dir, 'data', 'FAUST_features_pca_20', f"{target}_features.npy")
+        vertex_features_path = Path(working_dir, 'data', 'FAUST_features_pca_20', f"{target}_features.npy")
 
         config = {
-            "device": "cuda:1",
+            "device": "cuda:0",
             "blr": 5e-7,
             "output_dir": str(target_dir),
             "log_dir": str(target_dir),
             "data_path": str(data_path),
             "train": True,
             "inference": True,
-            "epochs": 10000,
+            "epochs": 30_000,
             "num_steps": 64,
             "method": args.method,
             "network": "MLP",
-            "batch_size": 50000,
-            "num_points_train": 50000,
-            "learning_rate": 0.01,
-            "distribution": "gaussian",
-            "embedding_dim": 5,
+            "batch_size": 50_000,
+            "num_points_train": 50_000,
+            "learning_rate": 0.0001,
+            "distribution": "sphere",
+            "embedding_dim": 20,
             "embedding_type": "features_only",
-            "features_type": "landmarks",
+            "features_type": "wks_landmarks",
             "use_heat_method": False,
-            "distribution": "gaussian",
-            "features_normalization": "diameter",
+            "features_normalization": "none",
             "dists_path": "./data/MPI-FAUST/training/registrations/dists/",
             "landmarks": [412, 5891, 6593, 3323, 2119]
         }
@@ -77,14 +77,14 @@ def main(args):
             command = [
                 "python", "main.py",
                 "--config", config_path,
-                "--features_path", str(features_path),
-                "--features_interpolation", str(500000),
+                "--vertex_features_path", str(vertex_features_path),
+                "--features_interpolation", str(1_000_000),
             ]
         else:
             command = [
                 "python", "main.py",
                 "--config", config_path,
-                "--features_interpolation", str(50000),
+                "--features_interpolation", str(1_000_000),
             ]
 
         command_str = " ".join(command)

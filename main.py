@@ -605,48 +605,57 @@ def train(args, device):
     elif args.run_name == "CUBE":
         print("[OCIO] Overriding mesh with a cube")
         mesh = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
-
-    if args.features_path is not None and args.vertex_features_path is not None:
-        print(f"Ignoring config_file data_path --> loading features from {args.features_path}")
-
-        ext = os.path.splitext(args.features_path)[1]
+    
+    # Vertex_features are provided externally
+    if args.vertex_features_path is not None:
+        print(f"[FEATURES] Ignoring config_file data_path --> loading features from {args.features_path}")
+        ext = os.path.splitext(args.vertex_features_path)[1]
         if ext not in [".txt", ".npy"]:
-            raise ValueError(f"Features file must be .txt or .npy, got {ext}")
+            raise ValueError(f"[FEATURES] Vertex features file must be .txt or .npy, got {ext}")
         elif ext == ".txt":
-            features = torch.tensor(np.loadtxt(args.features_path).astype(np.float32)).to(device)
             vertex_features = torch.tensor(np.loadtxt(args.vertex_features_path).astype(np.float32)).to(device)
         elif ext == ".npy":
-            features = torch.tensor(np.load(args.features_path).astype(np.float32)).to(device)
-            vertex_features = torch.tensor(np.loadtxt(args.vertex_features_path).astype(np.float32)).to(device)
+            vertex_features = torch.tensor(np.load(args.vertex_features_path).astype(np.float32)).to(device)
         else:
-            raise ValueError(f"Features file must be .txt or .npy, got {ext}")
-        print(f"Loaded features from {args.features_path} | Features shape: {features.shape}")
-        print(f"Loaded vertex features from {args.vertex_features_path} | Vertex features shape: {vertex_features.shape}")
-
-        print("------------------------------------")
-        print(f"vertex_features (shape {list(vertex_features.shape)}):")
-        print(f"  min: {vertex_features.min(dim=0).values.tolist()}")
-        print(f"  max: {vertex_features.max(dim=0).values.tolist()}")
-        print(f"  avg: {vertex_features.mean(dim=0).tolist()}")
-        print("------------------------------------")
-        print(f"features (shape {list(features.shape)}):")
-        print(f"  min: {features.min(dim=0).values.tolist()}")
-        print(f"  max: {features.max(dim=0).values.tolist()}")
-        print(f"  avg: {features.mean(dim=0).tolist()}")
-        print("------------------------------------")
-
-        if args.features_interpolation > 0 and mesh is not None:
+            raise ValueError(f"[FEATURES] Features file must be .txt or .npy, got {ext}")
+        print(f"[FEATURES] Loaded vertex features from {args.vertex_features_path} | Vertex features shape: {vertex_features.shape}")
+        if vertex_features.shape[0] != len(mesh.vertices):
+            print(f"[FEATURES] Number of vertex features ({vertex_features.shape[0]}) does not match number of mesh vertices ({len(mesh.vertices)}), squeezing vertex features and features")
+            vertex_features = vertex_features.squeeze(0)
+        np.savetxt(os.path.join(args.output_dir, "vertex-geodesics.txt"), vertex_features.detach().cpu().numpy())
+    
+        # Additionally, interpolated features are also provided
+        if args.features_path is not None:
+            print(f"[FEATURES] Loading features from {args.features_path} | Features shape: {features.shape}")
+            if ext not in [".txt", ".npy"]:
+                raise ValueError(f"[FEATURES] Features file must be .txt or .npy, got {ext}")
+            elif ext == ".txt":
+                features = torch.tensor(np.loadtxt(args.features_path).astype(np.float32)).to(device)
+            elif ext == ".npy":
+                features = torch.tensor(np.load(args.features_path).astype(np.float32)).to(device)
+            else:
+                raise ValueError(f"[FEATURES] Features file must be .txt or .npy, got {ext}")
+            
+            if vertex_features.shape[0] != len(mesh.vertices):
+                print(f"[FEATURES] Number of vertex features ({vertex_features.shape[0]}) does not match number of mesh vertices ({len(mesh.vertices)}), squeezing vertex features and features")
+                features = features.squeeze(0)
+                np.savetxt(os.path.join(args.output_dir, "vertex-geodesics.txt"), features.detach().cpu().numpy())
+        
+        # Vertex_features are provided but not the interpolated features, if neeeded interpolate them over the mesh faces
+        elif args.features_path is None and args.features_interpolation > 0:
+            print(f"[FEATURES] Computing features from vertex features only, no features file provided.")
             features = generate_embeddings(
                 mesh=mesh,
                 embedding_type=args.embedding_type,
                 num_points=args.features_interpolation,
-                features=features,
+                features=vertex_features,
                 device=device,
             )
-            print(f"Interpolated features over {args.features_interpolation} points | New features shape: {features.shape}")
-            np.savetxt(os.path.join(args.output_dir, "features-interpolated.txt"), features.detach().cpu().numpy())
+            print(f"Interpolated features over {args.features_interpolation} points | Features shape: {features.shape}")
+            np.savetxt(os.path.join(args.output_dir, "vertex-geodesics-interpolated.txt"), features.detach().cpu().numpy())
             print(f"Saved interpolated features to {os.path.join(args.output_dir, 'features-interpolated.txt')}")
 
+    # Default case: no vertex_features provided, compute them from the mesh and optionally interpolate them
     else:
         print(f"Computing {args.features_type} features from mesh...")
         vertex_features = compute_features(mesh, args, device)
