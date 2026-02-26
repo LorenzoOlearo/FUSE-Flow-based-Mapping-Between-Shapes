@@ -165,7 +165,7 @@ class MetricLogger(object):
             end = time.time()
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-        print('{} Total time: {} ({:.4f} s / it)'.format(
+        tqdm.write('{} Total time: {} ({:.4f} s / it)'.format(
             header, total_time_str, total_time / len(iterable)))
         
         
@@ -178,9 +178,11 @@ def plot_loss(loss_history, output_dir, start_epoch=0):
         output_dir: Directory to save the plot
         start_epoch: Starting epoch number (for x-axis labeling)
     """
-    plt.figure(figsize=(10, 6))
+    os.makedirs(output_dir, exist_ok=True)
     epochs = range(start_epoch, start_epoch + len(loss_history))
     
+    # Linear scale plot
+    plt.figure(figsize=(10, 6))
     plt.plot(epochs, loss_history, 'b-', linewidth=2, label='Training Loss')
     plt.xlabel('Epoch', fontsize=12)
     plt.ylabel('Loss', fontsize=12)
@@ -188,12 +190,24 @@ def plot_loss(loss_history, output_dir, start_epoch=0):
     plt.grid(True, alpha=0.3)
     plt.legend(fontsize=10)
     
-    os.makedirs(output_dir, exist_ok=True)
     save_path = os.path.join(output_dir, 'loss_history.png')
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
+    tqdm.write(f"Loss plot saved to: {save_path}")
     
-    print(f"Loss plot saved to: {save_path}")
+    # Log scale plot
+    plt.figure(figsize=(10, 6))
+    plt.semilogy(epochs, loss_history, 'r-', linewidth=2, label='Training Loss')
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('Loss (log scale)', fontsize=12)
+    plt.title('Training Loss over Epochs (Log Scale)', fontsize=14, fontweight='bold')
+    plt.grid(True, alpha=0.3, which='both')
+    plt.legend(fontsize=10)
+    
+    save_path_log = os.path.join(output_dir, 'loss_history_log.png')
+    plt.savefig(save_path_log, dpi=300, bbox_inches='tight')
+    plt.close()
+    tqdm.write(f"Loss plot (log scale) saved to: {save_path_log}")
 
 
 def setup_for_distributed(is_master):
@@ -323,9 +337,11 @@ def get_grad_norm_(parameters, norm_type: float = 2.0) -> torch.Tensor:
     return total_norm
 
 
-def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler):
+def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler, best=False):
     output_dir = Path(args.output_dir)
     epoch_name = str(epoch)
+    if best:
+        epoch_name = "best"
     if loss_scaler is not None:
         checkpoint_paths = [output_dir / ('checkpoint-%s.pth' % epoch_name)]
         for checkpoint_path in checkpoint_paths:
@@ -341,7 +357,7 @@ def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler):
     else:
         client_state = {'epoch': epoch}
         model.save_checkpoint(save_dir=args.output_dir, tag="checkpoint-%s" % epoch_name, client_state=client_state)
-        print(f'Saved checkpoint to {output_dir / ("checkpoint-%s.pth" % epoch_name)}')
+        tqdm.write(f'Saved checkpoint to {output_dir / ("checkpoint-%s.pth" % epoch_name)}')
 
 
 def load_model(args, model_without_ddp, optimizer, loss_scaler):
@@ -352,13 +368,13 @@ def load_model(args, model_without_ddp, optimizer, loss_scaler):
         else:
             checkpoint = torch.load(args.resume, map_location='cpu')
         model_without_ddp.load_state_dict(checkpoint['model'])
-        print("Resume checkpoint %s" % args.resume)
+        tqdm.write("Resume checkpoint %s" % args.resume)
         if 'optimizer' in checkpoint and 'epoch' in checkpoint and not (hasattr(args, 'eval') and args.eval):
             optimizer.load_state_dict(checkpoint['optimizer'])
             args.start_epoch = checkpoint['epoch'] + 1
             if 'scaler' in checkpoint:
                 loss_scaler.load_state_dict(checkpoint['scaler'])
-            print("With optim & sched!")
+            tqdm.write("With optim & sched!")
 
 
 def all_reduce_mean(x):
