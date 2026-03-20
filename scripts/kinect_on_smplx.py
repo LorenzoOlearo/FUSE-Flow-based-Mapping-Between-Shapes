@@ -1,21 +1,19 @@
+import argparse
+import json
+import os
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, List, Mapping, Optional, Tuple
+
 import numpy as np
 import torch
 import trimesh
-import os
-import sys
-import argparse
-import json
-
-from pathlib import Path
 from tqdm import tqdm
-from dataclasses import dataclass
-from typing import Mapping, Any
-
-
-from typing import List, Tuple, Optional
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from matching_experiments import *
+
 
 @dataclass
 class SkinningConfig:
@@ -54,8 +52,8 @@ class SkinningConfig:
             kinect_dists_path=Path(m["kinect_dists_path"]),
             output_path=Path(m["output_path"]),
         )
-        
-        
+
+
 def process_smplx_element(
     element: str,
     skinning_config: SkinningConfig,
@@ -65,18 +63,22 @@ def process_smplx_element(
         channels=int(5),
         network=MLP(channels=int(5)).to(device),
     )
-    
+
     landmarks = skinning_config.smplx_landmarks
-    
+
     mesh = trimesh.load(
         skinning_config.smplx_mesh_path,
         process=False,
     )
-    
-    features_path = Path(skinning_config.smplx_features_path, element, f"vertex-geodesics-vnorm.txt")
+
+    features_path = Path(
+        skinning_config.smplx_features_path, element, f"vertex-geodesics-vnorm.txt"
+    )
     features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
-   
-    smplx_flows_path = Path(skinning_config.smplx_flows_path, element, "checkpoint-9999.pth") 
+
+    smplx_flows_path = Path(
+        skinning_config.smplx_flows_path, element, "checkpoint-9999.pth"
+    )
     model.load_state_dict(
         torch.load(
             Path(smplx_flows_path),
@@ -86,7 +88,7 @@ def process_smplx_element(
     )
     model.eval()
     model.to(device)
-    
+
     return mesh, landmarks, features, model
 
 
@@ -99,19 +101,26 @@ def process_kinect_element(
         channels=int(5),
         network=MLP(channels=int(5)).to(device),
     )
-    
+
     pt = trimesh.load(
-        Path(skinning_config.kinect_dataset_path, element + skinning_config.kinect_dataset_extension),
+        Path(
+            skinning_config.kinect_dataset_path,
+            element + skinning_config.kinect_dataset_extension,
+        ),
         process=False,
     )
-    corr = np.loadtxt(Path(skinning_config.kinect_corr_path, element + ".vts")).astype(int)
+    corr = np.loadtxt(Path(skinning_config.kinect_corr_path, element + ".vts")).astype(
+        int
+    )
     landmarks = corr[skinning_config.kinect_landmarks]
-   
-    features_path = Path(skinning_config.kinect_features_path, element, f"vertex-geodesics-vnorm.txt") 
+
+    features_path = Path(
+        skinning_config.kinect_features_path, element, f"vertex-geodesics-vnorm.txt"
+    )
     tqdm.write(f"Loading precomputed features for {element} from {features_path}")
     features = np.loadtxt(features_path).astype(np.float32)
     features = torch.tensor(features).to(device)
-    
+
     model.load_state_dict(
         torch.load(
             Path(skinning_config.kinect_flows_path, element, "checkpoint-9999.pth"),
@@ -119,10 +128,10 @@ def process_kinect_element(
         )["model"],
         strict=True,
     )
-    
+
     model.eval()
     model.to(device)
-    
+
     return pt, landmarks, features, model
 
 
@@ -139,7 +148,7 @@ def plot_results(
 ) -> None:
     """Plot correspondences for each method."""
     source_points = source_points[:max_points]
-   
+
     for method, p2p in results.items():
         start_end_subplot(
             source_points,
@@ -151,7 +160,7 @@ def plot_results(
             png=plot_png,
         )
 
-        
+
 def process_pair(
     source: str,
     target: str,
@@ -163,17 +172,24 @@ def process_pair(
         skinning_config=skinning_config,
         device=device,
     )
-    
+
     mesh, smplx_landmarks, smplx_features, smplx_model = process_smplx_element(
         element=target,
         skinning_config=skinning_config,
         device=device,
     )
-    
+
     p2p_knn, elapsed_knn = compute_p2p_with_knn(kinect_features, smplx_features)
-    p2p_flow, elapsed_flow = compute_p2p_with_flows_composition(kinect_features, smplx_features, kinect_model, smplx_model, device)
-    p2p_ndp, elapsed_ndp = compute_p2p_with_ndp_sdf(source_vertex=pt.vertices, target_vertex=mesh.vertices, source_landmarks=kinect_landmarks, target_landmarks=smplx_landmarks)
-    
+    p2p_flow, elapsed_flow = compute_p2p_with_flows_composition(
+        kinect_features, smplx_features, kinect_model, smplx_model, device
+    )
+    p2p_ndp, elapsed_ndp = compute_p2p_with_ndp_sdf(
+        source_vertex=pt.vertices,
+        target_vertex=mesh.vertices,
+        source_landmarks=kinect_landmarks,
+        target_landmarks=smplx_landmarks,
+    )
+
     results = {
         "knn": p2p_knn,
         "flow": p2p_flow,
@@ -190,9 +206,8 @@ def process_pair(
         os.makedirs(output_path.parent, exist_ok=True)
         np.save(output_path, p2p.astype(int))
         tqdm.write(f"Saved {method} p2p to {output_path}")
-        
-    
-    os.makedirs(skinning_config.output_path, exist_ok=True) 
+
+    os.makedirs(skinning_config.output_path, exist_ok=True)
     plot_results(
         source_points=torch.tensor(pt.vertices.astype(np.float32)).to(device),
         target_points=torch.tensor(mesh.vertices.astype(np.float32)).to(device),
@@ -221,8 +236,10 @@ def main(args):
     targets = get_targets_smplx(Path(config["skinning_config"]["smplx_flows_path"]))
     pairs = [(s, t) for s in sources for t in targets]
     tqdm.write(f"Processing {len(pairs)} source-target pairs.")
-    
-    for source, target in tqdm(pairs, desc="Processing shape pairs", unit="pair", dynamic_ncols=True):
+
+    for source, target in tqdm(
+        pairs, desc="Processing shape pairs", unit="pair", dynamic_ncols=True
+    ):
         tqdm.write(f"Processing {source} -> {target}")
         process_pair(
             source=source,
@@ -230,7 +247,6 @@ def main(args):
             skinning_config=skinning_config,
             device=device,
         )
-
 
 
 if __name__ == "__main__":
@@ -245,13 +261,11 @@ if __name__ == "__main__":
         default="config.json",
     )
 
-
     args = parser.parse_args()
 
     tqdm.write("------------------------------------------")
     for arg in vars(args):
         tqdm.write(f"{arg}: {getattr(args, arg)}")
     tqdm.write("------------------------------------------")
-
 
     main(args)

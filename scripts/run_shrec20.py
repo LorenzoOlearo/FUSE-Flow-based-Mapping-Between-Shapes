@@ -1,17 +1,19 @@
-import os
-import numpy as np
-import json
 import argparse
-import pandas as pd
+import json
+import os
 import subprocess
-
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = Path('./out/flows/shrec20/shrec20-diameter-norm')
-SHREC20_DIR = Path('./data/SHREC20b_lores/SHREC20b_lores/models/')
+import numpy as np
+import pandas as pd
 
-LANDMARKS_FILE = Path('./data/SHREC20b_lores/SHREC20b_lores/selected_common_landmarks.csv')
+OUTPUT_DIR = Path("./out/flows/shrec20/shrec20-diameter-norm")
+SHREC20_DIR = Path("./data/SHREC20b_lores/SHREC20b_lores/models/")
+
+LANDMARKS_FILE = Path(
+    "./data/SHREC20b_lores/SHREC20b_lores/selected_common_landmarks.csv"
+)
 
 
 def get_targets(overwrite) -> List[str]:
@@ -23,7 +25,10 @@ def get_targets(overwrite) -> List[str]:
             os.makedirs(OUTPUT_DIR, exist_ok=True)
             os.makedirs(Path(OUTPUT_DIR, shape_name), exist_ok=True)
 
-            if not os.path.exists(Path(OUTPUT_DIR, shape_name, 'checkpoint-9999.pth')) or overwrite:
+            if (
+                not os.path.exists(Path(OUTPUT_DIR, shape_name, "checkpoint-9999.pth"))
+                or overwrite
+            ):
                 targets.append(shape_name)
 
     return targets
@@ -42,12 +47,16 @@ def main(args):
     for target in targets:
         target_dir = Path(OUTPUT_DIR, target)
 
-        working_dir = Path(str(Path(__file__).resolve()).split('/scripts')[0])
+        working_dir = Path(str(Path(__file__).resolve()).split("/scripts")[0])
         data_path = Path(working_dir, SHREC20_DIR, f"{target}.obj")
-        features_path = Path(working_dir, 'data', 'SMAL_features_pca_20', f"{target}_features.npy")
+        features_path = Path(
+            working_dir, "data", "SMAL_features_pca_20", f"{target}_features.npy"
+        )
 
         model = f"{target}.obj"
-        target_landmarks = landmarks_df[landmarks_df['Model'] == model].iloc[0, 1:].values.astype(int)
+        target_landmarks = (
+            landmarks_df[landmarks_df["Model"] == model].iloc[0, 1:].values.astype(int)
+        )
         print(f"Using landmarks for {target}: {target_landmarks}")
 
         config = {
@@ -75,21 +84,28 @@ def main(args):
         }
 
         config_path = os.path.join(target_dir, "config.json")
-        with open(config_path, 'w') as f:
+        with open(config_path, "w") as f:
             json.dump(config, f, indent=4)
 
         if args.external is True:
             command = [
-                "python", "main.py",
-                "--config", config_path,
-                "--features_path", str(features_path),
-                "--features_interpolation", str(500000),
+                "python",
+                "main.py",
+                "--config",
+                config_path,
+                "--features_path",
+                str(features_path),
+                "--features_interpolation",
+                str(500000),
             ]
         else:
             command = [
-                "python", "main.py",
-                "--config", config_path,
-                "--features_interpolation", str(50000),
+                "python",
+                "main.py",
+                "--config",
+                config_path,
+                "--features_interpolation",
+                str(50000),
             ]
 
         command_str = " ".join(command)
@@ -102,12 +118,26 @@ def main(args):
             print(f"Error processing {target}: {e}")
 
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a flow on all SHREC20 meshes")
-    parser.add_argument('--overwrite', action='store_true', help="Overwrite if an existing flow model \"checkpoint-9999.pth\" is found", default='False')
-    parser.add_argument('--external', action='store_true', help="Use external precomputed features", default='False')
-    parser.add_argument('--method', type=str, default="FM", help="Method to use to construct the flows: FM or Diffusion (DDIM)")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help='Overwrite if an existing flow model "checkpoint-9999.pth" is found',
+        default="False",
+    )
+    parser.add_argument(
+        "--external",
+        action="store_true",
+        help="Use external precomputed features",
+        default="False",
+    )
+    parser.add_argument(
+        "--method",
+        type=str,
+        default="FM",
+        help="Method to use to construct the flows: FM or Diffusion (DDIM)",
+    )
 
     args = parser.parse_args()
 

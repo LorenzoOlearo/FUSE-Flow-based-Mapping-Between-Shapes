@@ -1,11 +1,11 @@
 import os
-import torch
-import numpy as np
-import plotly.graph_objects as go
+
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
+import numpy as np
+import plotly.graph_objects as go
+import torch
 from plotly.subplots import make_subplots
-
 
 
 def create_rgb_colormap(points):
@@ -15,99 +15,227 @@ def create_rgb_colormap(points):
     """
     points = (points - points.min(axis=0)) / (points.max(axis=0) - points.min(axis=0))
     colors_hex = [mcolors.rgb2hex(c) for c in points]
-    
-    return colors_hex 
+
+    return colors_hex
 
 
 def plot_target(filename, points, plots_path, show=False):
-    fig = go.Figure(data=[go.Scatter3d(
-        x=points[:, 0],
-        y=points[:, 1],
-        z=points[:, 2],
-        mode='markers',
-        marker=dict(
-            size=3,
-            color='blue'
-        )
-    )])
+    fig = go.Figure(
+        data=[
+            go.Scatter3d(
+                x=points[:, 0],
+                y=points[:, 1],
+                z=points[:, 2],
+                mode="markers",
+                marker=dict(size=3, color="blue"),
+            )
+        ]
+    )
     fig.update_layout(
-        scene=dict(
-            xaxis_title='X',
-            yaxis_title='Y',
-            zaxis_title='Z'
-        ),
+        scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"),
         title=filename,
         width=800,
-        height=800
+        height=800,
     )
-    if show: fig.show()
-    
-    fig.write_html(f'{plots_path}/{filename}.html')
-    fig.write_image(f'{plots_path}/{filename}.png')
+    if show:
+        fig.show()
+
+    fig.write_html(f"{plots_path}/{filename}.html")
+    fig.write_image(f"{plots_path}/{filename}.png")
 
 
-def start_end_subplot(x_0, x_1_estimated, run_name='Title', plots_path='./', show=False, html=False, png=False):
+def start_end_subplot(
+    x_0,
+    x_1_estimated,
+    run_name="Title",
+    plots_path="./",
+    show=False,
+    html=False,
+    png=False,
+):
     if hasattr(x_0, "cpu"):
         x_0 = x_0.cpu().numpy()
     if hasattr(x_1_estimated, "cpu"):
         x_1_estimated = x_1_estimated.cpu().numpy()
-    
-    fig = make_subplots(rows=1, cols=2, specs=[[{'type': 'scatter3d'}, {'type': 'scatter3d'}]], subplot_titles=("Source (x_0)", "Estimated (x_T)"))
+
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        specs=[[{"type": "scatter3d"}, {"type": "scatter3d"}]],
+        subplot_titles=("Source (x_0)", "Estimated (x_T)"),
+    )
     colors_hex = create_rgb_colormap(x_0)
 
     # Plot the initial point cloud
-    fig.add_trace(go.Scatter3d(
-        x=x_0[:, 0],
-        y=x_0[:, 1],
-        z=x_0[:, 2],
-        mode='markers',
-        marker=dict(
-            size=3,
-            color=colors_hex,  # Corresponding colors for each point
+    fig.add_trace(
+        go.Scatter3d(
+            x=x_0[:, 0],
+            y=x_0[:, 1],
+            z=x_0[:, 2],
+            mode="markers",
+            marker=dict(
+                size=3,
+                color=colors_hex,  # Corresponding colors for each point
+            ),
+            name="Initial Points",
         ),
-        name='Initial Points'
-    ), row=1, col=1)
+        row=1,
+        col=1,
+    )
 
     # Plot the transformed point cloud (from flow[-1])
-    fig.add_trace(go.Scatter3d(
-        x=x_1_estimated[:, 0],
-        y=x_1_estimated[:, 1],
-        z=x_1_estimated[:, 2],
-        mode='markers',
-        marker=dict(
-            size=3,
-            color=colors_hex,  # Same colors to encode correspondence
+    fig.add_trace(
+        go.Scatter3d(
+            x=x_1_estimated[:, 0],
+            y=x_1_estimated[:, 1],
+            z=x_1_estimated[:, 2],
+            mode="markers",
+            marker=dict(
+                size=3,
+                color=colors_hex,  # Same colors to encode correspondence
+            ),
+            name="Transformed Points",
         ),
-        name='Transformed Points'
-    ), row=1, col=2)
-
+        row=1,
+        col=2,
+    )
 
     # Adjust layout parameters to make the figure bigger
     fig.update_layout(
         scene=dict(
-            xaxis_title='X',
-            yaxis_title='Y',
-            zaxis_title='Z',
-            aspectmode='data'
+            xaxis_title="X", yaxis_title="Y", zaxis_title="Z", aspectmode="data"
         ),
         scene2=dict(
-            xaxis_title='X',
-            yaxis_title='Y',
-            zaxis_title='Z',
-            aspectmode='data'
+            xaxis_title="X", yaxis_title="Y", zaxis_title="Z", aspectmode="data"
         ),
         title=run_name,
         width=1800,
-        height=800
+        height=800,
     )
-    
-    if show: fig.show()
-       
-    if html: fig.write_html(f'{plots_path}/{run_name}.html')
-    if png: fig.write_image(f'{plots_path}/{run_name}.png')
-    
 
-def plot_points(points, distances=None, title="3D Points", save_path=None, save_html=True, save_png=True, colorbar_title="", colormap='Viridis', range=None):
+    if show:
+        fig.show()
+
+    if html:
+        fig.write_html(f"{plots_path}/{run_name}.html")
+    if png:
+        fig.write_image(f"{plots_path}/{run_name}.png")
+
+
+def plot_error(
+    x_0,
+    x_1_target,
+    x_1_estimated,
+    run_name="Title",
+    plots_path="./",
+    show=False,
+    html=False,
+    png=False,
+    clip_percentile=95,
+):
+    """
+    Plot source and estimated shapes.
+    Estimated shape is colored by per-point Euclidean error
+    w.r.t. the ground-truth target shape.
+    """
+
+    import numpy as np
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    # Convert tensors to numpy if needed
+    for var_name in ["x_0", "x_1_target", "x_1_estimated"]:
+        var = locals()[var_name]
+        if hasattr(var, "cpu"):
+            locals()[var_name] = var.cpu().numpy()
+
+    x_0 = locals()["x_0"]
+    x_1_target = locals()["x_1_target"]
+    x_1_estimated = locals()["x_1_estimated"]
+
+    # Compute true correspondence error
+    x_0 = x_0.cpu().numpy()
+    x_1_target = x_1_target.cpu().numpy()
+    x_1_estimated = x_1_estimated.cpu().numpy()
+    error = np.linalg.norm(x_1_target - x_1_estimated, axis=1)
+
+    # Optional clipping to suppress extreme outliers
+    vmax = np.percentile(error, clip_percentile)
+    error_vis = np.clip(error, 0, vmax)
+
+    # Create subplot figure
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        specs=[[{"type": "scatter3d"}, {"type": "scatter3d"}]],
+        subplot_titles=("Source (x₀)", "Estimated (colored by target error)"),
+    )
+
+    # Source shape (neutral)
+    fig.add_trace(
+        go.Scatter3d(
+            x=x_0[:, 0],
+            y=x_0[:, 1],
+            z=x_0[:, 2],
+            mode="markers",
+            marker=dict(size=3, color="lightgray"),
+            name="Source",
+        ),
+        row=1,
+        col=1,
+    )
+
+    # Estimated shape colored by true error
+    fig.add_trace(
+        go.Scatter3d(
+            x=x_1_estimated[:, 0],
+            y=x_1_estimated[:, 1],
+            z=x_1_estimated[:, 2],
+            mode="markers",
+            marker=dict(
+                size=3,
+                color=error_vis,
+                colorscale="Turbo",
+                cmin=0,
+                cmax=vmax,
+                showscale=True,
+                colorbar=dict(title="L2 Error"),
+            ),
+            name="Estimated",
+        ),
+        row=1,
+        col=2,
+    )
+
+    fig.update_layout(
+        scene=dict(aspectmode="data"),
+        scene2=dict(aspectmode="data"),
+        title=run_name,
+        width=1800,
+        height=800,
+    )
+
+    if show:
+        fig.show()
+
+    if html:
+        fig.write_html(f"{plots_path}/{run_name}.html")
+
+    if png:
+        fig.write_image(f"{plots_path}/{run_name}.png")
+
+
+def plot_points(
+    points,
+    distances=None,
+    title="3D Points",
+    save_path=None,
+    save_html=True,
+    save_png=True,
+    colorbar_title="",
+    colormap="Viridis",
+    range=None,
+):
     """
     Plot 3D points, optionally colored by a distance array.
 
@@ -124,35 +252,34 @@ def plot_points(points, distances=None, title="3D Points", save_path=None, save_
             color=distances,
             colorscale=colormap,
             colorbar=dict(title=colorbar_title),
-            opacity=0.8
+            opacity=0.8,
         )
     else:
-        marker_dict = dict(size=2, color='blue', opacity=0.8)
+        marker_dict = dict(size=2, color="blue", opacity=0.8)
 
-    fig = go.Figure(data=[go.Scatter3d(
-        x=points[:, 0],
-        y=points[:, 1],
-        z=points[:, 2],
-        mode='markers',
-        marker=marker_dict
-    )])
+    fig = go.Figure(
+        data=[
+            go.Scatter3d(
+                x=points[:, 0],
+                y=points[:, 1],
+                z=points[:, 2],
+                mode="markers",
+                marker=marker_dict,
+            )
+        ]
+    )
 
     if range is not None and distances is not None:
-        fig.update_traces(marker=dict(
-            colorscale=colormap,
-            cmin=range[0],
-            cmax=range[1]
-        ))
+        fig.update_traces(
+            marker=dict(colorscale=colormap, cmin=range[0], cmax=range[1])
+        )
 
     fig.update_layout(
         title=title,
         scene=dict(
-            xaxis_title='X',
-            yaxis_title='Y',
-            zaxis_title='Z',
-            aspectmode='data'
+            xaxis_title="X", yaxis_title="Y", zaxis_title="Z", aspectmode="data"
         ),
-        margin=dict(l=0, r=0, b=0, t=40)
+        margin=dict(l=0, r=0, b=0, t=40),
     )
 
     if save_path is not None:
@@ -163,68 +290,74 @@ def plot_points(points, distances=None, title="3D Points", save_path=None, save_
     else:
         fig.show()
 
-   
+
 def start_end_subplot_volume(x_0, x_1_estimated, run_name, plots_path, show=False):
     x_0 = x_0.cpu().numpy()
     x_1_estimated = x_1_estimated.cpu().numpy()
-    
+
     # Compute distances from the center for x_0
-    distances = ((x_0 ** 2).sum(axis=1)) ** 0.5
+    distances = ((x_0**2).sum(axis=1)) ** 0.5
     norm = mcolors.Normalize(vmin=distances.min(), vmax=distances.max())
-    colormap = cm.get_cmap('viridis')
+    colormap = cm.get_cmap("viridis")
     colors_hex = [mcolors.rgb2hex(colormap(norm(d))) for d in distances]
 
-    fig = make_subplots(rows=1, cols=2, specs=[[{'type': 'scatter3d'}, {'type': 'scatter3d'}]], subplot_titles=("Source (x_0)", "Estimated (x_T)"))
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        specs=[[{"type": "scatter3d"}, {"type": "scatter3d"}]],
+        subplot_titles=("Source (x_0)", "Estimated (x_T)"),
+    )
 
     # Plot the initial point cloud
-    fig.add_trace(go.Scatter3d(
-        x=x_0[:, 0],
-        y=x_0[:, 1],
-        z=x_0[:, 2],
-        mode='markers',
-        marker=dict(
-            size=3,
-            color=colors_hex,  # Corresponding colors for each point
+    fig.add_trace(
+        go.Scatter3d(
+            x=x_0[:, 0],
+            y=x_0[:, 1],
+            z=x_0[:, 2],
+            mode="markers",
+            marker=dict(
+                size=3,
+                color=colors_hex,  # Corresponding colors for each point
+            ),
+            name="Initial Points",
         ),
-        name='Initial Points'
-    ), row=1, col=1)
+        row=1,
+        col=1,
+    )
 
     # Plot the transformed point cloud (from flow[-1])
-    fig.add_trace(go.Scatter3d(
-        x=x_1_estimated[:, 0],
-        y=x_1_estimated[:, 1],
-        z=x_1_estimated[:, 2],
-        mode='markers',
-        marker=dict(
-            size=3,
-            color=colors_hex,  # Same colors to encode correspondence
+    fig.add_trace(
+        go.Scatter3d(
+            x=x_1_estimated[:, 0],
+            y=x_1_estimated[:, 1],
+            z=x_1_estimated[:, 2],
+            mode="markers",
+            marker=dict(
+                size=3,
+                color=colors_hex,  # Same colors to encode correspondence
+            ),
+            name="Transformed Points",
         ),
-        name='Transformed Points'
-    ), row=1, col=2)
+        row=1,
+        col=2,
+    )
 
     # Adjust layout parameters to make the figure bigger
     fig.update_layout(
-        scene=dict(
-            xaxis_title='X',
-            yaxis_title='Y',
-            zaxis_title='Z'
-        ),
-        scene2=dict(
-            xaxis_title='X',
-            yaxis_title='Y',
-            zaxis_title='Z'
-        ),
+        scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"),
+        scene2=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"),
         title=run_name,
         width=1800,
-        height=800
+        height=800,
     )
-    
-    if show: 
+
+    if show:
         fig.show()
-       
-    fig.write_html(f'{plots_path}/{run_name}_radius.html')
-    fig.write_image(f'{plots_path}/{run_name}_radius.png')
-    
+
+    fig.write_html(f"{plots_path}/{run_name}_radius.html")
+    fig.write_image(f"{plots_path}/{run_name}_radius.png")
+
+
 def create_colormap(VERT):
     """
     Creates a uniform color map on a mesh
@@ -251,6 +384,7 @@ def create_colormap(VERT):
     ).transpose()
     return colors
 
+
 def to_rgb_strings(v):
     """
     Converts an (N,3) RGB array in [0,1] to Plotly-compatible 'rgb(r,g,b)' strings
@@ -260,10 +394,15 @@ def to_rgb_strings(v):
     return [f"rgb({r},{g},{b})" for r, g, b in v8]
 
 
-    
-def source_target_plot(source, source_v, target, target_v,
-                              run_name='Source vs Target RGB',
-                              plots_path='./', show=True):
+def source_target_plot(
+    source,
+    source_v,
+    target,
+    target_v,
+    run_name="Source vs Target RGB",
+    plots_path="./",
+    show=True,
+):
     """
     Plots source and target point clouds side by side, coloring points by their RGB values.
     Args:
@@ -277,71 +416,90 @@ def source_target_plot(source, source_v, target, target_v,
     """
 
     # Convert to numpy if needed
-    if hasattr(source, 'cpu'): source = source.cpu().numpy()
-    if hasattr(source_v, 'cpu'): source_v = source_v.cpu().numpy()
-    if hasattr(target, 'cpu'): target = target.cpu().numpy()
-    if hasattr(target_v, 'cpu'): target_v = target_v.cpu().numpy()
+    if hasattr(source, "cpu"):
+        source = source.cpu().numpy()
+    if hasattr(source_v, "cpu"):
+        source_v = source_v.cpu().numpy()
+    if hasattr(target, "cpu"):
+        target = target.cpu().numpy()
+    if hasattr(target_v, "cpu"):
+        target_v = target_v.cpu().numpy()
 
     # Prepare RGB color lists
-    #def to_rgb_strings(v):
-        # v is (N,3), values in [0,1]
+    # def to_rgb_strings(v):
+    # v is (N,3), values in [0,1]
     #    v = np.clip(v, 0, 1)
-        # scale to 0-255 ints
+    # scale to 0-255 ints
     #    v8 = (v * 255).astype(np.int32)
     #    return [f"rgb({r},{g},{b})" for r, g, b in v8]
 
-    source_colors = to_rgb_strings(source_v) if source_v.ndim == 2 and source_v.shape[1] == 3 else None
-    target_colors = to_rgb_strings(target_v) if target_v.ndim == 2 and target_v.shape[1] == 3 else None
+    source_colors = (
+        to_rgb_strings(source_v)
+        if source_v.ndim == 2 and source_v.shape[1] == 3
+        else None
+    )
+    target_colors = (
+        to_rgb_strings(target_v)
+        if target_v.ndim == 2 and target_v.shape[1] == 3
+        else None
+    )
 
     # Create subplots
     fig = make_subplots(
-        rows=1, cols=2,
-        specs=[[{'type': 'scatter3d'}, {'type': 'scatter3d'}]],
-        subplot_titles=("Source", "Target")
+        rows=1,
+        cols=2,
+        specs=[[{"type": "scatter3d"}, {"type": "scatter3d"}]],
+        subplot_titles=("Source", "Target"),
     )
 
     # Add traces
     fig.add_trace(
         go.Scatter3d(
-            x=source[:, 0], y=source[:, 1], z=source[:, 2],
-            mode='markers',
+            x=source[:, 0],
+            y=source[:, 1],
+            z=source[:, 2],
+            mode="markers",
             marker=dict(
                 size=3,
                 color=source_colors if source_colors is not None else source_v,
-                colorscale=None if source_colors is not None else 'Plasma',
+                colorscale=None if source_colors is not None else "Plasma",
                 showscale=False if source_colors is not None else True,
             ),
-            name='Source'
+            name="Source",
         ),
-        row=1, col=1
+        row=1,
+        col=1,
     )
 
     fig.add_trace(
         go.Scatter3d(
-            x=target[:, 0], y=target[:, 1], z=target[:, 2],
-            mode='markers',
+            x=target[:, 0],
+            y=target[:, 1],
+            z=target[:, 2],
+            mode="markers",
             marker=dict(
                 size=3,
                 color=target_colors if target_colors is not None else target_v,
-                colorscale=None if target_colors is not None else 'Plasma',
+                colorscale=None if target_colors is not None else "Plasma",
                 showscale=False if target_colors is not None else True,
             ),
-            name='Target'
+            name="Target",
         ),
-        row=1, col=2
+        row=1,
+        col=2,
     )
 
     # Layout
     fig.update_layout(
-        scene=dict(xaxis_title='X', yaxis_title='Y', zaxis_title='Z'),
-        scene2=dict(xaxis_title='X', yaxis_title='Y', zaxis_title='Z'),
+        scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"),
+        scene2=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"),
         title=run_name,
         width=1800,
-        height=800
+        height=800,
     )
 
     # Show and save
     if show:
         fig.show()
-    fig.write_html(f'{plots_path}/{run_name}_rgb.html')
-    fig.write_image(f'{plots_path}/{run_name}_rgb.png')
+    fig.write_html(f"{plots_path}/{run_name}_rgb.html")
+    fig.write_image(f"{plots_path}/{run_name}_rgb.png")

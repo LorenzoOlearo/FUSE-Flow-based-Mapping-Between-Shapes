@@ -10,42 +10,39 @@ import json
 import logging
 import math
 import os
+import random
 import sys
 import time
 from pathlib import Path
-from tqdm import trange
-import pandas as pd
-import random
+
+import fpsample
 import numpy as np
+import pandas as pd
 import torch
 import trimesh
-import fpsample
+from flow_matching.path import AffineProbPath
+from flow_matching.path.scheduler import CondOTScheduler
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from tqdm import trange
 
+from model import models, networks
+from model.models import EDMPrecond, FMCond
+from model.networks import MLP
 from util import misc
-from util.misc import NativeScalerWithGradNormCount as NativeScaler
-from util.plot import plot_points, source_target_plot
-from util.train_utils import setup_logging, initialize_device_and_seed
 from util.mesh_utils import (
+    compute_features,
+    generate_embeddings,
     mesh_geodesics,
     mesh_geodesics_heat_method,
-    pointcloud_geodesics,
-    # compute_diameter,
-    generate_embeddings,
-    compute_features,
-    sample_initial_distribution,
     normalize_mesh_unit,
+    pointcloud_geodesics,
+    sample_initial_distribution,
 )
 
 # import util.lr_sched as lr_sched
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-
-
-from flow_matching.path import AffineProbPath
-from flow_matching.path.scheduler import CondOTScheduler
-
-from model import models, networks
-from model.networks import MLP
-from model.models import EDMPrecond, FMCond
+from util.misc import NativeScalerWithGradNormCount as NativeScaler
+from util.plot import plot_points, source_target_plot
+from util.train_utils import initialize_device_and_seed, setup_logging
 
 
 def build_arg_parser():
@@ -54,7 +51,10 @@ def build_arg_parser():
         "--config", default=None, type=str, help="Path to the config file"
     )
     parser.add_argument(
-        "--method", default="FM", type=str, help="Method used for training, either 'FM' for Flow Matching or 'diffusion'"
+        "--method",
+        default="FM",
+        type=str,
+        help="Method used for training, either 'FM' for Flow Matching or 'diffusion'",
     )
     parser.add_argument(
         "--network", default="MLP", type=str, help="Network used for training"
@@ -107,9 +107,18 @@ def build_arg_parser():
     )
     parser.add_argument("--num-steps", default=64, type=int)
 
-    parser.add_argument("--mlp_hidden_size", default=256, type=int, help="Hidden size of the MLP")
-    parser.add_argument("--mlp_depth", default=4, type=int, help="Depth (number of layers) of the MLP")
-    parser.add_argument("--mlp_num_frequencies", default=-1, type=int, help="Number of Fourier frequencies for the MLP input encoding (-1 to disable)")
+    parser.add_argument(
+        "--mlp_hidden_size", default=256, type=int, help="Hidden size of the MLP"
+    )
+    parser.add_argument(
+        "--mlp_depth", default=4, type=int, help="Depth (number of layers) of the MLP"
+    )
+    parser.add_argument(
+        "--mlp_num_frequencies",
+        default=-1,
+        type=int,
+        help="Number of Fourier frequencies for the MLP input encoding (-1 to disable)",
+    )
 
     parser.add_argument(
         "--data_path",
@@ -173,28 +182,25 @@ def build_arg_parser():
         "--features_type",
         default="xyz",
         type=str,
-        help="The type of features to use for each point"
+        help="The type of features to use for each point",
     )
 
     parser.add_argument(
-            "--features_path", 
-            default=None,
-            type=str,
-            help="Path to the features file"
+        "--features_path", default=None, type=str, help="Path to the features file"
     )
 
     parser.add_argument(
-            "--vertex_features_path", 
-            default=None,
-            type=str,
-            help="Path to the vertex features file"
+        "--vertex_features_path",
+        default=None,
+        type=str,
+        help="Path to the vertex features file",
     )
 
     parser.add_argument(
-            "--dists_path", 
-            default=None,
-            type=str,
-            help="Path to the NxN geodesic dists folder"
+        "--dists_path",
+        default=None,
+        type=str,
+        help="Path to the NxN geodesic dists folder",
     )
 
     parser.add_argument(
@@ -210,19 +216,19 @@ def build_arg_parser():
         default=-1,
         help="Number of points to sample for interpolating the features. If -1, no interpolation is performed and the features are used as they are.",
     )
-    
+
     parser.add_argument(
         "--use_heat_method",
         action="store_true",
         help="Use the heat method for computing geodesic distances (only for meshes). If not set, Dijkstra's algorithm is used.",
-        default=False
+        default=False,
     )
 
     parser.add_argument(
         "--pt",
         action="store_true",
         help="If set, treat the input mesh as a point cloud by removing all faces.",
-        default=False
+        default=False,
     )
 
     return parser
@@ -235,7 +241,9 @@ def setup_data_loader(data_path, batch_size, num_points_train):
         "batch_size": batch_size,
         "epoch_size": num_points_train // batch_size,
     }
-    print(f"Data path: {data_path} | Batch size: {batch_size} | epoch size: {data_loader_train['epoch_size']}")
+    print(
+        f"Data path: {data_path} | Batch size: {batch_size} | epoch size: {data_loader_train['epoch_size']}"
+    )
     return data_loader_train
 
 
@@ -251,16 +259,24 @@ def normalize_features(features, vertex_features, method, diameter=None):
         min_vals = vertex_features.min(dim=0).values
         max_vals = vertex_features.max(dim=0).values
         normalized = (features - min_vals) / (max_vals - min_vals + 1e-8)
-        vertex_features_normalized = (vertex_features - min_vals) / (max_vals - min_vals + 1e-8)
-        print(f"Feature normalization (0_1_indipendent): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+        vertex_features_normalized = (vertex_features - min_vals) / (
+            max_vals - min_vals + 1e-8
+        )
+        print(
+            f"Feature normalization (0_1_indipendent): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}"
+        )
 
     elif method == "0_1_global":
         # Normalize all features to [0, 1] based on global min and max
         min_val = vertex_features.min()
         max_val = vertex_features.max()
         normalized = (features - min_val) / (max_val - min_val + 1e-8)
-        vertex_features_normalized = (vertex_features - min_val) / (max_val - min_val + 1e-8)
-        print(f"Feature normalization (0_1_global): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+        vertex_features_normalized = (vertex_features - min_val) / (
+            max_val - min_val + 1e-8
+        )
+        print(
+            f"Feature normalization (0_1_global): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}"
+        )
 
     elif method == "0_center_indipendent":
         # Center each feature channel around 0 and scale to [-1, 1]
@@ -268,7 +284,9 @@ def normalize_features(features, vertex_features, method, diameter=None):
         max_devs = torch.max(torch.abs(vertex_features - mean_vals), dim=0).values
         normalized = (features - mean_vals) / (max_devs + 1e-8)
         vertex_features_normalized = (vertex_features - mean_vals) / (max_devs + 1e-8)
-        print(f"Feature normalization (0_center_indipendent): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+        print(
+            f"Feature normalization (0_center_indipendent): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}"
+        )
 
     elif method == "0_center_global":
         # Center all features around 0 and scale to [-1, 1] based on global max deviation
@@ -276,39 +294,57 @@ def normalize_features(features, vertex_features, method, diameter=None):
         max_dev = torch.max(torch.abs(vertex_features - mean_val))
         normalized = (features - mean_val) / (max_dev + 1e-8)
         vertex_features_normalized = (vertex_features - mean_val) / (max_dev + 1e-8)
-        print(f"Feature normalization (0_center_global): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+        print(
+            f"Feature normalization (0_center_global): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}"
+        )
 
     elif method == "euclidean":
         # Normalize each channel by the Euclidean norm of the vertex features
         norms = torch.norm(vertex_features, dim=0)
         normalized = features / (norms + 1e-8)
         vertex_features_normalized = vertex_features / (norms + 1e-8)
-        print(f"Feature normalization (euclidean): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+        print(
+            f"Feature normalization (euclidean): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}"
+        )
 
     elif method == "mean_var_vertex":
         mean_vertex_features = vertex_features.mean(dim=0)
         var_vertex_features = vertex_features.std(dim=0)
-        features_normalized = (features - mean_vertex_features) / (var_vertex_features + 1e-8)
-        vertex_features_normalized = (vertex_features - mean_vertex_features) / (var_vertex_features + 1e-8)
+        features_normalized = (features - mean_vertex_features) / (
+            var_vertex_features + 1e-8
+        )
+        vertex_features_normalized = (vertex_features - mean_vertex_features) / (
+            var_vertex_features + 1e-8
+        )
         normalized = features_normalized
-        print(f"Feature normalization (mean_var_vertex): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+        print(
+            f"Feature normalization (mean_var_vertex): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}"
+        )
 
     elif method == "mean_var":
         mean_features = features.mean(dim=0)
         mean_vertex_features = vertex_features.mean(dim=0)
         var_vertex_features = features.std(dim=0)
         features_normalized = (features - mean_features) / (var_vertex_features + 1e-8)
-        vertex_features_normalized = (vertex_features - mean_vertex_features) / (var_vertex_features + 1e-8)
+        vertex_features_normalized = (vertex_features - mean_vertex_features) / (
+            var_vertex_features + 1e-8
+        )
         normalized = features_normalized
-        print(f"Feature normalization (mean_var_vertex): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+        print(
+            f"Feature normalization (mean_var_vertex): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}"
+        )
 
     elif method == "mean_var_features":
         mean_features = features.mean(dim=0)
         var_features = features.std(dim=0)
         features_normalized = (features - mean_features) / (var_features + 1e-8)
-        vertex_features_normalized = (vertex_features - mean_features) / (var_features + 1e-8)
+        vertex_features_normalized = (vertex_features - mean_features) / (
+            var_features + 1e-8
+        )
         normalized = features_normalized
-        print(f"Feature normalization (mean_var_features): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}")
+        print(
+            f"Feature normalization (mean_var_features): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}"
+        )
     elif method == "diameter":
         vertex_features_normalized = vertex_features / diameter
         normalized = features / diameter
@@ -330,7 +366,7 @@ def initialize_model_and_optimizer(args, device):
                 hidden_size=args.mlp_hidden_size,
                 depth=args.mlp_depth,
                 num_frequencies=args.mlp_num_frequencies,
-            )
+            ),
         ).to(device)
     elif args.method == "diffusion":
         model = EDMPrecond(
@@ -358,14 +394,14 @@ def initialize_model_and_optimizer(args, device):
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
 
     loss_scaler = NativeScaler(device)
-    
+
     scheduler = ReduceLROnPlateau(
         optimizer,
-        mode='min',
+        mode="min",
         factor=0.5,
         patience=1000,
         threshold=1e-3,
-        threshold_mode='rel',
+        threshold_mode="rel",
         cooldown=0,
         min_lr=1e-4,
         eps=1e-8,
@@ -454,7 +490,9 @@ def train_one_epoch(
         # features_fps = features[samples_idx]
         # y = features_fps
     else:
-        exit("Data loader must be a dictionary with 'batch_size' and 'epoch_size' keys.")
+        exit(
+            "Data loader must be a dictionary with 'batch_size' and 'epoch_size' keys."
+        )
 
     logger_iterator = metric_logger.log_every(data_loader, print_freq, header)
 
@@ -517,8 +555,12 @@ def train_one_epoch(
 
 
 def train(args, device):
-    model, optimizer, loss_scaler, scheduler = initialize_model_and_optimizer(args, device)
-    misc.load_model(args=args, model_without_ddp=model, optimizer=optimizer, loss_scaler=loss_scaler)
+    model, optimizer, loss_scaler, scheduler = initialize_model_and_optimizer(
+        args, device
+    )
+    misc.load_model(
+        args=args, model_without_ddp=model, optimizer=optimizer, loss_scaler=loss_scaler
+    )
     mesh = trimesh.load(args.data_path, process=False)
 
     # mesh = normalize_mesh_unit(mesh)
@@ -529,56 +571,94 @@ def train(args, device):
 
     if args.pt:
         mesh = trimesh.Trimesh(vertices=mesh.vertices, faces=[], process=False)
-        print(f"[OCIO] ALL FACES REMOVED FROM THE MESH; USING POINTCLOUD WITH {len(mesh.vertices)} VERTICES AND NO FACES")
+        print(
+            f"[OCIO] ALL FACES REMOVED FROM THE MESH; USING POINTCLOUD WITH {len(mesh.vertices)} VERTICES AND NO FACES"
+        )
 
     if args.run_name == "SPHERE":
         print("[OCIO] Overriding mesh with a unit sphere")
         mesh = trimesh.creation.icosphere(subdivisions=5, radius=1.0)
     elif args.run_name == "TORUS":
         print("[OCIO] Overriding mesh with a torus")
-        mesh = trimesh.creation.torus(major_radius=1.0, minor_radius=0.3, major_sections=100, minor_sections=30)
+        mesh = trimesh.creation.torus(
+            major_radius=1.0, minor_radius=0.3, major_sections=100, minor_sections=30
+        )
     elif args.run_name == "CUBE":
         print("[OCIO] Overriding mesh with a cube")
         mesh = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
-    
+
     # Vertex_features are provided externally
     if args.vertex_features_path is not None:
-        print(f"[FEATURES] Ignoring config_file data_path --> loading features from {args.features_path}")
+        print(
+            f"[FEATURES] Ignoring config_file data_path --> loading features from {args.features_path}"
+        )
         ext = os.path.splitext(args.vertex_features_path)[1]
         if ext not in [".txt", ".npy"]:
-            raise ValueError(f"[FEATURES] Vertex features file must be .txt or .npy, got {ext}")
+            raise ValueError(
+                f"[FEATURES] Vertex features file must be .txt or .npy, got {ext}"
+            )
         elif ext == ".txt":
-            vertex_features = torch.tensor(np.loadtxt(args.vertex_features_path).astype(np.float32)).to(device)
+            vertex_features = torch.tensor(
+                np.loadtxt(args.vertex_features_path).astype(np.float32)
+            ).to(device)
         elif ext == ".npy":
-            vertex_features = torch.tensor(np.load(args.vertex_features_path).astype(np.float32)).to(device)
+            vertex_features = torch.tensor(
+                np.load(args.vertex_features_path).astype(np.float32)
+            ).to(device)
         else:
-            raise ValueError(f"[FEATURES] Features file must be .txt or .npy, got {ext}")
-        print(f"[FEATURES] Loaded vertex features from {args.vertex_features_path} | Vertex features shape: {vertex_features.shape}")
+            raise ValueError(
+                f"[FEATURES] Features file must be .txt or .npy, got {ext}"
+            )
+        print(
+            f"[FEATURES] Loaded vertex features from {args.vertex_features_path} | Vertex features shape: {vertex_features.shape}"
+        )
         if vertex_features.shape[0] != len(mesh.vertices):
-            print(f"[FEATURES] Number of vertex features ({vertex_features.shape[0]}) does not match number of mesh vertices ({len(mesh.vertices)}), squeezing vertex features and features")
+            print(
+                f"[FEATURES] Number of vertex features ({vertex_features.shape[0]}) does not match number of mesh vertices ({len(mesh.vertices)}), squeezing vertex features and features"
+            )
             vertex_features = vertex_features.squeeze(0)
-        np.savetxt(os.path.join(args.output_dir, "vertex-geodesics.txt"), vertex_features.detach().cpu().numpy())
-    
+        np.savetxt(
+            os.path.join(args.output_dir, "vertex-geodesics.txt"),
+            vertex_features.detach().cpu().numpy(),
+        )
+
         # Additionally, interpolated features are also provided
         if args.features_path is not None:
-            print(f"[FEATURES] Loading features from {args.features_path} | Features shape: {features.shape}")
+            print(
+                f"[FEATURES] Loading features from {args.features_path} | Features shape: {features.shape}"
+            )
             if ext not in [".txt", ".npy"]:
-                raise ValueError(f"[FEATURES] Features file must be .txt or .npy, got {ext}")
+                raise ValueError(
+                    f"[FEATURES] Features file must be .txt or .npy, got {ext}"
+                )
             elif ext == ".txt":
-                features = torch.tensor(np.loadtxt(args.features_path).astype(np.float32)).to(device)
+                features = torch.tensor(
+                    np.loadtxt(args.features_path).astype(np.float32)
+                ).to(device)
             elif ext == ".npy":
-                features = torch.tensor(np.load(args.features_path).astype(np.float32)).to(device)
+                features = torch.tensor(
+                    np.load(args.features_path).astype(np.float32)
+                ).to(device)
             else:
-                raise ValueError(f"[FEATURES] Features file must be .txt or .npy, got {ext}")
-            
+                raise ValueError(
+                    f"[FEATURES] Features file must be .txt or .npy, got {ext}"
+                )
+
             if vertex_features.shape[0] != len(mesh.vertices):
-                print(f"[FEATURES] Number of vertex features ({vertex_features.shape[0]}) does not match number of mesh vertices ({len(mesh.vertices)}), squeezing vertex features and features")
+                print(
+                    f"[FEATURES] Number of vertex features ({vertex_features.shape[0]}) does not match number of mesh vertices ({len(mesh.vertices)}), squeezing vertex features and features"
+                )
                 features = features.squeeze(0)
-                np.savetxt(os.path.join(args.output_dir, "vertex-geodesics.txt"), features.detach().cpu().numpy())
-        
+                np.savetxt(
+                    os.path.join(args.output_dir, "vertex-geodesics.txt"),
+                    features.detach().cpu().numpy(),
+                )
+
         # Vertex_features are provided but not the interpolated features, if neeeded interpolate them over the mesh faces
         elif args.features_path is None and args.features_interpolation > 0:
-            print(f"[FEATURES] Computing features from vertex features only, no features file provided.")
+            print(
+                f"[FEATURES] Computing features from vertex features only, no features file provided."
+            )
             features = generate_embeddings(
                 mesh=mesh,
                 embedding_type=args.embedding_type,
@@ -586,9 +666,16 @@ def train(args, device):
                 features=vertex_features,
                 device=device,
             )
-            print(f"Interpolated features over {args.features_interpolation} points | Features shape: {features.shape}")
-            np.savetxt(os.path.join(args.output_dir, "vertex-geodesics-interpolated.txt"), features.detach().cpu().numpy())
-            print(f"Saved interpolated features to {os.path.join(args.output_dir, 'features-interpolated.txt')}")
+            print(
+                f"Interpolated features over {args.features_interpolation} points | Features shape: {features.shape}"
+            )
+            np.savetxt(
+                os.path.join(args.output_dir, "vertex-geodesics-interpolated.txt"),
+                features.detach().cpu().numpy(),
+            )
+            print(
+                f"Saved interpolated features to {os.path.join(args.output_dir, 'features-interpolated.txt')}"
+            )
 
     # Default case: no vertex_features provided, compute them from the mesh and optionally interpolate them
     else:
@@ -599,8 +686,13 @@ def train(args, device):
         print(f"  min: {vertex_features.min(dim=0).values.tolist()}")
         print(f"  max: {vertex_features.max(dim=0).values.tolist()}")
         print(f"  avg: {vertex_features.mean(dim=0).tolist()}")
-        np.savetxt(os.path.join(args.output_dir, "vertex-geodesics.txt"), vertex_features.detach().cpu().numpy())
-        print(f"Saved vertex vertex_features to {os.path.join(args.output_dir, 'vertex-geodesics.txt')}")
+        np.savetxt(
+            os.path.join(args.output_dir, "vertex-geodesics.txt"),
+            vertex_features.detach().cpu().numpy(),
+        )
+        print(
+            f"Saved vertex vertex_features to {os.path.join(args.output_dir, 'vertex-geodesics.txt')}"
+        )
 
         if args.features_interpolation > 0:
             # Interpolate the features over the sampled points
@@ -613,48 +705,82 @@ def train(args, device):
             )
 
             print("------------------------------------")
-            print(f"Features interpolated over the sampled points (shape {list(features.shape)}):")
+            print(
+                f"Features interpolated over the sampled points (shape {list(features.shape)}):"
+            )
             print(f"  min: {features.min(dim=0).values.tolist()}")
             print(f"  max: {features.max(dim=0).values.tolist()}")
             print(f"  avg: {features.mean(dim=0).tolist()}")
             print("------------------------------------")
-            np.savetxt(os.path.join(args.output_dir, "vertex-geodesics-interpolated.txt"), features.detach().cpu().numpy())
-            print(f"Saved interpolated features to {os.path.join(args.output_dir, 'vertex-geodesics-interpolated.txt')}")
+            np.savetxt(
+                os.path.join(args.output_dir, "vertex-geodesics-interpolated.txt"),
+                features.detach().cpu().numpy(),
+            )
+            print(
+                f"Saved interpolated features to {os.path.join(args.output_dir, 'vertex-geodesics-interpolated.txt')}"
+            )
         else:
             features = vertex_features
             print("[OCIO] No feature interpolation used; using vertex features as is.")
 
     if args.features_normalization != "none":
         target = args.data_path.split("/")[-1].split(".")[0]
-      
+
         if len(mesh.faces > 0):
             if args.use_heat_method:
-                print("[DISTS] Using heat method for geodesic distances | dists_path: {args.dists_path}")
+                print(
+                    "[DISTS] Using heat method for geodesic distances | dists_path: {args.dists_path}"
+                )
                 os.makedirs(args.dists_path, exist_ok=True)
-                _, diameter = mesh_geodesics_heat_method(mesh=mesh, target=target, recompute=False, dists_path=args.dists_path)
+                _, diameter = mesh_geodesics_heat_method(
+                    mesh=mesh,
+                    target=target,
+                    recompute=False,
+                    dists_path=args.dists_path,
+                )
             else:
-                print(f"[DISTS] Using Dijkstra's algorithm for geodesic distances | dists_path: {args.dists_path}")
+                print(
+                    f"[DISTS] Using Dijkstra's algorithm for geodesic distances | dists_path: {args.dists_path}"
+                )
                 os.makedirs(args.dists_path, exist_ok=True)
-                _, diameter = mesh_geodesics(mesh=mesh, target=target, recompute=False, dists_path=args.dists_path, n_start=5)
+                _, diameter = mesh_geodesics(
+                    mesh=mesh,
+                    target=target,
+                    recompute=False,
+                    dists_path=args.dists_path,
+                    n_start=5,
+                )
         else:
-            _, diameter = pointcloud_geodesics(pt=mesh, target=target, recompute=False, dists_path=args.dists_path)
-            
+            _, diameter = pointcloud_geodesics(
+                pt=mesh, target=target, recompute=False, dists_path=args.dists_path
+            )
+
         print("Diameter used for normalization:", diameter)
-        features, vertex_features = normalize_features(features, vertex_features, args.features_normalization, diameter)
+        features, vertex_features = normalize_features(
+            features, vertex_features, args.features_normalization, diameter
+        )
         print("------------------------------------")
         print(f"vertex_features (shape {list(vertex_features.shape)}):")
         print(f"  min: {vertex_features.min(dim=0).values.tolist()}")
         print(f"  max: {vertex_features.max(dim=0).values.tolist()}")
         print(f"  avg: {vertex_features.mean(dim=0).tolist()}")
         print("------------------------------------")
-        print(f"Features after '{args.features_normalization}' normalization (shape {list(features.shape)}):")
+        print(
+            f"Features after '{args.features_normalization}' normalization (shape {list(features.shape)}):"
+        )
         print(f"  min: {features.min(dim=0).values.tolist()}")
         print(f"  max: {features.max(dim=0).values.tolist()}")
         print(f"  avg: {features.mean(dim=0).tolist()}")
         print(f"output_dir: {args.output_dir}")
-        np.savetxt(os.path.join(args.output_dir, "vertex-geodesics-interpolated-vnorm.txt"), features.detach().cpu().numpy())
-        np.savetxt(os.path.join(args.output_dir, "vertex-geodesics-vnorm.txt"), vertex_features.detach().cpu().numpy())
-        
+        np.savetxt(
+            os.path.join(args.output_dir, "vertex-geodesics-interpolated-vnorm.txt"),
+            features.detach().cpu().numpy(),
+        )
+        np.savetxt(
+            os.path.join(args.output_dir, "vertex-geodesics-vnorm.txt"),
+            vertex_features.detach().cpu().numpy(),
+        )
+
         # # FPS sampling to train on a uniform subset of points
         # print("Performing FPS sampling on the normalized features...")
         # samples_idx = fpsample.bucket_fps_kdline_sampling(mesh.vertices, 150_000, h=3)
@@ -663,10 +789,10 @@ def train(args, device):
         # np.savetxt(os.path.join(args.output_dir, "fps-indices.txt"), samples_idx)
         # np.savetxt(os.path.join(args.output_dir, "vertex-geodesics-fps.txt"), vertex_features_fps.detach().cpu().numpy())
         # features = vertex_features_fps
-        
+
     else:
         print("Skipping feature normalization")
-        
+
     data_loader_train = setup_data_loader(
         data_path=args.data_path,
         batch_size=args.batch_size,
@@ -685,9 +811,9 @@ def train(args, device):
         raise ValueError(f"Unknown method {args.method}")
 
     loss_history = []
-    best_loss = float('inf')
+    best_loss = float("inf")
     best_epoch = -1
-    
+
     for epoch in trange(args.start_epoch, args.epochs, desc="Epochs"):
         train_stats = train_one_epoch(
             model=model,
@@ -703,10 +829,10 @@ def train(args, device):
             embedding_type=args.embedding_type,
             args=args,
         )
-        
+
         loss_history.append(train_stats["loss"])
         scheduler.step(train_stats["loss"])
-       
+
         if args.output_dir is not None:
             if train_stats["loss"] < best_loss:
                 best_loss = train_stats["loss"]
@@ -731,7 +857,7 @@ def train(args, device):
 
     total_time = time.time() - start_time
     misc.plot_loss(loss_history, args.output_dir, args.start_epoch)
-    
+
     logging.info(
         f"Training completed in {str(datetime.timedelta(seconds=int(total_time)))}"
     )
@@ -746,7 +872,7 @@ def inference(args, device):
                 hidden_size=args.mlp_hidden_size,
                 depth=args.mlp_depth,
                 num_frequencies=args.mlp_num_frequencies,
-            )
+            ),
         ).to(device)
     elif args.method == "diffusion":
         model = EDMPrecond(
@@ -777,7 +903,7 @@ def inference(args, device):
         sample, _ = model.sample(
             noise=noise, num_steps=args.num_steps, intermediate=True
         )
-        
+
     if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
         np.save(
@@ -791,7 +917,7 @@ def inference(args, device):
                 save_html=True,
                 save_png=True,
             )
-            
+
             source_target_plot(
                 source=noise,
                 source_v=noise,
@@ -818,7 +944,9 @@ def main():
         known_dests = {action.dest for action in parser._actions}
         for key in config_args:
             if key not in known_dests:
-                print(f"WARNING: config key '{key}' does not match any argument and will be ignored")
+                print(
+                    f"WARNING: config key '{key}' does not match any argument and will be ignored"
+                )
         valid_config = {k: v for k, v in config_args.items() if k in known_dests}
         parser.set_defaults(**valid_config)
 

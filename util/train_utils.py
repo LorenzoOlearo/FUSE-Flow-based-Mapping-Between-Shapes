@@ -1,12 +1,13 @@
-import numpy as np
-import os
 import logging
+import os
 import random
+
+import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 
-from util import lr_decay as lrd, misc
-
+from util import lr_decay as lrd
+from util import misc
 
 
 def setup_logging(output_dir: str):
@@ -16,8 +17,10 @@ def setup_logging(output_dir: str):
         format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler(os.path.join(output_dir, "training.log"), mode="w", encoding="utf-8")
-        ]
+            logging.FileHandler(
+                os.path.join(output_dir, "training.log"), mode="w", encoding="utf-8"
+            ),
+        ],
     )
 
 

@@ -1,53 +1,34 @@
 """Mesh utilities for features computation and sampling"""
 
-import numpy as np
-import torch
-import trimesh
 import os
-import networkx as nx
-import scipy
-import torch
-import fpsample
 
+import fpsample
+import geomfum
+import networkx as nx
+import numpy as np
+import pandas as pd
+import potpourri3d as pp3d
+import scipy
 import scipy.sparse
 import scipy.sparse.csgraph
-import pandas as pd
-
-import pandas as pd
-import scipy
-from scipy.spatial.distance import cdist
-from scipy.sparse.csgraph import shortest_path, connected_components
-from numpy.lib.format import open_memmap
-
-from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import shortest_path
-from sklearn import neighbors
-from sklearn.manifold import MDS
-
-import numpy as np
-from scipy.sparse.csgraph import shortest_path
-from scipy.sparse import coo_matrix
-from scipy.spatial.distance import cdist
-import potpourri3d as pp3d
-
-import geomfum
+import torch
+import trimesh
+from geomfum.descriptor.pipeline import ArangeSubsampler, DescriptorPipeline
+from geomfum.descriptor.spectral import (HeatKernelSignature,
+                                         LandmarkHeatKernelSignature,
+                                         LandmarkWaveKernelSignature,
+                                         WaveKernelSignature)
+from geomfum.laplacian import LaplacianFinder, LaplacianSpectrumFinder
+from geomfum.metric import HeatDistanceMetric
 from geomfum.shape.mesh import TriangleMesh
 from geomfum.shape.point_cloud import PointCloud
-
-from geomfum.descriptor.spectral import (
-    WaveKernelSignature,
-    LandmarkWaveKernelSignature,
-    HeatKernelSignature,
-    LandmarkHeatKernelSignature,
-)
-from geomfum.descriptor.pipeline import DescriptorPipeline, ArangeSubsampler
-from geomfum.laplacian import LaplacianFinder, LaplacianSpectrumFinder
-
-from geomfum.shape.mesh import TriangleMesh
-from geomfum.metric import HeatDistanceMetric
-import potpourri3d as pp3d
-
 from numpy.core._exceptions import _ArrayMemoryError
+from numpy.lib.format import open_memmap
+from scipy.sparse import coo_matrix, csr_matrix
+from scipy.sparse.csgraph import connected_components, shortest_path
+from scipy.spatial.distance import cdist
+from sklearn import neighbors
+from sklearn.manifold import MDS
 
 
 ########################FUNCTIONS FOR MESH NORMALIZATION ##########################
@@ -157,7 +138,9 @@ def sample_sphere_volume_multidimensional(radius, center, num_points, device="cu
     return points
 
 
-def sample_initial_distribution(num_points: int, embedding_dim: int, distribution: str, device: str):
+def sample_initial_distribution(
+    num_points: int, embedding_dim: int, distribution: str, device: str
+):
     """
     Generate random samples based on the specified distribution.
     Args:
@@ -879,6 +862,7 @@ def pointcloud_geodesics(
 
 ######################## # FUNCTIONS FOR COMPUTING FEATURES ########################
 
+
 def compute_features(mesh, args, device):
     """
     Compute feature embeddings for mesh vertices based on the specified feature type.
@@ -902,68 +886,71 @@ def compute_features(mesh, args, device):
     torch.Tensor
         Feature tensor of shape (num_vertices, feature_dim)
     """
-    
-    if args.embedding_type == "xyz":
-        features = torch.tensor(mesh.vertices, device=device, dtype=torch.float32)
-        return features
-    
     has_faces = len(mesh.faces) > 0
-    landmarks_array = np.array(args.landmarks)
-    
-    if args.features_type == "landmarks":
+    landmarks = np.array(args.landmarks)
+    features_type = args.features_type
+
+    if args.features_type == "none" and args.embedding_type == "xyz":
+        raw_features = mesh.vertices
+        transpose = False
+
+    elif features_type in ("landmarks", "landmarks_exp"):
         if has_faces:
-            if args.use_heat_method:
+            if args.use_heat_method and features_type == "landmarks":
                 print("[FEATURES] Using Heat Method for geodesic distances computation")
-                distances = compute_geodesic_distances_heat_method(mesh, source_index=landmarks_array)
+                raw_features = compute_geodesic_distances_heat_method(
+                    mesh, source_index=landmarks
+                )
             else:
                 print("[FEATURES] Using Dijkstra for geodesic distances computation")
-                distances = compute_geodesic_distances(mesh, source_index=landmarks_array)
+                raw_features = compute_geodesic_distances(mesh, source_index=landmarks)
         else:
-            distances = compute_geodesic_distances_pointcloud(mesh, source_index=landmarks_array)
-        
-        features = torch.tensor(distances, device=device, dtype=torch.float32).T
-        return features
-    
-    elif args.features_type == "landmarks_exp":
-        if has_faces:
-            distances = compute_geodesic_distances(mesh, source_index=landmarks_array)
-        else:
-            distances = compute_geodesic_distances_pointcloud(mesh, source_index=landmarks_array)
-        
-        features = torch.exp(-torch.tensor(distances, device=device, dtype=torch.float32).T)
-        return features
-    
-    elif args.features_type == "landmarks_biharmonic":
-        distances = compute_biharmonic_distances(mesh, source_index=landmarks_array)
-        features = torch.tensor(distances, device=device, dtype=torch.float32).T
-        return features
-    
-    elif args.features_type == "wks":
-        wks_features = compute_wks(mesh, num_desc=args.embedding_dim)
-        features = torch.tensor(wks_features, device=device, dtype=torch.float32)
-        return features
-    
-    elif args.features_type == "hks":
-        hks_features = compute_hks(mesh, num_desc=args.embedding_dim)
-        features = torch.tensor(hks_features, device=device, dtype=torch.float32)
-        return features
-    
-    elif args.features_type == "wks_landmarks":
-        wks_features = compute_wks(mesh, num_desc=args.embedding_dim, landmarks=args.landmarks)
-        features = torch.tensor(wks_features, device=device, dtype=torch.float32)
-        return features
-    
-    elif args.features_type == "hks_landmarks":
-        hks_features = compute_hks(mesh, num_desc=args.embedding_dim, landmarks=args.landmarks)
-        features = torch.tensor(hks_features, device=device, dtype=torch.float32)
-        return features
-    
-    elif args.features_type == "mds":
-        print("Computing MDS embedding")
-        mds_dim = args.embedding_type_dim - 3
-        mds_features = compute_mds(mesh.vertices, mesh.faces, k=mds_dim)
-        features = torch.tensor(mds_features, device=device, dtype=torch.float32)
-        return features
+            raw_features = compute_geodesic_distances_pointcloud(
+                mesh, source_index=landmarks
+            )
+        transpose = True
+
+    elif features_type == "landmarks_biharmonic":
+        raw_features = compute_biharmonic_distances(mesh, source_index=landmarks)
+        transpose = True
+
+    elif features_type == "wks":
+        raw_features = compute_wks(mesh, num_desc=args.embedding_dim)
+        transpose = False
+
+    elif features_type == "hks":
+        raw_features = compute_hks(mesh, num_desc=args.embedding_dim)
+        transpose = False
+
+    elif features_type == "wks_landmarks":
+        raw_features = compute_wks(
+            mesh, num_desc=args.embedding_dim, landmarks=args.landmarks
+        )
+        transpose = False
+
+    elif features_type == "hks_landmarks":
+        raw_features = compute_hks(
+            mesh, num_desc=args.embedding_dim, landmarks=args.landmarks
+        )
+        transpose = False
+
+    elif features_type == "mds":
+        print("[FEATURES] Computing MDS embedding")
+        raw_features = compute_mds(
+            mesh.vertices, mesh.faces, k=args.embedding_type_dim - 3
+        )
+        transpose = False
+
+    else:
+        raise ValueError(f"Unsupported features_type: {features_type!r}")
+
+    features = torch.tensor(raw_features, device=device, dtype=torch.float32)
+    if transpose:
+        features = features.T
+    if features_type == "landmarks_exp":
+        features = torch.exp(-features)
+
+    return features
 
 
 def compute_geodesic_distmat(verts, faces):
@@ -1142,7 +1129,7 @@ def compute_geodesic_distances_heat_method(mesh, source_index):
 def compute_wks(mesh, num_desc, landmarks=None):
     """
     Compute Wave Kernel Signature (WKS) for the mesh.
-    
+
     Parameters:
     -----------
     mesh : trimesh.Trimesh
@@ -1153,15 +1140,15 @@ def compute_wks(mesh, num_desc, landmarks=None):
         If True, concatenate WKS with landmark based descriptors.
     indices : np.ndarray
         Array of landmark vertex indices to use if ldmk is True.
-    
+
     Returns:
     --------
     np.ndarray
         Array of WKS features for the mesh.
     """
-    
+
     has_faces = len(mesh.faces) > 0
-    
+
     if has_faces:
         mesh_geom = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
         spectrum_finder = LaplacianSpectrumFinder(
@@ -1176,9 +1163,9 @@ def compute_wks(mesh, num_desc, landmarks=None):
             fix_sign=False,
             laplacian_finder=LaplacianFinder.from_registry(mesh=False, which="robust"),
         )
-    
+
     eigvals, eigvecs = spectrum_finder(mesh_geom, as_basis=False, recompute=True)
-    
+
     if landmarks is not None:
         mesh_geom.landmark_indices = landmarks
         subsample_step = int(400 / num_desc)
@@ -1190,7 +1177,7 @@ def compute_wks(mesh, num_desc, landmarks=None):
         descriptor_pipeline = DescriptorPipeline(pipeline_components)
         features = descriptor_pipeline.apply(mesh_geom).T
         return features
-    
+
     else:
         subsample_step = int(200 / num_desc)
         pipeline_components = [
@@ -1205,7 +1192,7 @@ def compute_wks(mesh, num_desc, landmarks=None):
 def compute_hks(mesh, num_desc, landmarks=None):
     """
     Compute Heat Kernel Signature (HKS) for the mesh.
-    
+
     Parameters:
     -----------
     mesh : trimesh.Trimesh
@@ -1216,15 +1203,15 @@ def compute_hks(mesh, num_desc, landmarks=None):
         If True, concatenate HKS with landmark based descriptors.
     indices : np.ndarray
         Array of landmark vertex indices to use if ldmk is True.
-    
+
     Returns:
     --------
     np.ndarray
         Array of HKS features for the mesh.
     """
-    
+
     has_faces = len(mesh.faces) > 0
-    
+
     if has_faces:
         mesh_geom = TriangleMesh(np.array(mesh.vertices), np.array(mesh.faces))
         spectrum_finder = LaplacianSpectrumFinder(
@@ -1239,9 +1226,9 @@ def compute_hks(mesh, num_desc, landmarks=None):
             fix_sign=False,
             laplacian_finder=LaplacianFinder.from_registry(mesh=False, which="robust"),
         )
-    
+
     eigvals, eigvecs = spectrum_finder(mesh_geom, as_basis=False, recompute=True)
-    
+
     if landmarks is not None:
         mesh_geom.landmark_indices = landmarks
         subsample_step = int(400 / num_desc)
@@ -1253,7 +1240,7 @@ def compute_hks(mesh, num_desc, landmarks=None):
         descriptor_pipeline = DescriptorPipeline(pipeline_components)
         features = descriptor_pipeline.apply(mesh_geom).T
         return features
-    
+
     else:
         subsample_step = int(200 / num_desc)
         pipeline_components = [

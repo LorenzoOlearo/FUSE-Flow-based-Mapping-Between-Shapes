@@ -1,14 +1,14 @@
-import subprocess
-import os
-import numpy as np
-import json
 import argparse
-
+import json
+import os
+import subprocess
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = Path('./out/flows/scan-faust/full-scan-faust-diameter-norm-points/')
-SCAN_FAUST_DIR = Path('./data/SCAN-FAUST/full/shapes/')
+import numpy as np
+
+OUTPUT_DIR = Path("./out/flows/scan-faust/full-scan-faust-diameter-norm-points/")
+SCAN_FAUST_DIR = Path("./data/SCAN-FAUST/full/shapes/")
 
 
 def get_targets(overwrite) -> List[str]:
@@ -20,7 +20,10 @@ def get_targets(overwrite) -> List[str]:
             os.makedirs(OUTPUT_DIR, exist_ok=True)
             os.makedirs(Path(OUTPUT_DIR, shape_name), exist_ok=True)
 
-            if not os.path.exists(Path(OUTPUT_DIR, shape_name, 'checkpoint-9999.pth')) or overwrite:
+            if (
+                not os.path.exists(Path(OUTPUT_DIR, shape_name, "checkpoint-9999.pth"))
+                or overwrite
+            ):
                 targets.append(shape_name)
 
     return targets
@@ -35,10 +38,13 @@ def get_targets_prioritized(overwrite) -> List[str]:
             os.makedirs(OUTPUT_DIR, exist_ok=True)
             os.makedirs(Path(OUTPUT_DIR, shape_name), exist_ok=True)
 
-            if not os.path.exists(Path(OUTPUT_DIR, shape_name, 'checkpoint-9999.pth')) or overwrite:
+            if (
+                not os.path.exists(Path(OUTPUT_DIR, shape_name, "checkpoint-9999.pth"))
+                or overwrite
+            ):
                 targets.append(shape_name)
 
-    priority = ['tr_reg_088', 'tr_reg_090']
+    priority = ["tr_reg_088", "tr_reg_090"]
     prioritized = [p for p in priority if p in targets]
     others = [t for t in targets if t not in priority]
     return prioritized + others
@@ -54,11 +60,11 @@ def main(args):
     for target in targets:
         target_dir = Path(OUTPUT_DIR, target)
 
-        working_dir = Path(str(Path(__file__).resolve()).split('/scripts')[0])
+        working_dir = Path(str(Path(__file__).resolve()).split("/scripts")[0])
         data_path = Path(working_dir, SCAN_FAUST_DIR, f"{target}.ply")
 
         faust_landmarks = [412, 5891, 6593, 3323, 2119]
-        corr = np.array(np.loadtxt(f'./data/SCAN-FAUST/full/corres/{target}.vts'))
+        corr = np.array(np.loadtxt(f"./data/SCAN-FAUST/full/corres/{target}.vts"))
         target_landmarks = corr[faust_landmarks]
 
         config = {
@@ -86,21 +92,28 @@ def main(args):
         }
 
         config_path = os.path.join(target_dir, "config.json")
-        with open(config_path, 'w') as f:
+        with open(config_path, "w") as f:
             json.dump(config, f, indent=4)
 
         if args.external is True:
             command = [
-                "python", "main.py",
-                "--config", config_path,
-                "--features_path", str(features_path),
-                "--features_interpolation", str(500000),
+                "python",
+                "main.py",
+                "--config",
+                config_path,
+                "--features_path",
+                str(features_path),
+                "--features_interpolation",
+                str(500000),
             ]
         else:
             command = [
-                "python", "main.py",
-                "--config", config_path,
-                "--features_interpolation", str('-1'),
+                "python",
+                "main.py",
+                "--config",
+                config_path,
+                "--features_interpolation",
+                str("-1"),
             ]
 
         command_str = " ".join(command)
@@ -113,11 +126,20 @@ def main(args):
             print(f"Error processing {target}: {e}")
 
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a flow on all FAUST scans PTs")
-    parser.add_argument('--overwrite', action='store_true', help="Overwrite if an existing flow model \"checkpoint-9999.pth\" is found", default='False')
-    parser.add_argument('--external', action='store_true', help="Use external precomputed features", default='False')
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help='Overwrite if an existing flow model "checkpoint-9999.pth" is found',
+        default="False",
+    )
+    parser.add_argument(
+        "--external",
+        action="store_true",
+        help="Use external precomputed features",
+        default="False",
+    )
 
     args = parser.parse_args()
 

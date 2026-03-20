@@ -1,8 +1,9 @@
-import subprocess
-import os
-import json
-import numpy as np
 import argparse
+import json
+import os
+import subprocess
+
+import numpy as np
 
 
 def parse_arguments():

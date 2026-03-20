@@ -1,35 +1,31 @@
-import os
-import sys
-import numpy as np
-from pathlib import Path
 import argparse
+import os
 import re
-import pandas as pd
-
-from typing import List, Tuple, Optional
-
-import numpy as np
-import torch
-import trimesh
-
-from igl import signed_distance
-import mcubes 
-import pymeshlab
+import sys
+from pathlib import Path
+from typing import List, Optional, Tuple
 
 import matplotlib.pyplot as plt
+import mcubes
+import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
+import pymeshlab
+import torch
+import trimesh
+from igl import signed_distance
 from plotly.subplots import make_subplots
-
-from scipy.spatial import cKDTree
+from scipy.interpolate import RegularGridInterpolator
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import shortest_path
-from scipy.interpolate import RegularGridInterpolator
+from scipy.spatial import cKDTree
 from sklearn.neighbors import NearestNeighbors
-
-from train_SDF import MLP, MLPConfig, make_volume, evaluate_model, NeuralSDF, NeuralSDFConfig
+from train_SDF import (MLP, MLPConfig, NeuralSDF, NeuralSDFConfig,
+                       evaluate_model, make_volume)
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from util.mesh_utils import normalize_mesh_08, compute_geodesic_distances, get_shape_diameter 
+from util.mesh_utils import (compute_geodesic_distances, get_shape_diameter,
+                             normalize_mesh_08)
 
 
 def load_sdf_volume(path: Path, device: str):
@@ -41,7 +37,9 @@ def load_sdf_volume(path: Path, device: str):
     return sdf_volume, sdf_model
 
 
-def plot_points(points, distances=None, title="3D Points", save_path=None, colorbar_title="Distance"):
+def plot_points(
+    points, distances=None, title="3D Points", save_path=None, colorbar_title="Distance"
+):
     """
     Plot 3D points, optionally colored by a distance array.
 
@@ -56,30 +54,31 @@ def plot_points(points, distances=None, title="3D Points", save_path=None, color
         marker_dict = dict(
             size=3,
             color=distances,
-            colorscale='Viridis',
+            colorscale="Viridis",
             colorbar=dict(title=colorbar_title),
-            opacity=0.8
+            opacity=0.8,
         )
     else:
-        marker_dict = dict(size=2, color='blue', opacity=0.8)
+        marker_dict = dict(size=2, color="blue", opacity=0.8)
 
-    fig = go.Figure(data=[go.Scatter3d(
-        x=points[:, 0],
-        y=points[:, 1],
-        z=points[:, 2],
-        mode='markers',
-        marker=marker_dict
-    )])
+    fig = go.Figure(
+        data=[
+            go.Scatter3d(
+                x=points[:, 0],
+                y=points[:, 1],
+                z=points[:, 2],
+                mode="markers",
+                marker=marker_dict,
+            )
+        ]
+    )
 
     fig.update_layout(
         title=title,
         scene=dict(
-            xaxis_title='X',
-            yaxis_title='Y',
-            zaxis_title='Z',
-            aspectmode='data'
+            xaxis_title="X", yaxis_title="Y", zaxis_title="Z", aspectmode="data"
         ),
-        margin=dict(l=0, r=0, b=0, t=40)
+        margin=dict(l=0, r=0, b=0, t=40),
     )
 
     if save_path is not None:
@@ -154,15 +153,15 @@ def plot_slices(X, title="Heat Distribution Slices", save_path="slices.png"):
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
-    im0 = axes[0].imshow(slice_xy, cmap='RdBu')
+    im0 = axes[0].imshow(slice_xy, cmap="RdBu")
     axes[0].set_title("Heat Slice at center z (XY plane)")
     plt.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
 
-    im1 = axes[1].imshow(slice_xz, cmap='RdBu')
+    im1 = axes[1].imshow(slice_xz, cmap="RdBu")
     axes[1].set_title("Heat Slice at center y (XZ plane)")
     plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
 
-    im2 = axes[2].imshow(slice_yz, cmap='RdBu')
+    im2 = axes[2].imshow(slice_yz, cmap="RdBu")
     axes[2].set_title("Heat Slice at center x (YZ plane)")
     plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
 
@@ -187,33 +186,42 @@ def plot_geodesic_comparison(vertices, faces, true_dists, dijkstra_dists, save_p
     i, j, k = faces[:, 0], faces[:, 1], faces[:, 2]
 
     fig = make_subplots(
-        rows=1, cols=2,
-        specs=[[{'type': 'surface'}, {'type': 'surface'}]],
-        subplot_titles=("True Geodesic Distances", "Dijkstra Approximation")
+        rows=1,
+        cols=2,
+        specs=[[{"type": "surface"}, {"type": "surface"}]],
+        subplot_titles=("True Geodesic Distances", "Dijkstra Approximation"),
     )
 
     mesh_true = go.Mesh3d(
-        x=x, y=y, z=z,
-        i=i, j=j, k=k,
+        x=x,
+        y=y,
+        z=z,
+        i=i,
+        j=j,
+        k=k,
         intensity=true_dists,
         colorscale="Viridis",
         intensitymode="vertex",
         colorbar=dict(title="Distance", x=0.45),
         name="True",
         showscale=True,
-        lighting=dict(ambient=0.5, diffuse=0.9)
+        lighting=dict(ambient=0.5, diffuse=0.9),
     )
 
     mesh_dijkstra = go.Mesh3d(
-        x=x, y=y, z=z,
-        i=i, j=j, k=k,
+        x=x,
+        y=y,
+        z=z,
+        i=i,
+        j=j,
+        k=k,
         intensity=dijkstra_dists,
         colorscale="Viridis",
         intensitymode="vertex",
         colorbar=dict(title="Distance", x=1.0),
         name="Dijkstra",
         showscale=True,
-        lighting=dict(ambient=0.5, diffuse=0.9)
+        lighting=dict(ambient=0.5, diffuse=0.9),
     )
 
     fig.add_trace(mesh_true, row=1, col=1)
@@ -221,9 +229,19 @@ def plot_geodesic_comparison(vertices, faces, true_dists, dijkstra_dists, save_p
 
     fig.update_layout(
         title_text="Geodesic Distance Comparison",
-        scene=dict(xaxis_visible=False, yaxis_visible=False, zaxis_visible=False, aspectmode='data'),
-        scene2=dict(xaxis_visible=False, yaxis_visible=False, zaxis_visible=False, aspectmode='data'),
-        margin=dict(l=0, r=0, t=40, b=0)
+        scene=dict(
+            xaxis_visible=False,
+            yaxis_visible=False,
+            zaxis_visible=False,
+            aspectmode="data",
+        ),
+        scene2=dict(
+            xaxis_visible=False,
+            yaxis_visible=False,
+            zaxis_visible=False,
+            aspectmode="data",
+        ),
+        margin=dict(l=0, r=0, t=40, b=0),
     )
 
     fig.write_html(f"{save_path}.html")
@@ -241,7 +259,7 @@ def convert_world_to_grid(coords, min_coord, max_coord, resolution, unique=False
     normalized = (coords - min_coord) / (max_coord - min_coord)
     index = np.clip(normalized * (resolution - 1), 0, resolution - 1)
     voxel_indices = np.round(index).astype(np.int32)
-    
+
     fractional_offset = index - voxel_indices
 
     # if unique:
@@ -250,11 +268,19 @@ def convert_world_to_grid(coords, min_coord, max_coord, resolution, unique=False
     #     return unique_voxel_indices, # fractional_offset
     # else:
     #     return voxel_indices, fractional_offset
-    
+
     return voxel_indices, fractional_offset
 
 
-def find_closest_occupied_index(occupied_voxels, query_coord, min_coord, max_coord, resolution, world_to_grid=False, unique=False):
+def find_closest_occupied_index(
+    occupied_voxels,
+    query_coord,
+    min_coord,
+    max_coord,
+    resolution,
+    world_to_grid=False,
+    unique=False,
+):
     """
     Find the index or indices of the voxel(s) in `occupied_voxels` that are closest to `query_coord`,
     after mapping it/them into voxel index space.
@@ -262,12 +288,16 @@ def find_closest_occupied_index(occupied_voxels, query_coord, min_coord, max_coo
     If query_coord is an array of points, returns an array of indices.
     """
     if world_to_grid:
-        query_coord, _ = convert_world_to_grid(query_coord, min_coord, max_coord, resolution, unique=unique)
+        query_coord, _ = convert_world_to_grid(
+            query_coord, min_coord, max_coord, resolution, unique=unique
+        )
     occupied_voxels = np.asarray(occupied_voxels)
     query_coord = np.asarray(query_coord)
-    print(f'query coord max: {query_coord.max(axis=0)}, min: {query_coord.min(axis=0)}')
-    print(f'occupied voxel max: {occupied_voxels.max(axis=0)}, min: {occupied_voxels.min(axis=0)}')
-    
+    print(f"query coord max: {query_coord.max(axis=0)}, min: {query_coord.min(axis=0)}")
+    print(
+        f"occupied voxel max: {occupied_voxels.max(axis=0)}, min: {occupied_voxels.min(axis=0)}"
+    )
+
     # Single point
     if query_coord.ndim == 1:
         print("Finding closest occupied voxel for a single point...")
@@ -275,7 +305,7 @@ def find_closest_occupied_index(occupied_voxels, query_coord, min_coord, max_coo
         dists = np.linalg.norm(diffs, axis=1)
         closest_idx = np.argmin(dists)
         return closest_idx
-    
+
     # Multiple points: for each query, find closest occupied voxel
     else:
         tree = cKDTree(occupied_voxels)
@@ -289,15 +319,17 @@ def geodesic(sdf, src_pt, eps, h, min_coord, max_coord, resolution):
     index_grid = -np.ones_like(occupancy, dtype=int)
     for idx, (x, y, z) in enumerate(occupied_voxels):
         index_grid[x, y, z] = idx
-        
+
     # Consider all 26 neighbors (including diagonals)
-    neighbor_offsets = np.array([
-        [dx, dy, dz]
-        for dx in [-1, 0, 1]
-        for dy in [-1, 0, 1]
-        for dz in [-1, 0, 1]
-        if not (dx == 0 and dy == 0 and dz == 0)
-    ])
+    neighbor_offsets = np.array(
+        [
+            [dx, dy, dz]
+            for dx in [-1, 0, 1]
+            for dy in [-1, 0, 1]
+            for dz in [-1, 0, 1]
+            if not (dx == 0 and dy == 0 and dz == 0)
+        ]
+    )
 
     rows, cols = [], []
 
@@ -329,7 +361,9 @@ def geodesic(sdf, src_pt, eps, h, min_coord, max_coord, resolution):
     adj = coo_matrix((weights, (rows, cols)), shape=(N, N)).tocsr()
 
     # Compute geodesic distance matrix (all-pairs) using Dijkstra's algorithm
-    src_idx = find_closest_occupied_index(occupied_voxels, src_pt, min_coord, max_coord, resolution)
+    src_idx = find_closest_occupied_index(
+        occupied_voxels, src_pt, min_coord, max_coord, resolution
+    )
 
     print(f"Source point: {src_pt}")
     print(f"Source point index: {src_idx}, coordinates: {occupied_voxels[src_idx]}")
@@ -354,14 +388,16 @@ def build_adjacency(surface_voxs: np.ndarray) -> coo_matrix:
     Each voxel connects to its 26 neighbors (3D grid).
     """
     coord_to_index = {tuple(coord): idx for idx, coord in enumerate(surface_voxs)}
-    
-    neighbor_offsets = np.array([
-        [dx, dy, dz]
-        for dx in [-1, 0, 1]
-        for dy in [-1, 0, 1]
-        for dz in [-1, 0, 1]
-        if (dx, dy, dz) != (0, 0, 0)
-    ])
+
+    neighbor_offsets = np.array(
+        [
+            [dx, dy, dz]
+            for dx in [-1, 0, 1]
+            for dy in [-1, 0, 1]
+            for dz in [-1, 0, 1]
+            if (dx, dy, dz) != (0, 0, 0)
+        ]
+    )
     weights = np.linalg.norm(neighbor_offsets, axis=1)
 
     rows, cols, all_weights = [], [], []
@@ -386,11 +422,11 @@ def compute_voxel_geodesics(
     eps: float,
     target: str,
     additional_plots: bool = False,
-    full_matrix: bool = False
+    full_matrix: bool = False,
 ) -> np.ndarray:
     """
     Compute geodesic distances on a voxel surface.
-    
+
     Args:
         surface_mask: (N, 3) array of surface voxel coordinates
         landmarks: (L, 3) array of landmark voxel coordinates
@@ -400,9 +436,9 @@ def compute_voxel_geodesics(
         additional_plots: whether to save plots per landmark
         full_matrix: if True, compute full NxN distance matrix (slow!)
                      if False, compute only landmark distances
-    
+
     Returns:
-        dist_matrix: 
+        dist_matrix:
             - If full_matrix=True: (N, N) geodesic distance matrix
             - Else: (L, N) distances from landmarks to all voxels
     """
@@ -418,7 +454,12 @@ def compute_voxel_geodesics(
         dist_matrix = shortest_path(csgraph=adj, directed=False, method="D") * h
     else:
         print(f"Computing geodesic distances for {len(landmark_indices)} landmarks...")
-        dist_matrix = shortest_path(csgraph=adj, indices=landmark_indices, directed=False, method="D") * h
+        dist_matrix = (
+            shortest_path(
+                csgraph=adj, indices=landmark_indices, directed=False, method="D"
+            )
+            * h
+        )
 
     if additional_plots and not full_matrix:
         for i, dist in enumerate(dist_matrix):
@@ -433,27 +474,40 @@ def compute_voxel_geodesics(
         print(f"Geodesic matrix: min={np.min(dist_matrix)}, max={np.max(dist_matrix)}")
     else:
         for i, dist in enumerate(dist_matrix):
-            print(f"Landmark {i} distances: min={np.min(dist)}, max={np.max(dist)}, mean={np.mean(dist)}")
+            print(
+                f"Landmark {i} distances: min={np.min(dist)}, max={np.max(dist)}, mean={np.mean(dist)}"
+            )
 
     return dist_matrix
 
 
 def get_targets(args) -> List[str]:
     """Determine which targets to process based on CLI arguments."""
-    sdf_dir = Path('./out/SDFs/faust-SDFs')
+    sdf_dir = Path("./out/SDFs/faust-SDFs")
     if args.all:
         targets = [
-            f.name for f in sdf_dir.iterdir() if f.is_dir() and
-            any(child.suffix == '.pth' for child in f.iterdir()) and
-            any(child.name.endswith('-landmarks-voxels.npy') for child in f.iterdir())
+            f.name
+            for f in sdf_dir.iterdir()
+            if f.is_dir()
+            and any(child.suffix == ".pth" for child in f.iterdir())
+            and any(
+                child.name.endswith("-landmarks-voxels.npy") for child in f.iterdir()
+            )
         ]
         print(f"Processing all targets: {targets}")
     elif args.test:
         targets = [
-            f.name for f in sdf_dir.iterdir() if f.is_dir() and
-            any(child.suffix == '.pth' for child in f.iterdir()) and
-            any(child.name.endswith('-landmarks-voxels.npy') for child in f.iterdir()) and
-            (not args.test or any(80 <= int(num) <= 99 for num in re.findall(r'\d+', f.name)))
+            f.name
+            for f in sdf_dir.iterdir()
+            if f.is_dir()
+            and any(child.suffix == ".pth" for child in f.iterdir())
+            and any(
+                child.name.endswith("-landmarks-voxels.npy") for child in f.iterdir()
+            )
+            and (
+                not args.test
+                or any(80 <= int(num) <= 99 for num in re.findall(r"\d+", f.name))
+            )
         ]
     elif args.target:
         targets = [args.target]
@@ -462,10 +516,14 @@ def get_targets(args) -> List[str]:
     return targets
 
 
-def load_target_data(target: str, eps: float, device: str, args) -> Tuple[np.ndarray, np.ndarray, MLP, trimesh.Trimesh]:
+def load_target_data(
+    target: str, eps: float, device: str, args
+) -> Tuple[np.ndarray, np.ndarray, MLP, trimesh.Trimesh]:
     """For a given target, load the landmarks, the neural SDF model and extract its voxel surface mask."""
-    sdf_path = Path(f'./out/SDFs/faust-SDFs/{target}/{target}-SDF.pth')
-    landmarks_path = Path(f'./out/SDFs/faust-SDFs/{target}/{target}-landmarks-voxels.npy')
+    sdf_path = Path(f"./out/SDFs/faust-SDFs/{target}/{target}-SDF.pth")
+    landmarks_path = Path(
+        f"./out/SDFs/faust-SDFs/{target}/{target}-landmarks-voxels.npy"
+    )
     print(f"Target: {target}\nSDF path: {sdf_path}\nLandmarks path: {landmarks_path}")
     landmarks = np.load(landmarks_path)
     print(f"Loaded landmarks: {landmarks.shape}\n{landmarks}")
@@ -474,10 +532,12 @@ def load_target_data(target: str, eps: float, device: str, args) -> Tuple[np.nda
         mesh_path = os.path.join(args.mesh_folder, target + f".{args.extension}")
     elif args.mesh_path is not None:
         mesh_path = Path(args.mesh_path)
-        
+
     print(f"Loading mesh from {mesh_path}")
-    mesh = trimesh.load(mesh_path, force='mesh', process=False)
-    print(f"Mesh loaded with {len(mesh.vertices)} vertices and {len(mesh.faces)} faces.")
+    mesh = trimesh.load(mesh_path, force="mesh", process=False)
+    print(
+        f"Mesh loaded with {len(mesh.vertices)} vertices and {len(mesh.faces)} faces."
+    )
     mesh = normalize_mesh_08(mesh)
 
     if args.mesh_path is not None:
@@ -488,11 +548,11 @@ def load_target_data(target: str, eps: float, device: str, args) -> Tuple[np.nda
         mesh_path = None
 
     if mesh_path is not None and os.path.exists(mesh_path):
-        mesh = trimesh.load(mesh_path, force='mesh', process=False)
+        mesh = trimesh.load(mesh_path, force="mesh", process=False)
         mesh = normalize_mesh_08(mesh)
     else:
         print(f"Mesh path {mesh_path} does not exist")
-        
+
     mlp_cfg = MLPConfig()
     sdf_model = MLP(mlp_cfg).to(device)
     sdf_model.load_state_dict(torch.load(sdf_path))
@@ -505,13 +565,15 @@ def load_target_data(target: str, eps: float, device: str, args) -> Tuple[np.nda
 
 
 def get_surface_mask_from_IGL_SDF(mesh, eps, landmark_indices: list):
-    """ Extracts the surface mask from the mesh using IGL signed distance and maps landmarks to the remeshed mesh using KNN. """
-    volume = make_volume('cpu')
-    
-    print(f"Extracting surface mask using IGL signed distance over a {volume.shape} grid...")
+    """Extracts the surface mask from the mesh using IGL signed distance and maps landmarks to the remeshed mesh using KNN."""
+    volume = make_volume("cpu")
+
+    print(
+        f"Extracting surface mask using IGL signed distance over a {volume.shape} grid..."
+    )
     sdf, _, _, _ = signed_distance(volume, mesh.vertices, mesh.faces)
     sdf_volume = sdf.reshape(512, 512, 512)
-    
+
     surface_mask = np.argwhere(np.abs(sdf_volume) <= eps)
     verts, faces = mcubes.marching_cubes(sdf_volume, eps)
 
@@ -519,7 +581,9 @@ def get_surface_mask_from_IGL_SDF(mesh, eps, landmark_indices: list):
     ms.add_mesh(pymeshlab.Mesh(verts, faces))
     ms.meshing_isotropic_explicit_remeshing()
     mesh_isotropic = ms.current_mesh()
-    mesh_isotropic = trimesh.Trimesh(vertices=mesh_isotropic.vertex_matrix(), faces=mesh_isotropic.face_matrix())
+    mesh_isotropic = trimesh.Trimesh(
+        vertices=mesh_isotropic.vertex_matrix(), faces=mesh_isotropic.face_matrix()
+    )
     mesh_isotropic = normalize_mesh_08(mesh_isotropic)
 
     # Map landmark indices from original mesh to closest vertices on mesh_isotropic using KNN
@@ -531,11 +595,22 @@ def get_surface_mask_from_IGL_SDF(mesh, eps, landmark_indices: list):
     tree = cKDTree(iso_vertices)
     _, nearest_idx = tree.query(lm_points, k=1)
     new_landmark_indices = nearest_idx.tolist()
-    
+
     return surface_mask, mesh_isotropic, new_landmark_indices
 
 
-def points_dist_in_grid_interpolated_IDW(surface_points, surface_mask, dists, target: str, resolution, min_coord, max_coord, additional_plots=False, k_neighbors=8, idw_power=2):
+def points_dist_in_grid_interpolated_IDW(
+    surface_points,
+    surface_mask,
+    dists,
+    target: str,
+    resolution,
+    min_coord,
+    max_coord,
+    additional_plots=False,
+    k_neighbors=8,
+    idw_power=2,
+):
     """
     Interpolate distances for surface points using inverse-distance weighting
     from sparse surface voxel samples.
@@ -554,14 +629,33 @@ def points_dist_in_grid_interpolated_IDW(surface_points, surface_mask, dists, ta
     query_grid_coords = normalized * (np.array(resolution) - 1)
 
     # IDW interpolation in grid space
-    dists_interpolated = idw(surface_mask, dists, query_grid_coords, k=k_neighbors, p=idw_power)
+    dists_interpolated = idw(
+        surface_mask, dists, query_grid_coords, k=k_neighbors, p=idw_power
+    )
 
     if additional_plots:
-        plot_points(surface_mask, distances=dists[0], title="Dijkstra Geodesic Distances on surface voxels", save_path=f"out/SDFs/faust-SDFs/{target}/{target}-dijkstra-on-voxels")
+        plot_points(
+            surface_mask,
+            distances=dists[0],
+            title="Dijkstra Geodesic Distances on surface voxels",
+            save_path=f"out/SDFs/faust-SDFs/{target}/{target}-dijkstra-on-voxels",
+        )
 
     return dists_interpolated
 
-def points_dist_in_grid(surface_points, surface_mask, dists, target: str, resolution, min_coord, max_coord, additional_plots=False, k_neighbors=8, idw_power=2):
+
+def points_dist_in_grid(
+    surface_points,
+    surface_mask,
+    dists,
+    target: str,
+    resolution,
+    min_coord,
+    max_coord,
+    additional_plots=False,
+    k_neighbors=8,
+    idw_power=2,
+):
     """
     Given surface points, compute:
       1. Nearest voxel distances (dists_nearest)
@@ -577,7 +671,7 @@ def points_dist_in_grid(surface_points, surface_mask, dists, target: str, resolu
         max_coord,
         resolution,
         world_to_grid=True,
-        unique=False
+        unique=False,
     )
 
     voxel_to_dist_map = {
@@ -597,11 +691,23 @@ def points_dist_in_grid(surface_points, surface_mask, dists, target: str, resolu
     query_grid_coords = normalized * (np.array(resolution) - 1)
 
     # IDW interpolation in grid space
-    dists_idw = idw(surface_mask_arr, dists, query_grid_coords, k=k_neighbors, p=idw_power)
+    dists_idw = idw(
+        surface_mask_arr, dists, query_grid_coords, k=k_neighbors, p=idw_power
+    )
 
     if additional_plots:
-        plot_points(surface_mask, distances=dists[0], title="Dijkstra Geodesic Distances on surface voxels", save_path=f"out/SDFs/faust-SDFs/{target}/{target}-dijkstra-on-voxels")
-        plot_points(surface_mask, distances=dists_idw[0], title="Dijkstra Geodesic Distances on surface voxels - IDW interpolation", save_path=f"out/SDFs/faust-SDFs/{target}/{target}-dijkstra-on-voxels-IDW")
+        plot_points(
+            surface_mask,
+            distances=dists[0],
+            title="Dijkstra Geodesic Distances on surface voxels",
+            save_path=f"out/SDFs/faust-SDFs/{target}/{target}-dijkstra-on-voxels",
+        )
+        plot_points(
+            surface_mask,
+            distances=dists_idw[0],
+            title="Dijkstra Geodesic Distances on surface voxels - IDW interpolation",
+            save_path=f"out/SDFs/faust-SDFs/{target}/{target}-dijkstra-on-voxels-IDW",
+        )
 
     return dists_nearest, dists_idw
 
@@ -647,48 +753,110 @@ def idw(surface_coords, dists, query_coords, k=8, p=2, eps=1e-12):
     mask = ~exact
     if np.any(mask):
         d_safe = np.clip(d[mask], eps, None)
-        w = 1.0 / (d_safe ** p)
+        w = 1.0 / (d_safe**p)
         w /= w.sum(axis=1, keepdims=True)
         vals = D[idx[mask]]  # (Nm, k, M)
-        out[mask] = np.einsum('nk,nkm->nm', w, vals)
+        out[mask] = np.einsum("nk,nkm->nm", w, vals)
 
     return out
 
 
-def extract_mesh_dists(args, sdf_model, surface_mask, dists, target, resolution, min_coord, max_coord, device):
-    if (args.all is True or args.test is True) and args.mesh_folder is not None and args.extension is not None:
+def extract_mesh_dists(
+    args,
+    sdf_model,
+    surface_mask,
+    dists,
+    target,
+    resolution,
+    min_coord,
+    max_coord,
+    device,
+):
+    if (
+        (args.all is True or args.test is True)
+        and args.mesh_folder is not None
+        and args.extension is not None
+    ):
         mesh_path = os.path.join(args.mesh_folder, target + f".{args.extension}")
         print(f"Loading mesh from {mesh_path}")
-        mesh = trimesh.load(mesh_path, force='mesh', process=False)
-        print(f"Mesh loaded with {len(mesh.vertices)} vertices and {len(mesh.faces)} faces.")
+        mesh = trimesh.load(mesh_path, force="mesh", process=False)
+        print(
+            f"Mesh loaded with {len(mesh.vertices)} vertices and {len(mesh.faces)} faces."
+        )
         mesh = normalize_mesh(mesh)
         verts_projection = project_to_surface(mesh.vertices, sdf_model, device)
 
-        dists_mesh, dists_mesh_idw = points_dist_in_grid(verts_projection, surface_mask, dists, target, resolution, min_coord, max_coord, args.additional_plots, k_neighbors=8, idw_power=2)
+        dists_mesh, dists_mesh_idw = points_dist_in_grid(
+            verts_projection,
+            surface_mask,
+            dists,
+            target,
+            resolution,
+            min_coord,
+            max_coord,
+            args.additional_plots,
+            k_neighbors=8,
+            idw_power=2,
+        )
 
         if args.additional_plots:
-            plot_points(mesh.vertices, distances=dists_mesh[:, 0], title="Dijkstra Distances on Mesh Vertices", save_path=f"out/SDFs/faust-SDFs/{target}/{target}-dijkstra-on-mesh-vertices")
-            plot_points(mesh.vertices, distances=dists_mesh_idw[:, 0], title="Dijkstra Distances on Mesh Vertices - IDW interpolation", save_path=f"out/SDFs/faust-SDFs/{target}/{target}-dijkstra-on-mesh-vertices-IDW")
+            plot_points(
+                mesh.vertices,
+                distances=dists_mesh[:, 0],
+                title="Dijkstra Distances on Mesh Vertices",
+                save_path=f"out/SDFs/faust-SDFs/{target}/{target}-dijkstra-on-mesh-vertices",
+            )
+            plot_points(
+                mesh.vertices,
+                distances=dists_mesh_idw[:, 0],
+                title="Dijkstra Distances on Mesh Vertices - IDW interpolation",
+                save_path=f"out/SDFs/faust-SDFs/{target}/{target}-dijkstra-on-mesh-vertices-IDW",
+            )
         print(f"Mesh distances shape: {dists_mesh.shape}")
 
     elif args.mesh_path is not None:
         mesh_path = Path(args.mesh_path)
         print(f"Loading mesh from {mesh_path}")
-        mesh = trimesh.load(mesh_path, force='mesh', process=False)
-        print(f"Mesh loaded with {len(mesh.vertices)} vertices and {len(mesh.faces)} faces.")
+        mesh = trimesh.load(mesh_path, force="mesh", process=False)
+        print(
+            f"Mesh loaded with {len(mesh.vertices)} vertices and {len(mesh.faces)} faces."
+        )
         mesh = normalize_mesh(mesh)
         verts_projection = project_to_surface(mesh.vertices, sdf_model, device)
 
-        dists_mesh, dists_mesh_idw = points_dist_in_grid(verts_projection, surface_mask, dists, target, resolution, min_coord, max_coord, args.additional_plots)
+        dists_mesh, dists_mesh_idw = points_dist_in_grid(
+            verts_projection,
+            surface_mask,
+            dists,
+            target,
+            resolution,
+            min_coord,
+            max_coord,
+            args.additional_plots,
+        )
 
         if args.additional_plots:
-            plot_points(mesh.vertices, distances=dists_mesh[:, 0], title="Dijkstra Distances on Mesh Vertices", save_path=f"out/SDFs/faust-SDFs/{target}/{target}-dijkstra-on-mesh-vertices")
-            plot_points(mesh.vertices, distances=dists_mesh_idw[:, 0], title="Dijkstra Distances on Mesh Vertices - IDW interpolation", save_path=f"out/SDFs/faust-SDFs/{target}/{target}-dijkstra-on-mesh-vertices-IDW")
+            plot_points(
+                mesh.vertices,
+                distances=dists_mesh[:, 0],
+                title="Dijkstra Distances on Mesh Vertices",
+                save_path=f"out/SDFs/faust-SDFs/{target}/{target}-dijkstra-on-mesh-vertices",
+            )
+            plot_points(
+                mesh.vertices,
+                distances=dists_mesh_idw[:, 0],
+                title="Dijkstra Distances on Mesh Vertices - IDW interpolation",
+                save_path=f"out/SDFs/faust-SDFs/{target}/{target}-dijkstra-on-mesh-vertices-IDW",
+            )
         print(f"Mesh distances shape: {dists_mesh.shape}")
 
     else:
-        print("No mesh provided, or --all is False and no mesh_path specified. Skipping mesh distance computation.")
-        print(f"args.all: {args.all}, args.mesh_path: {args.mesh_path}, args.mesh_folder: {args.mesh_folder}, args.extension: {args.extension}")
+        print(
+            "No mesh provided, or --all is False and no mesh_path specified. Skipping mesh distance computation."
+        )
+        print(
+            f"args.all: {args.all}, args.mesh_path: {args.mesh_path}, args.mesh_folder: {args.mesh_folder}, args.extension: {args.extension}"
+        )
         exit(1)
 
     return dists_mesh, dists_mesh_idw, verts_projection
@@ -715,86 +883,167 @@ def project_landmarks_to_surface(landmark_indices, mesh, sdf_model, device):
     return projected_landmarks
 
 
-def sample_zero_level_set(num_samples, threshold, samples_per_step, sdf_model, igl_sdf, mesh):
+def sample_zero_level_set(
+    num_samples, threshold, samples_per_step, sdf_model, igl_sdf, mesh
+):
     """
     Sample points from the zero level set of the SDF model.
     """
     print("Sampling zero level set using neural SDF...")
     sdf_model_cfg = NeuralSDFConfig()
     neural_SDF = NeuralSDF(config=sdf_model_cfg, network=sdf_model)
-    surface_points = neural_SDF.sample_zero_level_set(
-        num_samples=num_samples,
-        threshold=threshold,
-        samples_per_step=samples_per_step,
-        igl_sdf=igl_sdf,
-        mesh=mesh,
-    ).detach().cpu().numpy()
+    surface_points = (
+        neural_SDF.sample_zero_level_set(
+            num_samples=num_samples,
+            threshold=threshold,
+            samples_per_step=samples_per_step,
+            igl_sdf=igl_sdf,
+            mesh=mesh,
+        )
+        .detach()
+        .cpu()
+        .numpy()
+    )
 
     return surface_points
 
 
-def plot_sampled_points(surface_points, dists_surface_points, target, additional_plots, num_points):
+def plot_sampled_points(
+    surface_points, dists_surface_points, target, additional_plots, num_points
+):
     if not additional_plots:
         return
     if num_points > 100000:
         print("Sampling 100k points for plotting...")
-        sample_indices = np.random.choice(len(surface_points), size=100000, replace=False)
+        sample_indices = np.random.choice(
+            len(surface_points), size=100000, replace=False
+        )
         surface_points_plot = surface_points[sample_indices]
-        plot_points(surface_points_plot,
-                    distances=dists_surface_points[sample_indices, 0],
-                    title="Dijkstra Distances on SDF-sampled points",
-                    save_path=f"out/SDFs/faust-SDFs/{target}/{target}-sdf-dijkstra-sampled-points")
+        plot_points(
+            surface_points_plot,
+            distances=dists_surface_points[sample_indices, 0],
+            title="Dijkstra Distances on SDF-sampled points",
+            save_path=f"out/SDFs/faust-SDFs/{target}/{target}-sdf-dijkstra-sampled-points",
+        )
     else:
         print("Plotting all sampled points...")
-        plot_points(surface_points,
-                    distances=dists_surface_points[:, 0],
-                    title="Dijkstra Distances on SDF-sampled points",
-                    save_path=f"out/SDFs/faust-SDFs/{target}/{target}-sdf-dijkstra-sampled-points")
+        plot_points(
+            surface_points,
+            distances=dists_surface_points[:, 0],
+            title="Dijkstra Distances on SDF-sampled points",
+            save_path=f"out/SDFs/faust-SDFs/{target}/{target}-sdf-dijkstra-sampled-points",
+        )
 
 
-def project_and_compare_mesh(mesh, sdf_model, surface_mask, dists, target, resolution, min_coord, max_coord, device, additional_plots):
+def project_and_compare_mesh(
+    mesh,
+    sdf_model,
+    surface_mask,
+    dists,
+    target,
+    resolution,
+    min_coord,
+    max_coord,
+    device,
+    additional_plots,
+):
     print("Projecting mesh vertices to SDF zero level set...")
     verts_projection = project_to_surface(mesh.vertices, sdf_model, device)
-    np.savetxt(f"out/SDFs/{target}/{target}-mesh-vertices-projected.txt",
-               verts_projection, fmt='%.6f')
-    mesh_dists_projected, mesh_dists_projected_idw  = points_dist_in_grid(verts_projection, surface_mask, dists, target, resolution, min_coord, max_coord, additional_plots)
+    np.savetxt(
+        f"out/SDFs/{target}/{target}-mesh-vertices-projected.txt",
+        verts_projection,
+        fmt="%.6f",
+    )
+    mesh_dists_projected, mesh_dists_projected_idw = points_dist_in_grid(
+        verts_projection,
+        surface_mask,
+        dists,
+        target,
+        resolution,
+        min_coord,
+        max_coord,
+        additional_plots,
+    )
     return verts_projection, mesh_dists_projected, mesh_dists_projected_idw
 
 
-def get_fractional_offset_correction(surface_points, h, min_coord, max_coord, resolution):
+def get_fractional_offset_correction(
+    surface_points, h, min_coord, max_coord, resolution
+):
     offsets = []
     for point in surface_points:
-        vox, offset = convert_world_to_grid(point, min_coord, max_coord, resolution, unique=False)
+        vox, offset = convert_world_to_grid(
+            point, min_coord, max_coord, resolution, unique=False
+        )
         offsets.append(offset * h)
     offsets = np.array(offsets, dtype=np.float32)
 
     return offsets
 
 
-def save_outputs(target, diameter, surface_points, dists_surface_points, dists_surface_points_idw, mesh_dists, mesh_dists_idw, verts_projection):
+def save_outputs(
+    target,
+    diameter,
+    surface_points,
+    dists_surface_points,
+    dists_surface_points_idw,
+    mesh_dists,
+    mesh_dists_idw,
+    verts_projection,
+):
     out_dir = Path(f"out/SDFs/faust-SDFs/{target}")
     out_dir.mkdir(exist_ok=True)
-    np.savetxt(out_dir / f"{target}-geodesics.txt", dists_surface_points, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-geodesics-idw.txt", dists_surface_points_idw, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-surface-points.txt", surface_points, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-vertex-geodesics.txt", mesh_dists, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-vertex-geodesics-idw.txt", mesh_dists_idw, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-vertex-voxel-projection.txt", verts_projection, fmt='%.6f')
+    np.savetxt(out_dir / f"{target}-geodesics.txt", dists_surface_points, fmt="%.6f")
+    np.savetxt(
+        out_dir / f"{target}-geodesics-idw.txt", dists_surface_points_idw, fmt="%.6f"
+    )
+    np.savetxt(out_dir / f"{target}-surface-points.txt", surface_points, fmt="%.6f")
+    np.savetxt(out_dir / f"{target}-vertex-geodesics.txt", mesh_dists, fmt="%.6f")
+    np.savetxt(
+        out_dir / f"{target}-vertex-geodesics-idw.txt", mesh_dists_idw, fmt="%.6f"
+    )
+    np.savetxt(
+        out_dir / f"{target}-vertex-voxel-projection.txt", verts_projection, fmt="%.6f"
+    )
 
-    print(f"mesh_dists before normalization: min={np.min(mesh_dists)}, max={np.max(mesh_dists)}, mean={np.mean(mesh_dists)}")
-    print(f"dists_surface_points before normalization: min={np.min(dists_surface_points)}, max={np.max(dists_surface_points)}, mean={np.mean(dists_surface_points)}")
+    print(
+        f"mesh_dists before normalization: min={np.min(mesh_dists)}, max={np.max(mesh_dists)}, mean={np.mean(mesh_dists)}"
+    )
+    print(
+        f"dists_surface_points before normalization: min={np.min(dists_surface_points)}, max={np.max(dists_surface_points)}, mean={np.mean(dists_surface_points)}"
+    )
     mesh_dists = mesh_dists / diameter
     mesh_dists_idw = mesh_dists_idw / diameter
     dists_surface_points = dists_surface_points / diameter
     dists_surface_points_idw = dists_surface_points_idw / diameter
-    print(f"mesh_dists after normalization: min={np.min(mesh_dists)}, max={np.max(mesh_dists)}, mean={np.mean(mesh_dists)}")
-    print(f"dists_surface_points after normalization: min={np.min(dists_surface_points)}, max={np.max(dists_surface_points)}, mean={np.mean(dists_surface_points)}")
+    print(
+        f"mesh_dists after normalization: min={np.min(mesh_dists)}, max={np.max(mesh_dists)}, mean={np.mean(mesh_dists)}"
+    )
+    print(
+        f"dists_surface_points after normalization: min={np.min(dists_surface_points)}, max={np.max(dists_surface_points)}, mean={np.mean(dists_surface_points)}"
+    )
     print(f"Shape diameter: {diameter}")
 
-    np.savetxt(out_dir / f"{target}-geodesics-normalized-diameter.txt", dists_surface_points, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-geodesics-idw-normalized-diameter.txt", dists_surface_points_idw, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-vertex-geodesics-normalized-diameter.txt", mesh_dists, fmt='%.6f')
-    np.savetxt(out_dir / f"{target}-vertex-geodesics-idw-normalized-diameter.txt", mesh_dists_idw, fmt='%.6f')
+    np.savetxt(
+        out_dir / f"{target}-geodesics-normalized-diameter.txt",
+        dists_surface_points,
+        fmt="%.6f",
+    )
+    np.savetxt(
+        out_dir / f"{target}-geodesics-idw-normalized-diameter.txt",
+        dists_surface_points_idw,
+        fmt="%.6f",
+    )
+    np.savetxt(
+        out_dir / f"{target}-vertex-geodesics-normalized-diameter.txt",
+        mesh_dists,
+        fmt="%.6f",
+    )
+    np.savetxt(
+        out_dir / f"{target}-vertex-geodesics-idw-normalized-diameter.txt",
+        mesh_dists_idw,
+        fmt="%.6f",
+    )
 
 
 def geodesic_diameter(surface_mask, h, n_start=5):
@@ -807,18 +1056,30 @@ def geodesic_diameter(surface_mask, h, n_start=5):
 
     for idx in start_indices:
         # First sweep
-        dist_from_start = shortest_path(csgraph=adj, indices=idx, directed=False, method="D") * h
+        dist_from_start = (
+            shortest_path(csgraph=adj, indices=idx, directed=False, method="D") * h
+        )
         farthest_idx = np.argmax(dist_from_start)
 
         # Second sweep
-        dist_from_far = shortest_path(csgraph=adj, indices=farthest_idx, directed=False, method="D") * h
+        dist_from_far = (
+            shortest_path(csgraph=adj, indices=farthest_idx, directed=False, method="D")
+            * h
+        )
         max_distances.append(np.max(dist_from_far))
 
     diameter = max(max_distances)
     return diameter
 
 
-def compute_geodesic_matrix(surface_mask, vertex_voxels, h, batch_size=100, use_memmap=False, memmap_path="geodesic_matrix.dat"):
+def compute_geodesic_matrix(
+    surface_mask,
+    vertex_voxels,
+    h,
+    batch_size=100,
+    use_memmap=False,
+    memmap_path="geodesic_matrix.dat",
+):
     """
     Compute the geodesic distance matrix between vertex_voxels using surface_mask for connectivity.
 
@@ -851,7 +1112,7 @@ def compute_geodesic_matrix(surface_mask, vertex_voxels, h, batch_size=100, use_
 
     # Prepare distance matrix
     if use_memmap:
-        D = np.memmap(memmap_path, dtype=np.float32, mode='w+', shape=(N, N))
+        D = np.memmap(memmap_path, dtype=np.float32, mode="w+", shape=(N, N))
     else:
         D = np.zeros((N, N), dtype=np.float32)
 
@@ -863,7 +1124,12 @@ def compute_geodesic_matrix(surface_mask, vertex_voxels, h, batch_size=100, use_
         batch_indices = vertex_voxels[start:end]
 
         # Compute distances from this batch to all surface vertices
-        dist_batch_full = shortest_path(csgraph=adj, indices=batch_indices, directed=False, method="D") * h
+        dist_batch_full = (
+            shortest_path(
+                csgraph=adj, indices=batch_indices, directed=False, method="D"
+            )
+            * h
+        )
 
         # Select only the columns corresponding to vertex_voxels
         dist_batch = dist_batch_full[:, vertex_voxels]
@@ -886,7 +1152,13 @@ def main(args):
     max_coord = 1.0
     h = (max_coord - min_coord) / (resolution - 1)
     eps = h
-    landmark_indices = [412, 5891, 6593, 3323, 2119]  # TODO: Configurable, currently unused
+    landmark_indices = [
+        412,
+        5891,
+        6593,
+        3323,
+        2119,
+    ]  # TODO: Configurable, currently unused
     diameters_data = []
 
     targets = get_targets(args)
@@ -896,22 +1168,36 @@ def main(args):
         print(f"\n===== Processing target: {target} =====")
 
         # 1. Load data (landmark voxels, surface voxel mask, trained SDF model)
-        landmarks, surface_mask, sdf_model, mesh = load_target_data(target, eps, device, args)
+        landmarks, surface_mask, sdf_model, mesh = load_target_data(
+            target, eps, device, args
+        )
         if args.igl_sdf:
-            surface_mask, extracted_mesh, new_landmark_indices = get_surface_mask_from_IGL_SDF(mesh, eps, landmark_indices)
-            print(f"Using IGL SDF for surface mask, found {surface_mask.shape[1]} surface voxels.")
+            surface_mask, extracted_mesh, new_landmark_indices = (
+                get_surface_mask_from_IGL_SDF(mesh, eps, landmark_indices)
+            )
+            print(
+                f"Using IGL SDF for surface mask, found {surface_mask.shape[1]} surface voxels."
+            )
 
             # Compute the true geodesic distances on the remeshed mesh extracted from IGL analytcal SDF
             mesh_dists = []
             for i, landmark_idx in enumerate(new_landmark_indices):
-                print(f"Computing true geodesic distances on extracted mesh for landmark {i} (vertex index {landmark_idx})...")
+                print(
+                    f"Computing true geodesic distances on extracted mesh for landmark {i} (vertex index {landmark_idx})..."
+                )
                 true_dists = compute_geodesic_distances(extracted_mesh, landmark_idx)
                 mesh_dists.append(true_dists)
                 max_dist = max(np.max(dist) for dist in mesh_dists)
                 mesh_dists = [dist / max_dist for dist in mesh_dists]
-                print(f"Landmark {i} true distances: min={np.min(true_dists)}, max={np.max(true_dists)}, mean={np.mean(true_dists)}")
+                print(
+                    f"Landmark {i} true distances: min={np.min(true_dists)}, max={np.max(true_dists)}, mean={np.mean(true_dists)}"
+                )
             mesh_dists = np.stack(mesh_dists, axis=1)
-            np.savetxt(f"out/SDFs/{target}/{target}-sdf-mcubes-mesh-dists.txt", mesh_dists, fmt='%.6f')
+            np.savetxt(
+                f"out/SDFs/{target}/{target}-sdf-mcubes-mesh-dists.txt",
+                mesh_dists,
+                fmt="%.6f",
+            )
 
         # 2. Sample points on zero level set of SDF
         surface_points = sample_zero_level_set(
@@ -920,7 +1206,7 @@ def main(args):
             samples_per_step=100_000,
             sdf_model=sdf_model,
             igl_sdf=args.igl_sdf,
-            mesh=mesh, 
+            mesh=mesh,
         )
 
         # 3. Compute geodesic distances from landmarks to all surface voxels
@@ -931,7 +1217,7 @@ def main(args):
             eps=eps,
             target=target,
             additional_plots=args.additional_plots,
-            full_matrix=False
+            full_matrix=False,
         )
 
         # 4. Get distances for sampled points in the voxel grid
@@ -943,7 +1229,7 @@ def main(args):
             resolution=resolution,
             min_coord=min_coord,
             max_coord=max_coord,
-            additional_plots=args.additional_plots
+            additional_plots=args.additional_plots,
         )
 
         # 5. Optional visualization of sampled point distances
@@ -952,12 +1238,12 @@ def main(args):
             dists_surface_points=dists_surface_points_idw,
             target=target,
             additional_plots=args.additional_plots,
-            num_points=args.num_points
+            num_points=args.num_points,
         )
 
         # 6. Extract the mesh vertices, project them to the SDF surface, and get the distances from the surface voxel grid
         mesh_dists, mesh_dists_idw, verts_projection = extract_mesh_dists(
-            args=args, 
+            args=args,
             sdf_model=sdf_model,
             surface_mask=surface_mask,
             dists=dists,
@@ -980,7 +1266,7 @@ def main(args):
                 max_coord,
                 resolution,
                 world_to_grid=True,
-                unique=False
+                unique=False,
             )
             full_vertex_geodesics = compute_geodesic_matrix(
                 surface_mask=surface_mask,
@@ -988,8 +1274,8 @@ def main(args):
                 h=h,
                 batch_size=50,
                 use_memmap=True,
-                memmap_path=f"out/SDFs/faust-SDFs/{target}/{target}-full-vertex-geodesics.dat"
-        )
+                memmap_path=f"out/SDFs/faust-SDFs/{target}/{target}-full-vertex-geodesics.dat",
+            )
 
         # 8. Save the results
         save_outputs(
@@ -1000,7 +1286,7 @@ def main(args):
             dists_surface_points_idw=dists_surface_points_idw,
             mesh_dists=mesh_dists,
             mesh_dists_idw=mesh_dists_idw,
-            verts_projection=verts_projection
+            verts_projection=verts_projection,
         )
 
     df = pd.DataFrame(diameters_data)
@@ -1015,16 +1301,61 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train and evaluate SDF model on mesh")
-    parser.add_argument('--target', type=str, help="Target of the feature extraction, should be a filename without extension and will be searched in the out/SDFs directory")
-    parser.add_argument('--additional_plots', action='store_true', default=False, help="Plot the volume of sampled points, plot the volume of voxelized points, plot the geodesic distances between these points and the landmarks")
-    parser.add_argument('--num_points', type=int, default=100000, help="Number of points to sample on the zero level set of the SDF")
-    parser.add_argument('--all', action='store_true', help="Sample and extract features for all [off/ply] file in the target directory")
-    parser.add_argument('--test', action='store_true', help="Sample and extract features only from the last 20 targets (80-99) in the out/SDFs directory")
-    parser.add_argument('--mesh_path', type=str, default=None, help="Path to the target mesh file to be processed")
-    parser.add_argument('--mesh_folder', type=str, default=None, help="Folder containing the target mesh files to be processed. If not provided, will use the default out/SDFs directory.")
-    parser.add_argument('--extension', type=str, default='ply', help="File extension of the target mesh files (default: 'ply')")
-    parser.add_argument('--igl_sdf', action='store_true', help="Use libigl to compute the mesh signed distance for comparison")
-    parser.add_argument('--full_geodesic', action='store_true', help="Compute the full NxN geodesic distance matrix on the voxel surface (super slow)")
+    parser.add_argument(
+        "--target",
+        type=str,
+        help="Target of the feature extraction, should be a filename without extension and will be searched in the out/SDFs directory",
+    )
+    parser.add_argument(
+        "--additional_plots",
+        action="store_true",
+        default=False,
+        help="Plot the volume of sampled points, plot the volume of voxelized points, plot the geodesic distances between these points and the landmarks",
+    )
+    parser.add_argument(
+        "--num_points",
+        type=int,
+        default=100000,
+        help="Number of points to sample on the zero level set of the SDF",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Sample and extract features for all [off/ply] file in the target directory",
+    )
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Sample and extract features only from the last 20 targets (80-99) in the out/SDFs directory",
+    )
+    parser.add_argument(
+        "--mesh_path",
+        type=str,
+        default=None,
+        help="Path to the target mesh file to be processed",
+    )
+    parser.add_argument(
+        "--mesh_folder",
+        type=str,
+        default=None,
+        help="Folder containing the target mesh files to be processed. If not provided, will use the default out/SDFs directory.",
+    )
+    parser.add_argument(
+        "--extension",
+        type=str,
+        default="ply",
+        help="File extension of the target mesh files (default: 'ply')",
+    )
+    parser.add_argument(
+        "--igl_sdf",
+        action="store_true",
+        help="Use libigl to compute the mesh signed distance for comparison",
+    )
+    parser.add_argument(
+        "--full_geodesic",
+        action="store_true",
+        help="Compute the full NxN geodesic distance matrix on the voxel surface (super slow)",
+    )
 
     args = parser.parse_args()
 

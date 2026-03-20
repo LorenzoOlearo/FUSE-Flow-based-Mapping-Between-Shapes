@@ -1,15 +1,17 @@
-import subprocess
-import os
-import numpy as np
-import json
 import argparse
-
+import json
+import os
+import subprocess
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = Path('./out/flows/shrec19/shrec19-diameter-norm/')
-SHREK19_DIR = Path('./data/SHREC19_MH_dataset/')
-GT_DIR = Path('data/SHREC19_MH_dataset/SHREC19_matching_humans-master/matches/FARMgt_txt')
+import numpy as np
+
+OUTPUT_DIR = Path("./out/flows/shrec19/shrec19-diameter-norm/")
+SHREK19_DIR = Path("./data/SHREC19_MH_dataset/")
+GT_DIR = Path(
+    "data/SHREC19_MH_dataset/SHREC19_matching_humans-master/matches/FARMgt_txt"
+)
 
 
 def get_targets(overwrite) -> List[str]:
@@ -21,7 +23,10 @@ def get_targets(overwrite) -> List[str]:
             os.makedirs(OUTPUT_DIR, exist_ok=True)
             os.makedirs(Path(OUTPUT_DIR, shape_name), exist_ok=True)
 
-            if not os.path.exists(Path(OUTPUT_DIR, shape_name, 'checkpoint-9999.pth')) or overwrite:
+            if (
+                not os.path.exists(Path(OUTPUT_DIR, shape_name, "checkpoint-9999.pth"))
+                or overwrite
+            ):
                 targets.append(shape_name)
 
     return targets
@@ -40,13 +45,15 @@ def main(args):
         if target == "43":
             continue
 
-        working_dir = Path(str(Path(__file__).resolve()).split('/scripts')[0])
-        data_path = Path(working_dir, SHREK19_DIR, f"{target}.obj") 
-        features_path = Path(working_dir, 'data', 'KINECT_features_pca_20', f"{target}_features.npy")
+        working_dir = Path(str(Path(__file__).resolve()).split("/scripts")[0])
+        data_path = Path(working_dir, SHREK19_DIR, f"{target}.obj")
+        features_path = Path(
+            working_dir, "data", "KINECT_features_pca_20", f"{target}_features.npy"
+        )
 
         faust_landmarks = np.array([412, 5891, 6593, 3323, 2119])
         if target != "44":
-            corr = np.array(np.loadtxt(GT_DIR / f'44_{target}.txt')) - 1
+            corr = np.array(np.loadtxt(GT_DIR / f"44_{target}.txt")) - 1
             target_landmarks = corr[faust_landmarks]
         else:
             target_landmarks = faust_landmarks
@@ -71,25 +78,31 @@ def main(args):
             "embedding_type": "features_only",
             "features_type": "landmarks",
             "features_normalization": "diameter",
-            "dists_path": str(SHREK19_DIR / 'dists/'),
+            "dists_path": str(SHREK19_DIR / "dists/"),
             "landmarks": target_landmarks.tolist(),
         }
 
         config_path = os.path.join(target_dir, "config.json")
-        with open(config_path, 'w') as f:
+        with open(config_path, "w") as f:
             json.dump(config, f, indent=4)
 
         if args.external is True:
             command = [
-                "python", "main.py",
-                "--config", config_path,
-                "--features_path", str(features_path),
-                "--features_interpolation", str(500000),
+                "python",
+                "main.py",
+                "--config",
+                config_path,
+                "--features_path",
+                str(features_path),
+                "--features_interpolation",
+                str(500000),
             ]
         else:
             command = [
-                "python", "main.py",
-                "--config", config_path,
+                "python",
+                "main.py",
+                "--config",
+                config_path,
             ]
 
         command_str = " ".join(command)
@@ -102,11 +115,20 @@ def main(args):
             print(f"Error processing {target}: {e}")
 
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a flow on all SHREC19 meshes")
-    parser.add_argument('--overwrite', action='store_true', help="Overwrite if an existing flow model \"checkpoint-9999.pth\" is found", default='False')
-    parser.add_argument('--external', action='store_true', help="Use external precomputed features", default='False')
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help='Overwrite if an existing flow model "checkpoint-9999.pth" is found',
+        default="False",
+    )
+    parser.add_argument(
+        "--external",
+        action="store_true",
+        help="Use external precomputed features",
+        default="False",
+    )
 
     args = parser.parse_args()
 

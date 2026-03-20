@@ -1,14 +1,14 @@
+import geomstats.backend as gs
 import numpy as np
-import trimesh
-from sklearn.neighbors import NearestNeighbors
+import potpourri3d as pp3d
 import torch
 import torch.nn.functional as F
+import trimesh
+from geomfum.laplacian import LaplacianFinder
+from geomfum.metric import HeatDistanceMetric
 from geomfum.shape.mesh import TriangleMesh
 from geomfum.shape.point_cloud import PointCloud
-from geomfum.metric import HeatDistanceMetric
-import potpourri3d as pp3d
-from geomfum.laplacian import LaplacianFinder
-import geomstats.backend as gs
+from sklearn.neighbors import NearestNeighbors
 
 
 def compute_geodesic_error(dists, p2p, corr_a=None, corr_b=None):

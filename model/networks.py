@@ -2,12 +2,12 @@
 In this file we define some networks that takes as input a spatian input and a time input.
 """
 
+import math
+
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-import math
 import torch.nn.functional as F
-
 
 ###################### GEOMDIST NETWORKS ######################
 

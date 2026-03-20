@@ -1,5 +1,5 @@
-'''
-Implementation of Chamfer Distance and Hausdorff Distance Losses'''
+"""
+Implementation of Chamfer Distance and Hausdorff Distance Losses"""
 
 import torch
 import torch.nn as nn
@@ -12,8 +12,9 @@ def chamfer_dist(x, y, weight_x=None, weight_y=None):
     else:
         if weight_y is None:
             weight_y = weight_x
-        loss = (dist.min(-2)[0] * weight_x).sum(-1) / weight_x.sum(-1) + \
-               (dist.min(-1)[0] * weight_y).sum(-1) / weight_y.sum(-1)
+        loss = (dist.min(-2)[0] * weight_x).sum(-1) / weight_x.sum(-1) + (
+            dist.min(-1)[0] * weight_y
+        ).sum(-1) / weight_y.sum(-1)
 
     return loss
 
@@ -27,7 +28,7 @@ class ChamferLoss(nn.Module):
 
     def __init__(self, loss_weight=1.0):
         super(ChamferLoss, self).__init__()
-        assert loss_weight >= 0, f'Invalid loss weight: {loss_weight}'
+        assert loss_weight >= 0, f"Invalid loss weight: {loss_weight}"
         self.loss_weight = loss_weight
 
     def forward(self, x, y, weight_x=None, weight_y=None):
@@ -39,10 +40,8 @@ class ChamferLoss(nn.Module):
             weight_y (Tensor): of shape (N, V, C). weight y.
         """
         return self.loss_weight * chamfer_dist(x, y, weight_x, weight_y).mean()
-    
-    
-    
-    
+
+
 def hausdorff_dist(x, y, weight_x=None, weight_y=None):
     dist = torch.cdist(x, y)
     if weight_x is None and weight_y is None:
@@ -52,7 +51,7 @@ def hausdorff_dist(x, y, weight_x=None, weight_y=None):
             weight_y = weight_x
         loss = torch.max(
             (dist.min(-2)[0] * weight_x).sum(-1) / weight_x.sum(-1),
-            (dist.min(-1)[0] * weight_y).sum(-1) / weight_y.sum(-1)
+            (dist.min(-1)[0] * weight_y).sum(-1) / weight_y.sum(-1),
         )
 
     return loss
@@ -67,7 +66,7 @@ class HausdorffLoss(nn.Module):
 
     def __init__(self, loss_weight=1.0):
         super(HausdorffLoss, self).__init__()
-        assert loss_weight >= 0, f'Invalid loss weight: {loss_weight}'
+        assert loss_weight >= 0, f"Invalid loss weight: {loss_weight}"
         self.loss_weight = loss_weight
 
     def forward(self, x, y, weight_x=None, weight_y=None):
