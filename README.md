@@ -54,7 +54,23 @@ Citation:
 ```
 FlowMatching4Matching/
 ├── main.py                        # Core single-shape training and inference script
-├── matching_experiments.py        # Shape matching evaluation across dataset pairs
+├── matching.py        # Shape matching evaluation entry point (main + argparse)
+│
+├── matching/                      # Matching pipeline modules
+│   ├── data_structures.py         # DataPath, Element, MatchingResult dataclasses
+│   ├── targets.py                 # Per-dataset target discovery (get_targets_*)
+│   ├── element_processing.py      # Load shapes, features, and flow models per element
+│   ├── methods.py                 # builds the method dispatch table
+│   ├── evaluation.py              # run_matching_methods, per-dataset metric evaluation (SHREC19/20, FAUST scan, default), log_results
+│   ├── visualization.py           # plotly/matplotlib result visualizations
+│   ├── pipeline.py                # matching pipeline for each source-target pair
+│   └── p2p/                       # Point-to-point algorithm implementations
+│       ├── flow.py                # Flow composition methods (standard, hungarian, lapjv, zoomout, in-gauss)
+│       ├── knn.py                 # KNN matching with optional ZoomOut refinement
+│       ├── fmaps.py               # Functional maps methods (standard, WKS, zoomout, neural zoomout)
+│       ├── assignment.py          # Linear assignment methods (Hungarian, LAPJV)
+│       ├── ot.py                  # Optimal transport (Sinkhorn)
+│       └── ndp.py                 # Neural Deformation Pyramid (landmark-guided, SDF)
 │
 ├── model/
 │   ├── models.py                  # FMCond (Flow Matching) and EDMPrecond (DDIM)
@@ -63,7 +79,6 @@ FlowMatching4Matching/
 │
 ├── util/
 │   ├── mesh_utils.py              # Geodesic computation, feature extraction, mesh sampling
-│   ├── matching_utils.py          # KNN, OT, flow composition, FMAPs, Hungarian, LAPJV
 │   ├── metrics.py                 # Geodesic error, coverage, Dirichlet energy
 │   ├── dataset_utils.py           # Dataset-specific helpers and SHREC20 landmark loading
 │   ├── misc.py                    # MetricLogger, checkpoint save/load, distributed utils
@@ -106,7 +121,6 @@ models.
 
 - **Code Repository:** [1zb/GeomDist (GitHub)](https://github.com/1zb/GeomDist)
 - **Paper:** [Geometry Distributions (ICCV 2025)](https://openaccess.thecvf.com/content/ICCV2025/papers/Zhang_Geometry_Distributions_ICCV_2025_paper.pdf)
-
 
 ---
 
@@ -286,7 +300,7 @@ python scripts/run_kinect.py
 
 Each script saves one subdirectory per shape under `out/flows/<dataset>/`,
 containing the model checkpoint and the feature files used by
-`matching_experiments.py`.
+`matching.py`.
 
 ---
 
@@ -388,7 +402,7 @@ The `--test` flag processes shapes `tr_reg_080` through `tr_reg_099`;
 
 ---
 
-## Shape Matching Evaluation (`matching_experiments.py`)
+## Shape Matching Evaluation (`matching.py`)
 
 This script loads trained flow models for each shape in a dataset, runs all
 selected matching methods on every source-target pair, and reports geodesic
@@ -398,7 +412,7 @@ error, Euclidean error, Dirichlet energy, and coverage.
 
 FAUST mesh-to-mesh matching (all pairs):
 ```bash
-python matching_experiments.py \
+python matching.py \
     --config config.json \
     --faust \
     --source_rep mesh \
@@ -410,7 +424,7 @@ python matching_experiments.py \
 
 Match a specific pair (FAUST: tr_reg_080 -> tr_reg_081):
 ```bash
-python matching_experiments.py \
+python matching.py \
     --config config.json \
     --faust \
     --source_rep mesh --target_rep mesh \
@@ -424,7 +438,7 @@ python matching_experiments.py \
 
 SMAL mesh-to-mesh matching:
 ```bash
-python matching_experiments.py \
+python matching.py \
     --config config.json \
     --smal \
     --source_rep mesh --target_rep mesh \
@@ -435,7 +449,7 @@ python matching_experiments.py \
 
 SHREC20 cross-category matching (cow -> camel_a):
 ```bash
-python matching_experiments.py \
+python matching.py \
     --config config.json \
     --shrec20 \
     --source_rep mesh --target_rep mesh \
@@ -448,7 +462,7 @@ python matching_experiments.py \
 
 KINECT point cloud matching:
 ```bash
-python matching_experiments.py \
+python matching.py \
     --config config.json \
     --kinect \
     --source_rep pt --target_rep pt \
@@ -459,7 +473,7 @@ python matching_experiments.py \
 
 FAUST SDF-to-SDF matching:
 ```bash
-python matching_experiments.py \
+python matching.py \
     --config config.json \
     --faust \
     --source_rep sdf --target_rep sdf \
@@ -470,7 +484,7 @@ python matching_experiments.py \
 
 SMPLX template skinning onto KINECT point clouds:
 ```bash
-python matching_experiments.py \
+python matching.py \
     --config config.json \
     --kinect --pt_skinning \
     --source_rep mesh --target_rep pt \
@@ -480,7 +494,7 @@ python matching_experiments.py \
 
 Evaluate identity (same shape, used to evaluate the inversion error of the flow):
 ```bash
-python matching_experiments.py \
+python matching.py \
     --config config.json \
     --faust \
     --source_rep mesh --target_rep mesh \
@@ -520,33 +534,34 @@ Methods are grouped by the `--matching_methods` flag:
 
 | Group | Included methods |
 |---|---|
-| `fast` | `knn`, `flow`, `knn-in-gauss` |
-| `all` | `knn`, `ot`, `fmaps`, `fmap-zoomout`, `fmap-neural-zoomout`, `ndp-landmarks`, `fmap-wks`, `flow`, `knn-in-gauss`, `flow-zoomout`, `flow-neural-zoomout` |
-| `baselines` | `knn`, `ot`, `flow`, `fmaps`, `fmap-zoomout`, `fmap-neural-zoomout`, `knn-in-gauss`, `ndp-landmarks`, `fmap-wks` |
-| `baselines-no-zoomout` | `knn`, `ot`, `flow`, `fmaps`, `knn-in-gauss`, `ndp-landmarks`, `fmap-wks` |
-| `sdf` | `knn`, `ot`, `flow`, `ndp-sdf`, `knn-in-gauss` |
-| `zoomout` | `fmaps`, `fmap-zoomout`, `fmap-neural-zoomout` |
+| `fast` | `KNN`, `FUSE`, `FUSE-ANCHOR` |
+| `all` | `KNN`, `OT`, `FMaps`, `FMaps-zoomout`, `FMaps-neural-zoomout`, `NDP-landmarks`, `NDP-wks`, `FUSE`, `FUSE-ANCHOR`, `FUSE-zoomout`, `FUSE-neural-zoomout` |
+| `baselines` | `KNN`, `OT`, `FUSE`, `FMaps`, `FMaps-zoomout`, `FMaps-neural-zoomout`, `FUSE-ANCHOR`, `NDP-landmarks`, `NDP-wks` |
+| `baselines-no-zoomout` | `KNN`, `OT`, `FUSE`, `FMaps`, `FUSE-ANCHOR`, `NDP-landmarks`, `NDP-wks` |
+| `sdf` | `KNN`, `OT`, `FUSE`, `NDP-SDF`, `FUSE-ANCHOR` |
+| `zoomout` | `FMaps`, `FMaps-zoomout`, `FMaps-neural-zoomout` |
+| `la` | `KNN`, `FUSE`, `hungarian`, `lapjv`, `FUSE-hungarian`, `FUSE-lapjv` |
 
 Individual methods:
 
 | Method | Description |
 |---|---|
-| `knn` | Nearest-neighbor matching in feature space |
-| `ot` | Optimal transport matching in feature space |
-| `flow` | Flow composition: invert source flow, apply target flow, then KNN |
-| `knn-in-gauss` | KNN matching after mapping both shapes to the Gaussian prior via their inverse flows |
-| `fmaps` | Functional maps (spectral) |
-| `fmap-zoomout` | Functional maps with ZoomOut refinement |
-| `fmap-neural-zoomout` | Functional maps with neural ZoomOut refinement |
-| `fmap-wks` | Functional maps using Wave Kernel Signature descriptors |
-| `ndp-landmarks` | Non-rigid deformation with landmark constraints |
-| `ndp-sdf` | Non-rigid deformation using SDF-projected vertex positions |
-| `flow-zoomout` | Flow composition followed by ZoomOut refinement |
-| `flow-neural-zoomout` | Flow composition followed by neural ZoomOut refinement |
+| `KNN` | Nearest-neighbor matching in feature space |
+| `OT` | Optimal transport matching in feature space |
+| `FUSE` | Flow composition: invert source flow, apply target flow, then KNN |
+| `FUSE-ANCHOR` | KNN matching after mapping both shapes to the anchor distribution via their inverse flows |
+| `FMaps` | Functional maps (spectral) |
+| `FMaps-zoomout` | Functional maps with ZoomOut refinement |
+| `FMaps-neural-zoomout` | Functional maps with neural ZoomOut refinement |
+| `NDP-wks` | Functional maps using Wave Kernel Signature descriptors |
+| `NDP-landmarks` | Non-rigid deformation with landmark constraints |
+| `NDP-SDF` | Non-rigid deformation using SDF-projected vertex positions |
+| `FUSE-zoomout` | Flow composition followed by ZoomOut refinement |
+| `FUSE-neural-zoomout` | Flow composition followed by neural ZoomOut refinement |
 | `hungarian` | Hungarian algorithm for optimal assignment in feature space |
 | `lapjv` | Jonker-Volgenant algorithm for linear assignment in feature space |
-| `flow-hungarian` | Flow composition followed by Hungarian assignment |
-| `flow-lapjv` | Flow composition followed by Jonker-Volgenant assignment |
+| `FUSE-hungarian` | Flow composition followed by Hungarian assignment |
+| `FUSE-lapjv` | Flow composition followed by Jonker-Volgenant assignment |
 
 ### Key arguments
 
@@ -597,7 +612,7 @@ The config has two main sections:
 - **`matching_config`**: one sub-object per dataset, each containing the
   dataset mesh folder, geodesic distance cache folder, trained flow output
   folder, correspondence file folder, and landmark indices. These are read by
-  `matching_experiments.py` and the `scripts/run_*.py` dataset scripts.
+  `matching.py` and the `scripts/run_*.py` dataset scripts.
 
 Precomputed geodesic distance matrices are cached in the folder pointed to by
 each dataset's `dists_path` key. The first run for a given shape computes and
