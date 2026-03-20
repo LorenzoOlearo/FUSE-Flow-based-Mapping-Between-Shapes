@@ -22,7 +22,7 @@ of human bodies.
 
 - [![arXiv](https://img.shields.io/badge/arXiv-Paper-<COLOR>.svg)](https://arxiv.org/abs/2511.13431) - **FUSE: A Flow-based Mapping Between Shapes**
 
-Citation:
+**Citation**:
 ```
 @misc{olearo2025fuse,
       title={FUSE: A Flow-based Mapping Between Shapes}, 
@@ -54,7 +54,7 @@ Citation:
 ```
 FlowMatching4Matching/
 ├── main.py                        # Core single-shape training and inference script
-├── matching.py        # Shape matching evaluation entry point (main + argparse)
+├── matching.py                    # Perform shape matching evaluation across specified datasets and methods
 │
 ├── matching/                      # Matching pipeline modules
 │   ├── data_structures.py         # DataPath, Element, MatchingResult dataclasses
@@ -73,7 +73,7 @@ FlowMatching4Matching/
 │       └── ndp.py                 # Neural Deformation Pyramid (landmark-guided, SDF)
 │
 ├── model/
-│   ├── models.py                  # FMCond (Flow Matching) and EDMPrecond (DDIM)
+│   ├── models.py                  # FMCond (Flow Matching) and EDMPrecond (from Geometry Distributions)
 │   ├── networks.py                # MLP backbone with sinusoidal/Fourier embeddings
 │   └── losses.py                  # ChamferLoss, HausdorffLoss
 │
