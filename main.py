@@ -106,7 +106,10 @@ def build_arg_parser():
         help="Accumulate gradient iterations (for increasing the effective batch size under memory constraints)",
     )
     parser.add_argument("--num-steps", default=64, type=int)
-    # parser.add_argument("--depth", default=6, type=int, metavar="MODEL")
+
+    parser.add_argument("--mlp_hidden_size", default=256, type=int, help="Hidden size of the MLP")
+    parser.add_argument("--mlp_depth", default=4, type=int, help="Depth (number of layers) of the MLP")
+    parser.add_argument("--mlp_num_frequencies", default=-1, type=int, help="Number of Fourier frequencies for the MLP input encoding (-1 to disable)")
 
     parser.add_argument(
         "--data_path",
@@ -324,11 +327,11 @@ def initialize_model_and_optimizer(args, device):
             channels=args.embedding_dim,
             network=MLP(
                 channels=args.embedding_dim,
-                hidden_size=256,
-                depth=4,
-                num_frequencies=-1
+                hidden_size=args.mlp_hidden_size,
+                depth=args.mlp_depth,
+                num_frequencies=args.mlp_num_frequencies,
             )
-        ).to(device) 
+        ).to(device)
     elif args.method == "diffusion":
         model = EDMPrecond(
             channels=args.embedding_dim,
@@ -716,7 +719,6 @@ def train(args, device):
                     epoch=epoch,
                     best=True,
                 )
-            # Save the last checkpoint regardless of the loss value
             if epoch == args.epochs - 1:
                 misc.save_model(
                     args=args,
@@ -741,11 +743,11 @@ def inference(args, device):
             channels=args.embedding_dim,
             network=MLP(
                 channels=args.embedding_dim,
-                hidden_size=256,
-                depth=4,
-                num_frequencies=-1
+                hidden_size=args.mlp_hidden_size,
+                depth=args.mlp_depth,
+                num_frequencies=args.mlp_num_frequencies,
             )
-        ).to(device) 
+        ).to(device)
     elif args.method == "diffusion":
         model = EDMPrecond(
             channels=args.embedding_dim,

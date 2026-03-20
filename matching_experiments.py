@@ -197,6 +197,7 @@ def get_targets_smal(flows_path) -> List[str]:
         for f in flows_path.iterdir()
         if f.is_dir()
         and f.name.startswith(("cougar", "hippo", "horse"))
+        and os.path.exists(Path(flows_path, f.name, "vertex-geodesics-vnorm.txt"))
     ]
 
     tqdm.write(f"Processing targets: {targets}")
@@ -298,12 +299,12 @@ def get_mesh_element_features(
     device: str,
 ) -> torch.Tensor:
 
-    # vertex_features_path = Path(data_path.flows_path, element, f"vertex-geodesics-vnorm.txt")
-    vertex_features_path = Path(data_path.flows_path, element, f"vertex-geodesics.txt")
+    vertex_features_path = Path(data_path.flows_path, element, f"vertex-geodesics-vnorm.txt")
+    # vertex_features_path = Path(data_path.flows_path, element, f"vertex-geodesics.txt")
     vertex_features = torch.tensor(np.loadtxt(vertex_features_path).astype(np.float32)).to(device)
     
-    # features_path = Path(data_path.flows_path, element, f"vertex-geodesics-interpolated-vnorm.txt")
-    features_path = Path(data_path.flows_path, element, f"vertex-geodesics-interpolated.txt")
+    features_path = Path(data_path.flows_path, element, f"vertex-geodesics-interpolated-vnorm.txt")
+    # features_path = Path(data_path.flows_path, element, f"vertex-geodesics-interpolated.txt")
     features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
     
     tqdm.write("------------------------------------")
@@ -428,6 +429,9 @@ def process_element(
     mesh_baseline: bool,
     features_normalization: str,
     data_path: "DataPath",
+    mlp_hidden_size: int = 256,
+    mlp_depth: int = 4,
+    mlp_num_frequencies: int = -1,
 ):
     """
     Process a dataset element according to the chosen representation.
@@ -442,9 +446,9 @@ def process_element(
         channels=config['embedding_dim'],
         network=MLP(
             channels=config['embedding_dim'],
-            hidden_size=256,
-            depth=4,
-            num_frequencies=-1
+            hidden_size=mlp_hidden_size,
+            depth=mlp_depth,
+            num_frequencies=mlp_num_frequencies,
         )
     ).to(device)
 
@@ -1146,6 +1150,9 @@ def process_pair(
     output_dir: str,
     backward_steps: int,
     forward_steps: int,
+    mlp_hidden_size: int = 256,
+    mlp_depth: int = 4,
+    mlp_num_frequencies: int = -1,
 ) -> pd.DataFrame:
     """
     Main pipeline to process a source-target pair for shape matching.
@@ -1173,6 +1180,9 @@ def process_pair(
         mesh_baseline=mesh_baseline,
         features_normalization=features_normalization,
         data_path=data_path,
+        mlp_hidden_size=mlp_hidden_size,
+        mlp_depth=mlp_depth,
+        mlp_num_frequencies=mlp_num_frequencies,
     )
 
     target_element = process_element(
@@ -1182,6 +1192,9 @@ def process_pair(
         mesh_baseline=mesh_baseline,
         features_normalization=features_normalization,
         data_path=data_path,
+        mlp_hidden_size=mlp_hidden_size,
+        mlp_depth=mlp_depth,
+        mlp_num_frequencies=mlp_num_frequencies,
     )
     
     # # DEBUG: save for each element its vertex_features and vertex_points
@@ -1444,6 +1457,9 @@ def main(args):
             output_dir=output_dir,
             backward_steps=args.backward_steps,
             forward_steps=args.forward_steps,
+            mlp_hidden_size=args.mlp_hidden_size,
+            mlp_depth=args.mlp_depth,
+            mlp_num_frequencies=args.mlp_num_frequencies,
         )
         elapsed_time = time.perf_counter() - start_time
         tqdm.write(f"Time taken for {source} -> {target}: {elapsed_time:.2f} seconds")
@@ -1644,14 +1660,27 @@ if __name__ == "__main__":
         help="Number of forward steps for flow-based matching methods",
     )
 
-    args = parser.parse_args()
-    if args.config:
-        with open(args.config, "r") as f:
+    parser.add_argument("--mlp_hidden_size", default=256, type=int, help="Hidden size of the MLP")
+    parser.add_argument("--mlp_depth", default=4, type=int, help="Depth (number of layers) of the MLP")
+    parser.add_argument("--mlp_num_frequencies", default=-1, type=int, help="Number of Fourier frequencies for the MLP input encoding (-1 to disable)")
+
+    # First pass: extract --config path only
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", default=None, type=str)
+    pre_args, _ = pre_parser.parse_known_args()
+
+    # Config sets new defaults; CLI args will still override them
+    if pre_args.config:
+        with open(pre_args.config, "r") as f:
             config = json.load(f)
-        for key, value in config.items():
-            if not hasattr(args, key):
-                continue
-            setattr(args, key, value)
+        known_dests = {action.dest for action in parser._actions}
+        for key in config:
+            if key not in known_dests:
+                tqdm.write(f"WARNING: config key '{key}' does not match any argument and will be ignored")
+        valid_config = {k: v for k, v in config.items() if k in known_dests}
+        parser.set_defaults(**valid_config)
+
+    args = parser.parse_args()
 
     if args.matching_run_name == "":
         args.matching_run_name = input("Enter a run name: ")
