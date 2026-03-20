@@ -1,5 +1,9 @@
 # FUSE: A Flow-based Mapping Between Shapes
 
+__Authors__: Lorenzo Olearo*, Giulio Viganò*, Daniele Baieri, Filippo Maggioli, Simone Melzi
+
+![](assets/cover.png)
+
 We introduce a novel neural representation for maps between 3D shapes based on
 flow-matching models, which is computationally efficient and supports
 cross-representation shape matching without large-scale training or data-driven
@@ -114,7 +118,7 @@ All training is controlled by JSON config files. The key fields are:
 |---|---|---|
 | `method` | Training method | `"FM"`, `"DDIM"` |
 | `network` | Network backbone | `"MLP"` |
-| `embedding_dim` | feature dimension, if geodesics are used, this is the number of landmarks | `N` |
+| `embedding_dim` | feature dimension, if geodesics are used, this is the number of landmarks | `5`, `6`, `20` |
 | `embedding_type` | How features are presented to the model | `"features_only"`, `"xyz"`, `"features_and_xyz"` |
 | `features_type` | What features to compute | `"landmarks"`, `"wks", "wks_landmarks", "hks", hks_landmarks"` |
 | `features_normalization` | Normalization strategy | `"diameter"`, `"0_1_independent"`, `"mean_var"`, `"none"` |

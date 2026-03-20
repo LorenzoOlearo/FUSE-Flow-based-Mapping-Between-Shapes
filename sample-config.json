@@ -1,0 +1,124 @@
+{
+    "seed": 21,
+    "device": "cuda:0",
+    "run_name": "tr_reg_080",
+    "output_dir": "/path/to/output/flows/faust/tr_reg_080/",
+    "data_path": "/path/to/data/MPI-FAUST/training/registrations/tr_reg_080.ply",
+    "train": true,
+    "inference": true,
+    "epochs": 10000,
+    "num_steps": 128,
+    "method": "FM",
+    "network": "MLP",
+    "mlp_hidden_size": 256,
+    "mlp_depth": 4,
+    "mlp_num_frequencies": -1,
+    "batch_size": 50000,
+    "num_points_train": 50000,
+    "learning_rate": 0.0001,
+    "distribution": "gaussian",
+    "embedding_dim": 5,
+    "embedding_type": "features_only",
+    "features_type": "landmarks",
+    "features_normalization": "diameter",
+    "dists_path": "/path/to/data/MPI-FAUST/training/registrations/dists/",
+    "landmarks": [412, 5891, 6593, 3323, 2119]
+    "matching_config": {
+        "FAUST": {
+            "landmarks": [412, 5891, 6593, 3323, 2119],
+            "dataset_path": "/path/to/data/MPI-FAUST/training/registrations/",
+            "dataset_extension": ".ply",
+            "dists_path": "/path/to/data/MPI-FAUST/training/registrations/dists/",
+            "features_path": "/path/to/output/flows/faust/",
+            "flows_path": "/path/to/output/flows/faust/",
+            "flows_SDFs_path": "/path/to/output/flows/faust-SDFs/",
+            "SDFs_path": "/path/to/output/SDFs/faust/",
+            "scan_flows_path": "/path/to/output/flows/scan-faust/",
+            "scan_dataset_path": "/path/to/data/SCAN-FAUST/full/shapes/",
+            "scan_dists_path": "/path/to/data/SCAN-FAUST/full/dists/",
+            "scan_features_path": "/path/to/output/flows/scan-faust/",
+            "scan_dataset_extension": ".ply",
+            "scan_corr_path": "/path/to/data/SCAN-FAUST/full/corres/"
+        },
+        "FAUST_R": {
+            "landmarks": [2650, 3663, 3089, 1979, 1078],
+            "dataset_path": "/path/to/data/FAUST_R/off/",
+            "dataset_extension": ".off",
+            "dists_path": "/path/to/data/FAUST_R/dists/",
+            "features_path": "/path/to/output/flows/faust_r/",
+            "flows_path": "/path/to/output/flows/faust_r/",
+            "corr_path": "/path/to/data/FAUST_R/corres/",
+            "corr_offset": -1
+        },
+        "SMAL": {
+            "landmarks": [3162, 1931, 3731, 1399, 1111, 1001],
+            "dataset_path": "/path/to/data/SMAL_r/off/",
+            "dataset_extension": ".off",
+            "dists_path": "/path/to/data/SMAL_r/dists/",
+            "features_path": "/path/to/output/flows/smal/",
+            "flows_path": "/path/to/output/flows/smal/",
+            "corr_path": "/path/to/data/SMAL_r/corres/",
+            "corr_offset": -1
+        },
+        "SURREAL": {
+            "landmarks": [412, 5891, 6593, 3323, 2119],
+            "dataset_path": "/path/to/data/SURREAL/",
+            "dataset_extension": ".off",
+            "dists_path": "/path/to/data/SURREAL/dists/",
+            "features_path": "/path/to/output/flows/surreal/",
+            "flows_path": "/path/to/output/flows/surreal/"
+        },
+        "KINECT": {
+            "landmarks": [412, 5891, 6593, 3323, 2119],
+            "dataset_path": "/path/to/data/kinect_clean/off_clean/",
+            "dataset_extension": ".off",
+            "dists_path": "/path/to/data/kinect_clean/dists/",
+            "features_path": "/path/to/output/flows/kinect/",
+            "flows_path": "/path/to/output/flows/kinect/",
+            "corr_path": "/path/to/data/kinect_clean/corres/",
+            "corr_offset": 0,
+            "smplx_template_flows_path": "/path/to/output/flows/smplx/",
+            "smplx_template_dataset_extension": ".ply"
+        },
+        "SMPLX": {
+            "landmarks": [2128, 7761, 8573, 5886, 4609],
+            "dataset_path": "/path/to/data/smplx/meshes/",
+            "dataset_extension": ".ply",
+            "dists_path": "/path/to/data/smplx/meshes/dists/",
+            "features_path": "/path/to/output/flows/smplx/",
+            "flows_path": "/path/to/output/flows/smplx/"
+        },
+        "SHREC19": {
+            "landmarks": [412, 5891, 6593, 3323, 2119],
+            "dataset_path": "/path/to/data/SHREC19_MH_dataset/",
+            "dataset_extension": ".obj",
+            "dists_path": "/path/to/data/SHREC19_MH_dataset/dists/",
+            "features_path": "/path/to/output/flows/shrec19/",
+            "flows_path": "/path/to/output/flows/shrec19/",
+            "corr_path": "/path/to/data/SHREC19_MH_dataset/matches/",
+            "gts_path": "/path/to/data/SHREC19_MH_dataset/matches/",
+            "corr_offset": -1
+        },
+        "SHREC20": {
+            "landmarks": [-1, -1, -1, -1, -1, -1],
+            "common_landmarks_path": "/path/to/data/SHREC20b_lores/selected_common_landmarks.csv",
+            "dataset_path": "/path/to/data/SHREC20b_lores/models/",
+            "dataset_extension": ".obj",
+            "dists_path": "/path/to/data/SHREC20b_lores/dists/",
+            "features_path": "/path/to/output/flows/shrec20/",
+            "flows_path": "/path/to/output/flows/shrec20/",
+            "gts_path": "/path/to/data/SHREC20b_lores_gts/",
+            "corr_offset": -1
+        },
+        "TOSCA": {
+            "landmarks": [-1, -1, -1, -1, -1, -1],
+            "dataset_path": "/path/to/data/TOSCA/TOSCAhires/",
+            "dataset_extension": ".ply",
+            "dists_path": "/path/to/data/TOSCA/TOSCAhires/dists/",
+            "features_path": "/path/to/output/flows/tosca/",
+            "flows_path": "/path/to/output/flows/tosca/",
+            "corr_path": "/path/to/data/TOSCA/sym/",
+            "corr_offset": -1
+        }
+    }
+}
