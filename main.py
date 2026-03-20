@@ -48,7 +48,7 @@ from model.networks import MLP
 from model.models import EDMPrecond, FMCond
 
 
-def get_inline_arg():
+def build_arg_parser():
     parser = argparse.ArgumentParser("Train", add_help=False)
     parser.add_argument(
         "--config", default=None, type=str, help="Path to the config file"
@@ -69,7 +69,6 @@ def get_inline_arg():
         "--device", default="cuda:1", help="device to use for training / testing"
     )
     parser.add_argument("--run_name", default="RUN", help="Name of the run")
-    parser.add_argument("--embedding", default="xyz", type=str)
     parser.add_argument("--landmarks", default=[412, 5891, 6593, 3323, 2119], type=list)
     parser.add_argument("--seed", default=21, type=int)
     parser.add_argument("--epochs", default=10000, type=int)
@@ -132,68 +131,15 @@ def get_inline_arg():
         help="Clip gradient norm (default: None, no clipping)",
     )
     parser.add_argument(
-        "--weight_decay", type=float, default=0.05, help="weight decay (default: 0.05)"
-    )
-
-    parser.add_argument(
-        "--blr",
-        type=float,
-        default=5e-7,
-        metavar="LR",
-        help="base learning rate: absolute_lr = base_lr * total_batch_size / 256",
-    )
-    parser.add_argument(
-        "--layer_decay",
-        type=float,
-        default=0.75,
-        help="layer-wise lr decay from ELECTRA/BEiT",
-    )
-
-    parser.add_argument(
-        "--min_lr",
-        type=float,
-        default=5e-7,
-        metavar="LR",
-        help="lower lr bound for cyclic schedulers that hit 0",
-    )
-    parser.add_argument(
-        "--verbose", default=False, action="store_true", help="Verbose output"
-    )
-
-    parser.add_argument(
-        "--warmup_epochs", type=int, default=0, metavar="N", help="epochs to warmup LR"
-    )
-    # Dataset parameters
-    parser.add_argument("--intermediate", action="store_true")
-    parser.add_argument(
         "--output_dir",
         default="./out/",
         help="path where to save, empty for no saving",
-    )
-    parser.add_argument(
-        "--log_dir", default="./output/", help="path where to tensorboard log"
     )
     parser.add_argument("--resume", default="", help="resume from checkpoint")
 
     parser.add_argument(
         "--start_epoch", default=0, type=int, metavar="N", help="start epoch"
     )
-    parser.add_argument("--eval", action="store_true", help="Perform evaluation only")
-    parser.add_argument(
-        "--dist_eval",
-        action="store_true",
-        default=False,
-        help="Enabling distributed evaluation (recommended during training for faster monitor",
-    )
-    parser.add_argument("--num_workers", default=32, type=int)
-    parser.add_argument(
-        "--pin_mem",
-        action="store_true",
-        help="Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.",
-    )
-    parser.add_argument("--no_pin_mem", action="store_false", dest="pin_mem")
-    parser.set_defaults(pin_mem=True)
-
     # distributed training parameters
     parser.add_argument(
         "--world_size", default=2, type=int, help="number of distributed processes"
@@ -232,13 +178,6 @@ def get_inline_arg():
             default=None,
             type=str,
             help="Path to the features file"
-    )
-
-    parser.add_argument(
-            "--diameters_path", 
-            default=None,
-            type=str,
-            help="Path to the diameters CSV file"
     )
 
     parser.add_argument(
@@ -283,9 +222,7 @@ def get_inline_arg():
         default=False
     )
 
-    args = parser.parse_args()
-
-    return args
+    return parser
 
 
 def setup_data_loader(data_path, batch_size, num_points_train):
@@ -519,11 +456,6 @@ def train_one_epoch(
     logger_iterator = metric_logger.log_every(data_loader, print_freq, header)
 
     for data_iter_step, batch in enumerate(logger_iterator):
-        # Adjust LR during warmup
-        # if data_iter_step % accum_iter == 0:
-        #     lr_sched.adjust_learning_rate(
-        #         optimizer, data_iter_step / len(data_loader) + epoch, args
-        #     )
 
         # Prepare input batch
         if isinstance(batch, int):
@@ -850,8 +782,6 @@ def inference(args, device):
             os.path.join(args.output_dir, "generated_samples.npy"), sample.cpu().numpy()
         )
         if args.embedding_dim == 3:
-            # def plot_points(points, distances=None, title="3D Points", save_path=None, save_html=True, save_png=True, colorbar_title="", colormap='Viridis', range=None):
-            
             plot_points(
                 points=sample.cpu().numpy(),
                 title=f"Generated samples - {args.run_name}",
@@ -872,16 +802,25 @@ def inference(args, device):
 
 
 def main():
-    args = get_inline_arg()
+    # First pass: extract --config path only
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", default=None, type=str)
+    pre_args, _ = pre_parser.parse_known_args()
 
-    # Load arguments from a JSON file if specified
-    if args.config:
-        with open(args.config, "r") as f:
+    parser = build_arg_parser()
+
+    # Config sets new defaults; CLI args will still override them
+    if pre_args.config:
+        with open(pre_args.config, "r") as f:
             config_args = json.load(f)
-        for key, value in config_args.items():
-            if not hasattr(args, key):
-                continue
-            setattr(args, key, value)
+        known_dests = {action.dest for action in parser._actions}
+        for key in config_args:
+            if key not in known_dests:
+                print(f"WARNING: config key '{key}' does not match any argument and will be ignored")
+        valid_config = {k: v for k, v in config_args.items() if k in known_dests}
+        parser.set_defaults(**valid_config)
+
+    args = parser.parse_args()
 
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
