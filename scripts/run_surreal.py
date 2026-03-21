@@ -5,32 +5,41 @@ import subprocess
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = Path("./out/flows/surreal/surreal-diameter-norm")
-SURREAL_DIR = Path("./data/SURREAL")
 
-
-def get_targets(overwrite) -> List[str]:
+def get_targets(output_dir, dataset_dir, overwrite) -> List[str]:
     targets = []
 
-    for file in os.listdir(SURREAL_DIR):
+    for file in os.listdir(dataset_dir):
         if file.endswith(".off") and file.startswith("surreal"):
             target = os.path.splitext(file)[0]
-            os.makedirs(OUTPUT_DIR, exist_ok=True)
-            os.makedirs(Path(OUTPUT_DIR, target), exist_ok=True)
+            os.makedirs(output_dir, exist_ok=True)
+            os.makedirs(Path(output_dir, target), exist_ok=True)
             if (
-                os.path.exists(Path(OUTPUT_DIR, target, "checkpoint-9999.pth"))
+                os.path.exists(Path(output_dir, target, "checkpoint-9999.pth"))
                 and overwrite == True
             ):
                 targets.append(target)
-            elif not os.path.exists(Path(OUTPUT_DIR, target, "checkpoint-9999.pth")):
+            elif not os.path.exists(Path(output_dir, target, "checkpoint-9999.pth")):
                 targets.append(target)
 
     return targets
 
 
 def main(args):
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    targets = get_targets(args.overwrite)
+    with open(args.config) as f:
+        config = json.load(f)
+    mc = config["matching_config"]["SURREAL"]
+
+    dataset_dir = Path(mc["dataset_path"])
+    dists_path = mc["dists_path"]
+    landmarks = mc["landmarks"]
+    output_dir = Path(mc["flows_path"])
+
+    if args.run_name is not None:
+        output_dir = Path(mc["flows_path"]).parent / args.run_name
+
+    os.makedirs(output_dir, exist_ok=True)
+    targets = get_targets(output_dir, dataset_dir, args.overwrite)
     if targets == []:
         print("No targets found, exiting.")
         exit(0)
@@ -38,11 +47,11 @@ def main(args):
     print(f"Processing {len(targets)} targets: {targets}")
 
     for target in targets:
-        target_dir = Path(OUTPUT_DIR, target)
+        target_dir = Path(output_dir, target)
         os.makedirs(target_dir, exist_ok=True)
 
         working_dir = Path(str(Path(__file__).resolve()).split("/scripts")[0])
-        data_path = Path(working_dir, SURREAL_DIR, f"{target}.off")
+        data_path = Path(working_dir, dataset_dir, f"{target}.off")
         features_path = Path(working_dir, "data", "SURREAL", f"{target}_features.npy")
 
         config = {
@@ -65,12 +74,12 @@ def main(args):
             "num_points_train": 50000,
             "learning_rate": 0.01,
             "distribution": "gaussian",
-            "embedding_dim": 5,
+            "embedding_dim": len(landmarks),
             "embedding_type": "features_only",
             "features_type": "landmarks",
             "features_normalization": "diameter",
-            "dists_path": "./data/SURREAL/dists/",
-            "landmarks": [412, 5891, 6593, 3323, 2119],
+            "dists_path": dists_path,
+            "landmarks": landmarks,
         }
 
         config_path = os.path.join(target_dir, "config.json")
@@ -104,6 +113,12 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a flow on all SURREAL meshes")
     parser.add_argument(
+        "--config",
+        type=str,
+        required=True,
+        help="Path to the matching config JSON (provides all dataset and output paths)",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help='Overwrite if an existing flow model "checkpoint-9999.pth" is found',
@@ -114,6 +129,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Use external precomputed features",
         default="False",
+    )
+    parser.add_argument(
+        "--run_name",
+        type=str,
+        default=None,
+        help="Override the output directory; saves to matching_config.SURREAL.flows_path/../<run_name>/",
     )
 
     args = parser.parse_args()

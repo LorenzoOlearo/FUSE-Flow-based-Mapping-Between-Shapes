@@ -5,55 +5,61 @@ import subprocess
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = Path("./out/flows/tosca-sym/tosca-sym-baseline/")
-TOSCA_DIR = Path("./data/TOSCA/TOSCAhires/")
 
-
-def get_targets(overwrite, target) -> List[str]:
+def get_targets(output_dir, dataset_dir, overwrite, target) -> List[str]:
     targets = []
 
     if target is not None:
         target_files = [
             f
-            for f in os.listdir(TOSCA_DIR)
+            for f in os.listdir(dataset_dir)
             if f.startswith(target) and f.endswith(".ply")
         ]
         print(f"Found {len(target_files)} files for target {target}: {target_files}")
         for file in target_files:
-            target = file.split(".ply")[0]
-            os.makedirs(OUTPUT_DIR, exist_ok=True)
-            os.makedirs(Path(OUTPUT_DIR, target), exist_ok=True)
+            t = file.split(".ply")[0]
+            os.makedirs(output_dir, exist_ok=True)
+            os.makedirs(Path(output_dir, t), exist_ok=True)
 
             if (
-                os.path.exists(Path(OUTPUT_DIR, target, "checkpoint-9999.pth"))
+                os.path.exists(Path(output_dir, t, "checkpoint-9999.pth"))
                 and overwrite == True
             ):
-                targets.append(target)
-            elif not os.path.exists(Path(OUTPUT_DIR, target, "checkpoint-9999.pth")):
-                targets.append(target)
+                targets.append(t)
+            elif not os.path.exists(Path(output_dir, t, "checkpoint-9999.pth")):
+                targets.append(t)
     else:
-        for file in os.listdir(TOSCA_DIR):
+        for file in os.listdir(dataset_dir):
             if file.endswith(".ply"):
-                target = file.split(".ply")[0]
-                os.makedirs(OUTPUT_DIR, exist_ok=True)
-                os.makedirs(Path(OUTPUT_DIR, target), exist_ok=True)
+                t = file.split(".ply")[0]
+                os.makedirs(output_dir, exist_ok=True)
+                os.makedirs(Path(output_dir, t), exist_ok=True)
 
                 if (
-                    os.path.exists(Path(OUTPUT_DIR, target, "checkpoint-9999.pth"))
+                    os.path.exists(Path(output_dir, t, "checkpoint-9999.pth"))
                     and overwrite == True
                 ):
-                    targets.append(target)
-                elif not os.path.exists(
-                    Path(OUTPUT_DIR, target, "checkpoint-9999.pth")
-                ):
-                    targets.append(target)
+                    targets.append(t)
+                elif not os.path.exists(Path(output_dir, t, "checkpoint-9999.pth")):
+                    targets.append(t)
 
     return targets
 
 
 def main(args):
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    targets = get_targets(args.overwrite, args.target)
+    with open(args.config) as f:
+        config = json.load(f)
+    mc = config["matching_config"]["TOSCA"]
+
+    dataset_dir = Path(mc["dataset_path"])
+    dists_path = mc["dists_path"]
+    output_dir = Path(mc["flows_path"])
+
+    if args.run_name is not None:
+        output_dir = Path(mc["flows_path"]).parent / args.run_name
+
+    os.makedirs(output_dir, exist_ok=True)
+    targets = get_targets(output_dir, dataset_dir, args.overwrite, args.target)
     if targets == []:
         print("No targets found, exiting.")
         exit(0)
@@ -61,11 +67,11 @@ def main(args):
     print(f"Processing {len(targets)} targets: {targets}")
 
     for target in targets:
-        target_dir = Path(OUTPUT_DIR, target)
+        target_dir = Path(output_dir, target)
         os.makedirs(target_dir, exist_ok=True)
 
         working_dir = Path(str(Path(__file__).resolve()).split("/scripts")[0])
-        data_path = Path(working_dir, TOSCA_DIR, f"{target}.ply")
+        data_path = Path(working_dir, dataset_dir, f"{target}.ply")
         features_path = Path(
             working_dir, "data", "TOSCA_features_pca_20", f"{target}_features.npy"
         )
@@ -101,9 +107,8 @@ def main(args):
             "embedding_type": "features_only",
             "features_type": "wks",
             "use_heat_method": False,
-            "distribution": "gaussian",
             "features_normalization": "0_center_global",
-            "dists_path": "./data/TOSCA/TOSCAhires/dists/",
+            "dists_path": dists_path,
             "landmarks": landmarks,
         }
 
@@ -145,6 +150,12 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a flow on TOSCA meshes")
     parser.add_argument(
+        "--config",
+        type=str,
+        required=True,
+        help="Path to the matching config JSON (provides all dataset and output paths)",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help='Overwrite if an existing flow model "checkpoint-9999.pth" is found',
@@ -168,10 +179,16 @@ if __name__ == "__main__":
         default=None,
         help="Target to process (cat, centaur, david, dog, gorilla, horse, michael, victoria, wolf), if None, process all targets",
     )
+    parser.add_argument(
+        "--run_name",
+        type=str,
+        default=None,
+        help="Override the output directory; saves to matching_config.TOSCA.flows_path/../<run_name>/",
+    )
 
     args = parser.parse_args()
 
-    print("Training flows on FAUST dataset:")
+    print("Training flows on TOSCA dataset:")
     for arg, value in vars(args).items():
         print(f"  {arg}: {value}")
     print("-----------------------------------------------")

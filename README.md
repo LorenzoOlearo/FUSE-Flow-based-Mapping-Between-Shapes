@@ -279,43 +279,64 @@ standard way to produce trained flows for an entire benchmark.
 | `scripts/run_tosca.py` | TOSCA |
 | `scripts/run_scan_faust.py` | SCAN-FAUST (raw human scans) |
 
-### Optional arguments
+### Arguments
 
 | Flag | Description |
 |---|---|
+| `--config` | **(required)** Path to the matching config JSON — the same file used by `matching.py`. All dataset paths, dists paths, correspondence paths, and output paths are read from `matching_config.<DATASET>.*` |
 | `--overwrite` | Retrain shapes that already have a saved checkpoint |
 | `--external` | Load precomputed features instead of computing them from scratch |
 | `--method` | Override the training method (`FM` or `DDIM`) |
+| `--run_name` | Override the output directory; saves to the parent of the config's `flows_path` (or `scan_flows_path` / `flows_SDFs_path`) joined with `<run_name>` |
+
+Each script reads all paths from the `matching_config` block of the config file:
+
+| Path read from config | Used for |
+|---|---|
+| `<DATASET>.dataset_path` | Mesh directory |
+| `<DATASET>.dists_path` | Geodesic distance cache |
+| `<DATASET>.flows_path` | Output directory for trained flows |
+| `<DATASET>.corr_path` | Correspondence files (FAUST_R, SMAL, KINECT, SHREC19) |
+| `<DATASET>.landmarks` | Base landmark indices |
+| `SHREC20.common_landmarks_path` | Per-shape landmark CSV |
+| `FAUST.scan_*` | SCAN-FAUST paths (`run_scan_faust.py`) |
+| `FAUST.SDFs_path`, `FAUST.flows_SDFs_path` | SDF pipeline (`run_faust_SDFs.py`) |
+| `SMAL.flows_SDFs_path` | SMAL SDF flows (`run_smal_SDFs.py`) |
 
 ### Example usage
 
 Train flows on all FAUST test shapes (tr_reg_080 to tr_reg_099):
 ```bash
-python scripts/run_faust.py
+python scripts/run_faust.py --config config.json
+```
+
+Train with a custom output directory:
+```bash
+python scripts/run_faust.py --config config.json --run_name my-experiment
 ```
 
 Load externally precomputed features (e.g., FMNet, Diff3D):
 ```bash
-python scripts/run_faust.py --external
+python scripts/run_faust.py --config config.json --external
 ```
 
 Train flows on SMAL dataset:
 ```bash
-python scripts/run_smal.py
+python scripts/run_smal.py --config config.json
 ```
 
 Train flows on SHREC20 shapes using the DDIM trajectory instead of FM:
 ```bash
-python scripts/run_shrec20.py --method DDIM
+python scripts/run_shrec20.py --config config.json --method DDIM
 ```
 
 Train on KINECT point cloud dataset:
 ```bash
-python scripts/run_kinect.py
+python scripts/run_kinect.py --config config.json
 ```
 
-Each script saves one subdirectory per shape under `out/flows/<dataset>/`,
-containing the model checkpoint and the feature files used by
+Each script saves one subdirectory per shape under the `flows_path` specified
+in the config, containing the model checkpoint and the feature files used by
 `matching.py`.
 
 ---

@@ -7,21 +7,18 @@ from typing import List
 
 import numpy as np
 
-OUTPUT_DIR = Path("./out/flows/smal/smal-geodesics-5-rework/")
-SMAL_DIR = Path("./data/SMAL_r/off")
 
-
-def get_targets(overwrite) -> List[str]:
+def get_targets(output_dir, dataset_dir, overwrite) -> List[str]:
     targets = []
 
-    for file in os.listdir(SMAL_DIR):
+    for file in os.listdir(dataset_dir):
         if file.endswith(".off") and file.startswith(("cougar", "hippo", "horse")):
             shape_name = os.path.splitext(file)[0]
-            os.makedirs(OUTPUT_DIR, exist_ok=True)
-            os.makedirs(Path(OUTPUT_DIR, shape_name), exist_ok=True)
+            os.makedirs(output_dir, exist_ok=True)
+            os.makedirs(Path(output_dir, shape_name), exist_ok=True)
 
             if (
-                not os.path.exists(Path(OUTPUT_DIR, shape_name, "checkpoint-best.pth"))
+                not os.path.exists(Path(output_dir, shape_name, "checkpoint-best.pth"))
                 or overwrite
             ):
                 targets.append(shape_name)
@@ -30,24 +27,36 @@ def get_targets(overwrite) -> List[str]:
 
 
 def main(args):
-    targets = get_targets(overwrite=args.overwrite)
+    with open(args.config) as f:
+        config = json.load(f)
+    matching_config = config["matching_config"]["SMAL"]
+
+    dataset_dir = Path(matching_config["dataset_path"])
+    dists_path = matching_config["dists_path"]
+    corr_path = matching_config["corr_path"]
+    base_landmarks = np.array(matching_config["landmarks"])
+    output_dir = Path(matching_config["flows_path"])
+
+    if args.run_name is not None:
+        output_dir = Path(matching_config["flows_path"]).parent / args.run_name
+
+    targets = get_targets(output_dir, dataset_dir, overwrite=args.overwrite)
     if targets == []:
         print("No targets found, exiting.")
         exit(0)
     print(f"Processing {len(targets)} targets: {targets}")
 
     for target in targets:
-        target_dir = Path(OUTPUT_DIR, target)
+        target_dir = Path(output_dir, target)
 
         working_dir = Path(str(Path(__file__).resolve()).split("/scripts")[0])
-        data_path = Path(working_dir, SMAL_DIR, f"{target}.off")
+        data_path = Path(working_dir, dataset_dir, f"{target}.off")
         vertex_features_path = Path(
             working_dir, "data", "SMAL_r", "smal_precomputed_features", f"{target}.npy"
         )
 
-        smal_landmarks = np.array([3162, 1931, 3731, 1399, 1111, 1001])
-        corr = np.array(np.loadtxt(f"./data/SMAL_r/corres/{target}.vts")) - 1
-        target_landmarks = corr[smal_landmarks].astype(int)
+        corr = np.array(np.loadtxt(f"{corr_path}/{target}.vts")) - 1
+        target_landmarks = corr[base_landmarks].astype(int).tolist()
 
         config = {
             "device": "cuda:1",
@@ -68,14 +77,14 @@ def main(args):
             "batch_size": 50_000,
             "num_points_train": 50_000,
             "learning_rate": 0.001,
-            "embedding_dim": 6,
+            "embedding_dim": len(target_landmarks),
             "embedding_type": "features_only",
             "features_type": "landmarks",
             "use_heat_method": False,
             "distribution": "gaussian",
             "features_normalization": "diameter",
-            "dists_path": "./data/SMAL_r/dists/",
-            "landmarks": target_landmarks.tolist(),
+            "dists_path": dists_path,
+            "landmarks": target_landmarks,
         }
 
         config_path = os.path.join(target_dir, "config.json")
@@ -116,9 +125,15 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a flow on all SMAL meshes")
     parser.add_argument(
+        "--config",
+        type=str,
+        required=True,
+        help="Path to the matching config JSON (provides all dataset and output paths)",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
-        help='Overwrite if an existing flow model "checkpoint-9999.pth" is found',
+        help='Overwrite if an existing flow model "checkpoint-best.pth" is found',
         default="False",
     )
     parser.add_argument(
@@ -133,10 +148,16 @@ if __name__ == "__main__":
         default="FM",
         help="Method to use to construct the flows: FM or Diffusion (DDIM)",
     )
+    parser.add_argument(
+        "--run_name",
+        type=str,
+        default=None,
+        help="Override the output directory; saves to matching_config.SMAL.flows_path/../<run_name>/",
+    )
 
     args = parser.parse_args()
 
-    print("Training flows on FAUST dataset:")
+    print("Training flows on SMAL dataset:")
     for arg, value in vars(args).items():
         print(f"  {arg}: {value}")
     print("-----------------------------------------------")

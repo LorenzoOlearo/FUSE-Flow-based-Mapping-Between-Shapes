@@ -7,24 +7,18 @@ from typing import List
 
 import numpy as np
 
-OUTPUT_DIR = Path("./out/flows/shrec19/shrec19-diameter-norm/")
-SHREK19_DIR = Path("./data/SHREC19_MH_dataset/")
-GT_DIR = Path(
-    "data/SHREC19_MH_dataset/SHREC19_matching_humans-master/matches/FARMgt_txt"
-)
 
-
-def get_targets(overwrite) -> List[str]:
+def get_targets(output_dir, dataset_dir, overwrite) -> List[str]:
     targets = []
 
-    for file in os.listdir(SHREK19_DIR):
+    for file in os.listdir(dataset_dir):
         if file.endswith(".obj"):
             shape_name = os.path.splitext(file)[0]
-            os.makedirs(OUTPUT_DIR, exist_ok=True)
-            os.makedirs(Path(OUTPUT_DIR, shape_name), exist_ok=True)
+            os.makedirs(output_dir, exist_ok=True)
+            os.makedirs(Path(output_dir, shape_name), exist_ok=True)
 
             if (
-                not os.path.exists(Path(OUTPUT_DIR, shape_name, "checkpoint-9999.pth"))
+                not os.path.exists(Path(output_dir, shape_name, "checkpoint-9999.pth"))
                 or overwrite
             ):
                 targets.append(shape_name)
@@ -33,30 +27,42 @@ def get_targets(overwrite) -> List[str]:
 
 
 def main(args):
-    targets = get_targets(overwrite=args.overwrite)
+    with open(args.config) as f:
+        config = json.load(f)
+    matching_config = config["matching_config"]["SHREC19"]
+
+    dataset_dir = Path(matching_config["dataset_path"])
+    dists_path = matching_config["dists_path"]
+    gt_dir = Path(matching_config.get("gts_path", matching_config["corr_path"]))
+    base_landmarks = np.array(matching_config["landmarks"])
+    output_dir = Path(matching_config["flows_path"])
+
+    if args.run_name is not None:
+        output_dir = Path(matching_config["flows_path"]).parent / args.run_name
+
+    targets = get_targets(output_dir, dataset_dir, overwrite=args.overwrite)
     if targets == []:
         print("No targets found, exiting.")
         exit(0)
     print(f"Processing {len(targets)} targets: {targets}")
 
     for target in targets:
-        target_dir = Path(OUTPUT_DIR, target)
+        target_dir = Path(output_dir, target)
 
         if target == "43":
             continue
 
         working_dir = Path(str(Path(__file__).resolve()).split("/scripts")[0])
-        data_path = Path(working_dir, SHREK19_DIR, f"{target}.obj")
+        data_path = Path(working_dir, dataset_dir, f"{target}.obj")
         features_path = Path(
             working_dir, "data", "KINECT_features_pca_20", f"{target}_features.npy"
         )
 
-        faust_landmarks = np.array([412, 5891, 6593, 3323, 2119])
         if target != "44":
-            corr = np.array(np.loadtxt(GT_DIR / f"44_{target}.txt")) - 1
-            target_landmarks = corr[faust_landmarks]
+            corr = np.array(np.loadtxt(gt_dir / f"44_{target}.txt")) - 1
+            target_landmarks = corr[base_landmarks].tolist()
         else:
-            target_landmarks = faust_landmarks
+            target_landmarks = base_landmarks.tolist()
 
         config = {
             "device": "cuda:0",
@@ -78,12 +84,12 @@ def main(args):
             "num_points_train": 50000,
             "learning_rate": 0.01,
             "distribution": "gaussian",
-            "embedding_dim": 5,
+            "embedding_dim": len(target_landmarks),
             "embedding_type": "features_only",
             "features_type": "landmarks",
             "features_normalization": "diameter",
-            "dists_path": str(SHREK19_DIR / "dists/"),
-            "landmarks": target_landmarks.tolist(),
+            "dists_path": dists_path,
+            "landmarks": target_landmarks,
         }
 
         config_path = os.path.join(target_dir, "config.json")
@@ -122,6 +128,12 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a flow on all SHREC19 meshes")
     parser.add_argument(
+        "--config",
+        type=str,
+        required=True,
+        help="Path to the matching config JSON (provides all dataset and output paths)",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help='Overwrite if an existing flow model "checkpoint-9999.pth" is found',
@@ -132,6 +144,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Use external precomputed features",
         default="False",
+    )
+    parser.add_argument(
+        "--run_name",
+        type=str,
+        default=None,
+        help="Override the output directory; saves to matching_config.SHREC19.flows_path/../<run_name>/",
     )
 
     args = parser.parse_args()

@@ -6,18 +6,13 @@ import subprocess
 from pathlib import Path
 from typing import List
 
-# OUTPUT_DIR = Path('./out/flows/faust-SDFs/faust-SDFs-diameter-norm')
-OUTPUT_DIR = Path("./out/flows/faust-SDFs/faust-SDFs-diameter-fixed-sampling")
-SDF_DIR = Path("./out/SDFs/faust-SDFs")
-FAUST_DIR = Path("./data/MPI-FAUST/training/registrations")
 
-
-def get_targets(overwrite, test) -> List[str]:
+def get_targets(output_dir, sdf_dir, overwrite, test) -> List[str]:
     """Process all SDFs on which mesh vertex distances have been computed"""
     if overwrite and test:
         targets = [
             f.name
-            for f in SDF_DIR.iterdir()
+            for f in sdf_dir.iterdir()
             if f.is_dir()
             and any(80 <= int(num) <= 99 for num in re.findall(r"\d+", f.name))
             and any(child.suffix == ".pth" for child in f.iterdir())
@@ -29,7 +24,7 @@ def get_targets(overwrite, test) -> List[str]:
     elif overwrite == True:
         targets = [
             f.name
-            for f in SDF_DIR.iterdir()
+            for f in sdf_dir.iterdir()
             if f.is_dir()
             and any(child.suffix == ".pth" for child in f.iterdir())
             and any(
@@ -40,7 +35,7 @@ def get_targets(overwrite, test) -> List[str]:
     elif test == True:
         targets = [
             f.name
-            for f in SDF_DIR.iterdir()
+            for f in sdf_dir.iterdir()
             if f.is_dir()
             and any(80 <= int(num) <= 99 for num in re.findall(r"\d+", f.name))
             and any(child.suffix == ".pth" for child in f.iterdir())
@@ -51,7 +46,7 @@ def get_targets(overwrite, test) -> List[str]:
         ]
     else:
         targets = []
-        for f in SDF_DIR.iterdir():
+        for f in sdf_dir.iterdir():
             if not f.is_dir():
                 continue
             has_pth = any(child.suffix == ".pth" for child in f.iterdir())
@@ -61,7 +56,7 @@ def get_targets(overwrite, test) -> List[str]:
             )
             if not (has_pth and has_sdf):
                 continue
-            checkpoint = Path(OUTPUT_DIR, f.name, "checkpoint-9999.pth")
+            checkpoint = Path(output_dir, f.name, "checkpoint-9999.pth")
             if checkpoint.exists():
                 continue
             targets.append(f.name)
@@ -69,8 +64,20 @@ def get_targets(overwrite, test) -> List[str]:
 
 
 def main(args):
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    targets = get_targets(args.overwrite, args.test)
+    with open(args.config) as f:
+        config = json.load(f)
+    matching_config = config["matching_config"]["FAUST"]
+
+    dataset_dir = Path(matching_config["dataset_path"])
+    sdf_dir = Path(matching_config["SDFs_path"])
+    landmarks = matching_config["landmarks"]
+    output_dir = Path(matching_config["flows_SDFs_path"])
+
+    if args.run_name is not None:
+        output_dir = Path(matching_config["flows_SDFs_path"]).parent / args.run_name
+
+    os.makedirs(output_dir, exist_ok=True)
+    targets = get_targets(output_dir, sdf_dir, args.overwrite, args.test)
     if targets == []:
         print("No targets found, exiting.")
         exit(0)
@@ -78,12 +85,11 @@ def main(args):
     print(f"Processing {len(targets)} targets: {targets}")
 
     for target in targets:
-        target_dir = Path(OUTPUT_DIR, target)
+        target_dir = Path(output_dir, target)
         os.makedirs(target_dir, exist_ok=True)
 
-        # Get working directory
         working_dir = Path(str(Path(__file__).resolve()).split("/scripts")[0])
-        data_path = Path(working_dir, FAUST_DIR, f"{target}.ply")
+        data_path = Path(working_dir, dataset_dir, f"{target}.ply")
 
         config = {
             "device": "cuda:1",
@@ -105,11 +111,11 @@ def main(args):
             "num_points_train": 50000,
             "learning_rate": 0.01,
             "distribution": "gaussian",
-            "embedding_dim": 5,
+            "embedding_dim": len(landmarks),
             "embedding_type": "features_only",
             "features_type": "landmarks",
             "features_normalization": "none",
-            "landmarks": [412, 5891, 6593, 3323, 2119],
+            "landmarks": landmarks,
         }
 
         config_path = os.path.join(target_dir, "config.json")
@@ -122,9 +128,9 @@ def main(args):
             "--config",
             config_path,
             "--features_path",
-            f"{SDF_DIR}/{target}/{target}-geodesics-normalized-diameter.txt",
+            f"{sdf_dir}/{target}/{target}-geodesics-normalized-diameter.txt",
             "--vertex_features_path",
-            f"{SDF_DIR}/{target}/{target}-vertex-geodesics-normalized-diameter.txt",
+            f"{sdf_dir}/{target}/{target}-vertex-geodesics-normalized-diameter.txt",
         ]
 
         command_str = " ".join(command)
@@ -142,6 +148,12 @@ if __name__ == "__main__":
         description="Train a flow on all FAUST SDFs features"
     )
     parser.add_argument(
+        "--config",
+        type=str,
+        required=True,
+        help="Path to the matching config JSON (provides all dataset and output paths)",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help='Overwrite if an existing flow model "checkpoint-9999.pth" is found',
@@ -152,6 +164,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Test mode, only process targets that are not in the range 80-99",
         default="False",
+    )
+    parser.add_argument(
+        "--run_name",
+        type=str,
+        default=None,
+        help="Override the output directory; saves to matching_config.FAUST.flows_SDFs_path/../<run_name>/",
     )
 
     args = parser.parse_args()

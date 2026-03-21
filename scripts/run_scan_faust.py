@@ -7,21 +7,18 @@ from typing import List
 
 import numpy as np
 
-OUTPUT_DIR = Path("./out/flows/scan-faust/full-scan-faust-diameter-norm-points/")
-SCAN_FAUST_DIR = Path("./data/SCAN-FAUST/full/shapes/")
 
-
-def get_targets(overwrite) -> List[str]:
+def get_targets(output_dir, dataset_dir, overwrite) -> List[str]:
     targets = []
 
-    for file in os.listdir(SCAN_FAUST_DIR):
+    for file in os.listdir(dataset_dir):
         if file.endswith(".ply"):
             shape_name = os.path.splitext(file)[0]
-            os.makedirs(OUTPUT_DIR, exist_ok=True)
-            os.makedirs(Path(OUTPUT_DIR, shape_name), exist_ok=True)
+            os.makedirs(output_dir, exist_ok=True)
+            os.makedirs(Path(output_dir, shape_name), exist_ok=True)
 
             if (
-                not os.path.exists(Path(OUTPUT_DIR, shape_name, "checkpoint-9999.pth"))
+                not os.path.exists(Path(output_dir, shape_name, "checkpoint-9999.pth"))
                 or overwrite
             ):
                 targets.append(shape_name)
@@ -29,21 +26,8 @@ def get_targets(overwrite) -> List[str]:
     return targets
 
 
-def get_targets_prioritized(overwrite) -> List[str]:
-    targets = []
-
-    for file in os.listdir(SCAN_FAUST_DIR):
-        if file.endswith(".ply"):
-            shape_name = os.path.splitext(file)[0]
-            os.makedirs(OUTPUT_DIR, exist_ok=True)
-            os.makedirs(Path(OUTPUT_DIR, shape_name), exist_ok=True)
-
-            if (
-                not os.path.exists(Path(OUTPUT_DIR, shape_name, "checkpoint-9999.pth"))
-                or overwrite
-            ):
-                targets.append(shape_name)
-
+def get_targets_prioritized(output_dir, dataset_dir, overwrite) -> List[str]:
+    targets = get_targets(output_dir, dataset_dir, overwrite)
     priority = ["tr_reg_088", "tr_reg_090"]
     prioritized = [p for p in priority if p in targets]
     others = [t for t in targets if t not in priority]
@@ -51,21 +35,33 @@ def get_targets_prioritized(overwrite) -> List[str]:
 
 
 def main(args):
-    targets = get_targets_prioritized(overwrite=args.overwrite)
+    with open(args.config) as f:
+        config = json.load(f)
+    matching_config = config["matching_config"]["FAUST"]
+
+    dataset_dir = Path(matching_config["scan_dataset_path"])
+    dists_path = matching_config["scan_dists_path"]
+    corr_path = matching_config["scan_corr_path"]
+    base_landmarks = matching_config["landmarks"]
+    output_dir = Path(matching_config["scan_flows_path"])
+
+    if args.run_name is not None:
+        output_dir = Path(matching_config["scan_flows_path"]).parent / args.run_name
+
+    targets = get_targets_prioritized(output_dir, dataset_dir, overwrite=args.overwrite)
     if targets == []:
         print("No targets found, exiting.")
         exit(0)
     print(f"Processing {len(targets)} targets: {targets}")
 
     for target in targets:
-        target_dir = Path(OUTPUT_DIR, target)
+        target_dir = Path(output_dir, target)
 
         working_dir = Path(str(Path(__file__).resolve()).split("/scripts")[0])
-        data_path = Path(working_dir, SCAN_FAUST_DIR, f"{target}.ply")
+        data_path = Path(working_dir, dataset_dir, f"{target}.ply")
 
-        faust_landmarks = [412, 5891, 6593, 3323, 2119]
-        corr = np.array(np.loadtxt(f"./data/SCAN-FAUST/full/corres/{target}.vts"))
-        target_landmarks = corr[faust_landmarks]
+        corr = np.array(np.loadtxt(f"{corr_path}/{target}.vts"))
+        target_landmarks = corr[base_landmarks].tolist()
 
         config = {
             "device": "cuda:0",
@@ -87,12 +83,12 @@ def main(args):
             "num_points_train": 50000,
             "learning_rate": 0.01,
             "distribution": "gaussian",
-            "embedding_dim": 5,
+            "embedding_dim": len(target_landmarks),
             "embedding_type": "features_only",
             "features_type": "landmarks",
             "features_normalization": "diameter",
-            "dists_path": "./data/SCAN-FAUST/full/dists/",
-            "landmarks": target_landmarks.tolist(),
+            "dists_path": dists_path,
+            "landmarks": target_landmarks,
         }
 
         config_path = os.path.join(target_dir, "config.json")
@@ -105,8 +101,6 @@ def main(args):
                 "main.py",
                 "--config",
                 config_path,
-                "--features_path",
-                str(features_path),
                 "--features_interpolation",
                 str(500000),
             ]
@@ -133,6 +127,12 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a flow on all FAUST scans PTs")
     parser.add_argument(
+        "--config",
+        type=str,
+        required=True,
+        help="Path to the matching config JSON (provides all dataset and output paths)",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help='Overwrite if an existing flow model "checkpoint-9999.pth" is found',
@@ -143,6 +143,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Use external precomputed features",
         default="False",
+    )
+    parser.add_argument(
+        "--run_name",
+        type=str,
+        default=None,
+        help="Override the output directory; saves to matching_config.FAUST.scan_flows_path/../<run_name>/",
     )
 
     args = parser.parse_args()

@@ -8,25 +8,18 @@ from typing import List
 import numpy as np
 import pandas as pd
 
-OUTPUT_DIR = Path("./out/flows/shrec20/shrec20-diameter-norm")
-SHREC20_DIR = Path("./data/SHREC20b_lores/SHREC20b_lores/models/")
 
-LANDMARKS_FILE = Path(
-    "./data/SHREC20b_lores/SHREC20b_lores/selected_common_landmarks.csv"
-)
-
-
-def get_targets(overwrite) -> List[str]:
+def get_targets(output_dir, dataset_dir, overwrite) -> List[str]:
     targets = []
 
-    for file in os.listdir(SHREC20_DIR):
+    for file in os.listdir(dataset_dir):
         if file.endswith(".obj"):
             shape_name = os.path.splitext(file)[0]
-            os.makedirs(OUTPUT_DIR, exist_ok=True)
-            os.makedirs(Path(OUTPUT_DIR, shape_name), exist_ok=True)
+            os.makedirs(output_dir, exist_ok=True)
+            os.makedirs(Path(output_dir, shape_name), exist_ok=True)
 
             if (
-                not os.path.exists(Path(OUTPUT_DIR, shape_name, "checkpoint-9999.pth"))
+                not os.path.exists(Path(output_dir, shape_name, "checkpoint-9999.pth"))
                 or overwrite
             ):
                 targets.append(shape_name)
@@ -35,27 +28,42 @@ def get_targets(overwrite) -> List[str]:
 
 
 def main(args):
-    targets = get_targets(overwrite=args.overwrite)
+    with open(args.config) as f:
+        config = json.load(f)
+    matching_config = config["matching_config"]["SHREC20"]
+
+    dataset_dir = Path(matching_config["dataset_path"])
+    dists_path = matching_config["dists_path"]
+    landmarks_file = Path(matching_config["common_landmarks_path"])
+    output_dir = Path(matching_config["flows_path"])
+
+    if args.run_name is not None:
+        output_dir = Path(matching_config["flows_path"]).parent / args.run_name
+
+    targets = get_targets(output_dir, dataset_dir, overwrite=args.overwrite)
     if targets == []:
         print("No targets found, exiting.")
         exit(0)
     print(f"Processing {len(targets)} targets: {targets}")
 
     # Load landmark correspondences from CSV
-    landmarks_df = pd.read_csv(LANDMARKS_FILE)
+    landmarks_df = pd.read_csv(landmarks_file)
 
     for target in targets:
-        target_dir = Path(OUTPUT_DIR, target)
+        target_dir = Path(output_dir, target)
 
         working_dir = Path(str(Path(__file__).resolve()).split("/scripts")[0])
-        data_path = Path(working_dir, SHREC20_DIR, f"{target}.obj")
+        data_path = Path(working_dir, dataset_dir, f"{target}.obj")
         features_path = Path(
             working_dir, "data", "SMAL_features_pca_20", f"{target}_features.npy"
         )
 
         model = f"{target}.obj"
         target_landmarks = (
-            landmarks_df[landmarks_df["Model"] == model].iloc[0, 1:].values.astype(int)
+            landmarks_df[landmarks_df["Model"] == model]
+            .iloc[0, 1:]
+            .values.astype(int)
+            .tolist()
         )
         print(f"Using landmarks for {target}: {target_landmarks}")
 
@@ -79,12 +87,12 @@ def main(args):
             "num_points_train": 50000,
             "learning_rate": 0.01,
             "distribution": "gaussian",
-            "embedding_dim": 6,
+            "embedding_dim": len(target_landmarks),
             "embedding_type": "features_only",
             "features_type": "landmarks",
             "features_normalization": "diameter",
-            "landmarks": target_landmarks.tolist(),
-            "dists_path": "./data/SHREC20b_lores/SHREC20b_lores/dists/",
+            "landmarks": target_landmarks,
+            "dists_path": dists_path,
         }
 
         config_path = os.path.join(target_dir, "config.json")
@@ -125,6 +133,12 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a flow on all SHREC20 meshes")
     parser.add_argument(
+        "--config",
+        type=str,
+        required=True,
+        help="Path to the matching config JSON (provides all dataset and output paths)",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help='Overwrite if an existing flow model "checkpoint-9999.pth" is found',
@@ -142,10 +156,16 @@ if __name__ == "__main__":
         default="FM",
         help="Method to use to construct the flows: FM or Diffusion (DDIM)",
     )
+    parser.add_argument(
+        "--run_name",
+        type=str,
+        default=None,
+        help="Override the output directory; saves to matching_config.SHREC20.flows_path/../<run_name>/",
+    )
 
     args = parser.parse_args()
 
-    print("Training flows on FAUST dataset:")
+    print("Training flows on SHREC20 dataset:")
     for arg, value in vars(args).items():
         print(f"  {arg}: {value}")
     print("-----------------------------------------------")
