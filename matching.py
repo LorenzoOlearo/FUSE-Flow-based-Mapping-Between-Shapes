@@ -260,6 +260,8 @@ def main(args):
             mlp_hidden_size=args.mlp_hidden_size,
             mlp_depth=args.mlp_depth,
             mlp_num_frequencies=args.mlp_num_frequencies,
+            network=args.network,
+            edm_preconditioning=args.edm_preconditioning,
         )
         elapsed_time = time.perf_counter() - start_time
         tqdm.write(f"Time taken for {source} -> {target}: {elapsed_time:.2f} seconds")
@@ -467,6 +469,18 @@ if __name__ == "__main__":
         default=-1,
         type=int,
         help="Number of Fourier frequencies for the MLP input encoding (-1 to disable)",
+    )
+    parser.add_argument(
+        "--network",
+        default="MLP",
+        type=str,
+        help="Network architecture to use (must match what was used during training)",
+    )
+    parser.add_argument(
+        "--edm_preconditioning",
+        action="store_true",
+        default=False,
+        help="Apply EDM-style sigma preconditioning inside FMCond (must match training setting)",
     )
 
     # First pass: extract --config path only

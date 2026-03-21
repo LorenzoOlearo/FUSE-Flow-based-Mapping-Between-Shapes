@@ -7,7 +7,7 @@ from typing import List
 
 import numpy as np
 
-OUTPUT_DIR = Path("./out/flows/smal/smal-wks-10")
+OUTPUT_DIR = Path("./out/flows/smal/smal-geodesics-5-rework/")
 SMAL_DIR = Path("./data/SMAL_r/off")
 
 
@@ -50,26 +50,30 @@ def main(args):
         target_landmarks = corr[smal_landmarks].astype(int)
 
         config = {
-            "device": "cuda:0",
+            "device": "cuda:1",
             "blr": 5e-7,
             "output_dir": str(target_dir),
             "log_dir": str(target_dir),
             "data_path": str(data_path),
             "train": True,
             "inference": True,
-            "epochs": 30_000,
+            "epochs": 20_000,
             "num_steps": 64,
             "method": args.method,
             "network": "MLP",
+            "edm_preconditioning": False,
+            "mlp_hidden_size": 256,
+            "mlp_depth": 4,
+            "mlp_num_frequencies": -1,
             "batch_size": 50_000,
             "num_points_train": 50_000,
             "learning_rate": 0.001,
-            "embedding_dim": 10,
+            "embedding_dim": 6,
             "embedding_type": "features_only",
-            "features_type": "wks_landmarks",
+            "features_type": "landmarks",
             "use_heat_method": False,
             "distribution": "gaussian",
-            "features_normalization": "none",
+            "features_normalization": "diameter",
             "dists_path": "./data/SMAL_r/dists/",
             "landmarks": target_landmarks.tolist(),
         }

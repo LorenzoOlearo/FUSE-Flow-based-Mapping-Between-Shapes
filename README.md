@@ -131,7 +131,8 @@ All training is controlled by JSON config files. The key fields are:
 | Field | Description | Example values |
 |---|---|---|
 | `method` | Training method | `"FM"`, `"DDIM"` |
-| `network` | Network backbone | `"MLP"` |
+| `network` | Network backbone | `"MLP"`, `"Network"`, `"MLP_3D"` |
+| `edm_preconditioning` | Apply EDM-style sigma preconditioning inside FM (see note below) | `false` (default), `true` |
 | `embedding_dim` | feature dimension, if geodesics are used, this is the number of landmarks | `5`, `6`, `20` |
 | `embedding_type` | How features are presented to the model | `"features_only"`, `"xyz"`, `"features_and_xyz"` |
 | `features_type` | What features to compute | `"landmarks"`, `"wks", "wks_landmarks", "hks", hks_landmarks"` |
@@ -149,6 +150,20 @@ All training is controlled by JSON config files. The key fields are:
 Config files for matching evaluation live in `configs/matching/`. Per-shape
 training configs are generated automatically by the `scripts/run_*.py` scripts
 and saved alongside the model checkpoints.
+
+> **Note on `edm_preconditioning`.**
+> By default, FM and DDIM differ not only in their training objectives and
+> sampling procedures, but also in how the shared network is called. DDIM
+> wraps every forward pass with the EDM sigma-preconditioning scheme introduced
+> by Zhang et al. (2025), *Geometry Distributions*: the input is scaled by
+> `c_in = 1/√(σ_data² + σ²)`, the noise level is transformed to
+> `c_noise = log(σ)/4`, and the raw network output is blended with a skip
+> connection `D(x,σ) = c_skip·x + c_out·F(c_in·x, c_noise)`.
+> Setting `edm_preconditioning: true` applies the identical transformation
+> inside `FMCond`, making the two methods fully comparable: the only remaining
+> differences are the training objective (velocity matching vs. denoising score
+> matching), the time schedule (cosine `t ∈ [0,1]` vs. log-normal σ), and the
+> ODE solver used at inference.
 
 ---
 
@@ -225,6 +240,7 @@ python main.py --config config.json --pt
 | `--mlp_depth` | Number of MLP layers |
 | `--pt` | Treat the input as a point cloud (removes all faces) |
 | `--use_heat_method` | Use the heat method for geodesics instead of Dijkstra |
+| `--edm_preconditioning` | Apply EDM-style sigma preconditioning inside `FMCond` (makes FM and DDIM fully comparable; see Configuration note) |
 | `--output_dir` | Directory for checkpoints and feature files |
 | `--resume` | Path to a checkpoint to resume training from |
 
@@ -581,6 +597,8 @@ Individual methods:
 | `--mlp_hidden_size` | MLP hidden size (must match the trained model) |
 | `--mlp_depth` | MLP depth (must match the trained model) |
 | `--mlp_num_frequencies` | Fourier frequencies (must match the trained model) |
+| `--network` | Network backbone (must match the trained model) |
+| `--edm_preconditioning` | Apply EDM-style sigma preconditioning (must match the training setting) |
 | `--plot_png` | Save PNG visualizations of correspondences |
 | `--plot_html` | Save interactive HTML visualizations |
 | `--matching_run_name` | Name suffix for the output directory |

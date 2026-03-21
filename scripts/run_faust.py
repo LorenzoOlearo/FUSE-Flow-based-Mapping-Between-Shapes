@@ -5,8 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import List
 
-# OUTPUT_DIR = Path('./out/flows/faust/faust-diameter-norm-WKS-EXPERIMENTS-NO-FF-BIGGER-but-still-256/')
-OUTPUT_DIR = Path("./out/flows/faust/faust-geodesics-17-CHECK/")
+OUTPUT_DIR = Path("./out/flows/faust/faust-geodesics-5-rework/")
 FAUST_DIR = Path("./data/MPI-FAUST/training/registrations")
 
 
@@ -62,58 +61,25 @@ def main(args):
             "data_path": str(data_path),
             "train": True,
             "inference": True,
-            "epochs": 10_000,
+            "epochs": 20_000,
             "num_steps": 64,
             "method": args.method,
             "network": "MLP",
+            "edm_preconditioning": True,
+            "mlp_hidden_size": 256,
+            "mlp_depth": 4,
+            "mlp_num_frequencies": -1,
             "batch_size": 50_000,
             "num_points_train": 50_000,
             "learning_rate": 0.001,
             "distribution": "gaussian",
-            "embedding_dim": 17,
+            "embedding_dim": 5,
             "embedding_type": "features_only",
             "features_type": "landmarks",
             "use_heat_method": False,
             "features_normalization": "diameter",
             "dists_path": "./data/MPI-FAUST/training/registrations/dists/",
-            "___landmarks": [
-                412,
-                5891,
-                6593,
-                3323,
-                2119,
-                3146,
-                1897,
-                5260,
-                712,
-                6416,
-                1460,
-                4931,
-                445,
-                6782,
-                4933,
-                3857,
-                3479,
-            ],
-            "landmarks": [
-                412,
-                5891,
-                6593,
-                3323,
-                2119,
-                3146,
-                1897,
-                5260,
-                712,
-                6416,
-                1460,
-                4931,
-                445,
-                6782,
-                4933,
-                3857,
-                3479,
-            ],
+            "landmarks": [412, 5891, 6593, 3323, 2119],
         }
 
         config_path = os.path.join(target_dir, "config.json")
@@ -171,7 +137,6 @@ if __name__ == "__main__":
         default="FM",
         help="Method to use to construct the flows: FM or Diffusion (DDIM)",
     )
-
     args = parser.parse_args()
 
     print("Training flows on FAUST dataset:")

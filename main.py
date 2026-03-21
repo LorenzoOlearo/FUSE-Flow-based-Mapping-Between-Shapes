@@ -54,7 +54,7 @@ def build_arg_parser():
         "--method",
         default="FM",
         type=str,
-        help="Method used for training, either 'FM' for Flow Matching or 'diffusion'",
+        help="Method used for training, either 'FM' for Flow Matching or 'DDIM'",
     )
     parser.add_argument(
         "--network", default="MLP", type=str, help="Network used for training"
@@ -231,6 +231,16 @@ def build_arg_parser():
         default=False,
     )
 
+    parser.add_argument(
+        "--edm_preconditioning",
+        action="store_true",
+        default=False,
+        help=(
+            "Apply EDM-style sigma preconditioning inside FMCond (c_skip/c_out/c_in/c_noise). "
+            "When set, FM and DDIM use identical input/output transformations and are fully comparable."
+        ),
+    )
+
     return parser
 
 
@@ -354,6 +364,19 @@ def normalize_features(features, vertex_features, method, diameter=None):
     return normalized, vertex_features_normalized
 
 
+def build_network(args):
+    """Build the backbone network based on args.network."""
+    if args.network == "MLP":
+        return MLP(
+            channels=args.embedding_dim,
+            hidden_size=args.mlp_hidden_size,
+            depth=args.mlp_depth,
+            num_frequencies=args.mlp_num_frequencies,
+        )
+    else:
+        return networks.__dict__[args.network](channels=args.embedding_dim)
+
+
 def initialize_model_and_optimizer(args, device):
     """Initialize the model, optimizer, and loss scaler."""
 
@@ -361,18 +384,14 @@ def initialize_model_and_optimizer(args, device):
     if args.method == "FM":
         model = FMCond(
             channels=args.embedding_dim,
-            network=MLP(
-                channels=args.embedding_dim,
-                hidden_size=args.mlp_hidden_size,
-                depth=args.mlp_depth,
-                num_frequencies=args.mlp_num_frequencies,
-            ),
+            network=build_network(args),
+            use_edm_preconditioning=args.edm_preconditioning,
         ).to(device)
-    elif args.method == "diffusion":
+    elif args.method == "DDIM":
         model = EDMPrecond(
             channels=args.embedding_dim,
             depth=args.depth,
-            network=networks.__dict__[args.network](channels=args.embedding_dim),
+            network=build_network(args),
         )
 
     model.to(device)
@@ -802,7 +821,7 @@ def train(args, device):
     logging.info(f"Start training for {args.epochs} epochs")
     start_time = time.time()
 
-    if args.method == "diffusion":
+    if args.method == "DDIM":
         step_fn = lambda model, y, device: diffusion_step(model, y, device, args)
     elif args.method == "FM":
         path = AffineProbPath(scheduler=CondOTScheduler())
@@ -867,18 +886,14 @@ def inference(args, device):
     if args.method == "FM":
         model = FMCond(
             channels=args.embedding_dim,
-            network=MLP(
-                channels=args.embedding_dim,
-                hidden_size=args.mlp_hidden_size,
-                depth=args.mlp_depth,
-                num_frequencies=args.mlp_num_frequencies,
-            ),
+            network=build_network(args),
+            use_edm_preconditioning=args.edm_preconditioning,
         ).to(device)
-    elif args.method == "diffusion":
+    elif args.method == "DDIM":
         model = EDMPrecond(
             channels=args.embedding_dim,
             depth=args.depth,
-            network=models.__dict__[args.network](channels=args.embedding_dim),
+            network=build_network(args),
         )
     model.to(device)
     # model_path = args.output_dir + "/checkpoint-" + str(args.epochs - 1) + ".pth"

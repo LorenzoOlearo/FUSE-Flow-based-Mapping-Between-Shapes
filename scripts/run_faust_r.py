@@ -62,6 +62,10 @@ def main(args):
             "num_steps": 64,
             "method": args.method,
             "network": "MLP",
+            "edm_preconditioning": False,
+            "mlp_hidden_size": 256,
+            "mlp_depth": 4,
+            "mlp_num_frequencies": -1,
             "batch_size": 50_000,
             "num_points_train": 50_000,
             "learning_rate": 0.0001,
@@ -70,7 +74,6 @@ def main(args):
             "embedding_type": "features_only",
             "features_type": "wks_landmarks",
             "use_heat_method": False,
-            "distribution": "gaussian",
             "features_normalization": "none",
             "dists_path": "./data/FAUST_R/training/registrations/dists/",
             "landmarks": target_landmarks.tolist(),
@@ -131,7 +134,6 @@ if __name__ == "__main__":
         default="FM",
         help="Method to use to construct the flows: FM or Diffusion (DDIM)",
     )
-
     args = parser.parse_args()
 
     print("Training flows on FAUST dataset:")
