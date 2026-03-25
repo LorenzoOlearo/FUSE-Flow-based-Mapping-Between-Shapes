@@ -429,8 +429,48 @@ python scripts/utils/extract_features_SDF.py \
 
 The `--additional_plots` flag saves extra visualizations of the reconstructed
 SDF surface and the points sampled over it, the voxelized zero-level set, the
-features computeted on the SDF grid, the features remapped back to the sampled
+features computed on the SDF grid, the features remapped back to the sampled
 points and the projection of the mesh vertices onto the SDF surface.
+
+### Analytical SDF via libigl (alternative to neural SDF)
+
+As an alternative to training a neural SDF, you can use the exact analytical
+signed distance function provided by [libigl](https://libigl.github.io/) via
+its Python bindings (`igl.signed_distance`). This skips neural SDF training
+entirely: the SDF is evaluated analytically from the mesh geometry, so no
+`train_SDF.py` step is needed.
+
+Pass `--igl_sdf` to `extract_features_SDF.py` to enable this path:
+
+```bash
+python scripts/utils/extract_features_SDF.py \
+    --target tr_reg_097 \
+    --num_points 500000 \
+    --mesh_path ./data/MPI-FAUST/training/registrations/tr_reg_097.ply \
+    --igl_sdf
+```
+
+For batch processing:
+```bash
+python scripts/utils/extract_features_SDF.py \
+    --test \
+    --mesh_folder ./data/MPI-FAUST/training/registrations \
+    --num_points 500000 \
+    --igl_sdf
+```
+
+When `--igl_sdf` is set, the pipeline:
+1. Evaluates `igl.signed_distance` on a 512^3 voxel grid to obtain the exact
+   SDF.
+2. Extracts the surface voxels at the zero level set and runs marching cubes to
+   reconstruct a mesh, which is then isotropically remeshed (pymeshlab).
+3. Maps the original landmark indices onto the remeshed surface via KNN.
+4. Proceeds with the standard Dijkstra-on-voxel-grid feature computation and
+   saves outputs under the same `out/SDFs/faust-SDFs/<target>/` directory as
+   the neural SDF path.
+
+The rest of the SDF pipeline (`run_faust_SDFs.py`, `match.py`) is identical
+regardless of which SDF source was used.
 
 ### Training a flow on the extracted SDF features
 
