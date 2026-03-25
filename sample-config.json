@@ -1,8 +1,10 @@
 {
     "seed": 21,
     "device": "cuda:0",
+    "blr": 5e-7,
     "run_name": "tr_reg_080",
     "output_dir": "/path/to/output/flows/faust/tr_reg_080/",
+    "log_dir": "/path/to/output/flows/faust/tr_reg_080/",
     "data_path": "/path/to/data/MPI-FAUST/training/registrations/tr_reg_080.ply",
     "train": true,
     "inference": true,
@@ -10,19 +12,27 @@
     "num_steps": 128,
     "method": "FM",
     "network": "MLP",
+    "edm_preconditioning": false,
     "mlp_hidden_size": 256,
     "mlp_depth": 4,
     "mlp_num_frequencies": -1,
     "batch_size": 50000,
     "num_points_train": 50000,
     "learning_rate": 0.0001,
+    "lr_scheduler": "cosine",
+    "lr_patience": 200,
+    "lr_factor": 0.5,
+    "min_lr": 1e-4,
+    "warmup_epochs": 0,
+    "lr_decay_epochs": -1,
     "distribution": "gaussian",
     "embedding_dim": 5,
     "embedding_type": "features_only",
     "features_type": "landmarks",
     "features_normalization": "diameter",
+    "use_heat_method": false,
     "dists_path": "/path/to/data/MPI-FAUST/training/registrations/dists/",
-    "landmarks": [412, 5891, 6593, 3323, 2119]
+    "landmarks": [412, 5891, 6593, 3323, 2119],
     "matching_config": {
         "FAUST": {
             "landmarks": [412, 5891, 6593, 3323, 2119],
@@ -47,6 +57,8 @@
             "dists_path": "/path/to/data/FAUST_R/dists/",
             "features_path": "/path/to/output/flows/faust_r/",
             "flows_path": "/path/to/output/flows/faust_r/",
+            "flows_SDFs_path": "/path/to/output/flows/faust_r-SDFs/",
+            "SDFs_path": "/path/to/output/SDFs/faust_r/",
             "corr_path": "/path/to/data/FAUST_R/corres/",
             "corr_offset": -1
         },
@@ -57,6 +69,8 @@
             "dists_path": "/path/to/data/SMAL_r/dists/",
             "features_path": "/path/to/output/flows/smal/",
             "flows_path": "/path/to/output/flows/smal/",
+            "flows_SDFs_path": "/path/to/output/flows/smal-SDFs/",
+            "SDFs_path": "/path/to/output/SDFs/smal/",
             "corr_path": "/path/to/data/SMAL_r/corres/",
             "corr_offset": -1
         },
@@ -66,7 +80,7 @@
             "dataset_extension": ".off",
             "dists_path": "/path/to/data/SURREAL/dists/",
             "features_path": "/path/to/output/flows/surreal/",
-            "flows_path": "/path/to/output/flows/surreal/"
+            "flows_path": "/path/to/output/flows/surreal/",
         },
         "KINECT": {
             "landmarks": [412, 5891, 6593, 3323, 2119],
@@ -78,7 +92,10 @@
             "corr_path": "/path/to/data/kinect_clean/corres/",
             "corr_offset": 0,
             "smplx_template_flows_path": "/path/to/output/flows/smplx/",
-            "smplx_template_dataset_extension": ".ply"
+            "smplx_template_features_path": "/path/to/output/flows/smplx/",
+            "smplx_template_dists_path": "/path/to/data/smplx/meshes/dists/",
+            "smplx_template_dataset_extension": ".ply",
+            "smplx_template_mesh_path": "/path/to/data/smplx/meshes/SMPLX_NEUTRAL-no-eyes.ply"
         },
         "SMPLX": {
             "landmarks": [2128, 7761, 8573, 5886, 4609],
@@ -86,7 +103,9 @@
             "dataset_extension": ".ply",
             "dists_path": "/path/to/data/smplx/meshes/dists/",
             "features_path": "/path/to/output/flows/smplx/",
-            "flows_path": "/path/to/output/flows/smplx/"
+            "flows_path": "/path/to/output/flows/smplx/",
+            "flow_smplx_template_path": "/path/to/output/flows/smplx/SMPLX_NEUTRAL/",
+            "mesh_smplx_template_path": "/path/to/data/smplx/meshes/SMPLX_NEUTRAL-no-eyes.ply"
         },
         "SHREC19": {
             "landmarks": [412, 5891, 6593, 3323, 2119],
@@ -120,5 +139,21 @@
             "corr_path": "/path/to/data/TOSCA/sym/",
             "corr_offset": -1
         }
+    },
+    "skinning_config": {
+        "kinect_landmarks": [412, 5891, 6593, 3323, 2119],
+        "smplx_landmarks": [2128, 7761, 8573, 5886, 4609],
+        "smplx_flows_path": "/path/to/output/flows/smplx/",
+        "smplx_mesh_path": "/path/to/data/smplx/meshes/SMPLX_NEUTRAL-no-eyes.ply",
+        "smplx_features_path": "/path/to/output/flows/smplx/",
+        "smplx_dists_path": "/path/to/data/smplx/meshes/dists/",
+        "smplx_dataset_extension": ".ply",
+        "kinect_dataset_path": "/path/to/data/kinect_clean/off_clean/",
+        "kinect_corr_path": "/path/to/data/kinect_clean/corres/",
+        "kinect_dataset_extension": ".off",
+        "kinect_flows_path": "/path/to/output/flows/kinect/",
+        "kinect_features_path": "/path/to/output/flows/kinect/",
+        "kinect_dists_path": "/path/to/data/kinect_clean/dists/",
+        "output_path": "/path/to/output/experiments/skinning/smplx_to_kinect/"
     }
 }
