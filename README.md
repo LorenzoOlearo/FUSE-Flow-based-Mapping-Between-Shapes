@@ -41,10 +41,10 @@ of human bodies.
 
 1. [Repository Structure](#repository-structure)
 2. [Configuration](#configuration)
-3. [Training a Flow for a single shape (main.py)](#training-a-single-shape-mainpy)
+3. [Training a Flow for a single shape (train.py)](#training-a-single-shape-trainpy)
 4. [Training an Entire Dataset (scripts/run\_\*.py)](#training-an-entire-dataset-scriptsrun_py)
 5. [Neural SDF Training (scripts/train\_SDF.py)](#neural-sdf-training-scriptstrain_sdfpy)
-6. [Shape Matching Evaluation (matching\_experiments.py)](#shape-matching-evaluation-matching_experimentspy)
+6. [Shape Matching Evaluation (`match.py`)](#shape-matching-evaluation-matchpy)
 7. [Configuration and Dataset Paths](#configuration-and-dataset-paths)
 
 ---
@@ -53,8 +53,8 @@ of human bodies.
 
 ```
 FlowMatching4Matching/
-├── main.py                        # Core single-shape training and inference script
-├── matching.py                    # Perform shape matching evaluation across specified datasets and methods
+├── train.py                       # Core single-shape training and inference script
+├── match.py                    # Perform shape matching evaluation across specified datasets and methods
 │
 ├── matching/                      # Matching pipeline modules
 │   ├── data_structures.py         # DataPath, Element, MatchingResult dataclasses
@@ -77,7 +77,7 @@ FlowMatching4Matching/
 │   ├── networks.py                # MLP backbone with sinusoidal/Fourier embeddings
 │   └── losses.py                  # ChamferLoss, HausdorffLoss
 │
-├── util/
+├── utils/
 │   ├── mesh_utils.py              # Geodesic computation, feature extraction, mesh sampling
 │   ├── metrics.py                 # Geodesic error, coverage, Dirichlet energy
 │   ├── dataset_utils.py           # Dataset-specific helpers and SHREC20 landmark loading
@@ -86,22 +86,24 @@ FlowMatching4Matching/
 │   └── train_utils.py             # Device initialization, seed, logging setup
 │
 ├── scripts/
-│   ├── run_faust.py               # Train flows on FAUST dataset (meshes)
-│   ├── run_faust_r.py             # Train flows on FAUST-R (remeshed)
-│   ├── run_faust_SDFs.py          # Train flows on FAUST SDF features
-│   ├── run_smal.py                # Train flows on SMAL dataset
-│   ├── run_smal_SDFs.py           # Train flows on SMAL SDF features
-│   ├── run_shrec19.py             # Train flows on SHREC19 dataset
-│   ├── run_shrec20.py             # Train flows on SHREC20 dataset
-│   ├── run_kinect.py              # Train flows on KINECT point clouds
-│   ├── run_surreal.py             # Train flows on SURREAL dataset
-│   ├── run_tosca.py               # Train flows on TOSCA dataset
-│   ├── run_scan_faust.py          # Train flows on SCAN-FAUST (raw scans)
-│   ├── run_dataset.py             # Generic dataset training script
-│   ├── train_SDF.py               # Train neural SDFs (IGR) on mesh data
-│   ├── extract_features_SDF.py    # Extract landmark-distance features from SDF volumes
-│   ├── kinect_on_smplx.py         # SMPLX template to KINECT skinning experiment
-│   └── sphere_parametrization.py  # Sphere parametrization experiments
+│   ├── datasets/                  # Per-dataset training orchestrators (call train.py as subprocess)
+│   │   ├── run_faust.py           # Train flows on FAUST dataset (meshes)
+│   │   ├── run_faust_r.py         # Train flows on FAUST-R (remeshed)
+│   │   ├── run_faust_SDFs.py      # Train flows on FAUST SDF features
+│   │   ├── run_smal.py            # Train flows on SMAL dataset
+│   │   ├── run_smal_SDFs.py       # Train flows on SMAL SDF features
+│   │   ├── run_shrec19.py         # Train flows on SHREC19 dataset
+│   │   ├── run_shrec20.py         # Train flows on SHREC20 dataset
+│   │   ├── run_kinect.py          # Train flows on KINECT point clouds
+│   │   ├── run_surreal.py         # Train flows on SURREAL dataset
+│   │   ├── run_tosca.py           # Train flows on TOSCA dataset
+│   │   ├── run_scan_faust.py      # Train flows on SCAN-FAUST (raw scans)
+│   │   └── run_dataset.py         # Generic dataset training script
+│   └── utils/                     # Standalone utility and experimental scripts
+│       ├── train_SDF.py           # Train neural SDFs (IGR) on mesh data
+│       ├── extract_features_SDF.py  # Extract landmark-distance features from SDF volumes
+│       ├── kinect_on_smplx.py     # SMPLX template to KINECT skinning experiment
+│       └── sphere_parametrization.py  # Sphere parametrization experiments
 │
 ├── configs/
 │   └── matching/                  # JSON configs for matching evaluation
@@ -113,7 +115,7 @@ FlowMatching4Matching/
     └── matching/                  # Matching evaluation CSVs and visualizations
 ```
 
-The core training code is available in [`main.py`](main.py), which is designed
+The core training code is available in [`train.py`](train.py), which is designed
 to train either a flow or diffusion model (DDIM) on a single shape. This
 implementation builds upon the work of Zhang et al. (2025), *Geometry
 Distributions*, to facilitate a comparison between Flow Matching and DDIM
@@ -151,7 +153,7 @@ All training is controlled by JSON config files. The key fields are:
 | `mlp_depth` | Number of MLP layers | `4` |
 
 Config files for matching evaluation live in `configs/matching/`. Per-shape
-training configs are generated automatically by the `scripts/run_*.py` scripts
+training configs are generated automatically by the `scripts/datasets/run_*.py` scripts
 and saved alongside the model checkpoints.
 
 > **Note on `edm_preconditioning`.**
@@ -172,23 +174,23 @@ and saved alongside the model checkpoints.
 
 ---
 
-## Training a Flow for a Single Shape (`main.py`)
+## Training a Flow for a Single Shape (`train.py`)
 
-`main.py` trains a Flow or DDIM model on a single mesh. It handles feature
+`train.py` trains a Flow or DDIM model on a single mesh. It handles feature
 computation, optional interpolation over sampled points, normalization, and the
 training loop.
 
 ### Basic usage
 
 ```bash
-python main.py --config config.json
+python train.py --config config.json
 ```
 
 CLI arguments override config file values. The most commonly overridden arguments:
 
 Run training and inference on a FAUST mesh, with feature interpolation:
 ```bash
-python main.py \
+python train.py \
     --config config.json \
     --features_interpolation 100000 \
     --learning_rate 0.01
@@ -196,7 +198,7 @@ python main.py \
 
 Run on a SMAL mesh with a pre-saved config:
 ```bash
-python main.py \
+python train.py \
     --config out/flows/smal/smal-diameter-norm/horse_04/config.json \
     --features_interpolation 50000 \
     --learning_rate 0.01
@@ -204,7 +206,7 @@ python main.py \
 
 Load externally precomputed features (e.g., FMNet descriptors):
 ```bash
-python main.py \
+python train.py \
     --config /path/to/horse_04/config.json \
     --vertex_features_path /path/to/horse_04.npy \
     --features_interpolation 50000
@@ -212,7 +214,7 @@ python main.py \
 
 Treat the mesh as a point cloud (remove all faces):
 ```bash
-python main.py --config config.json --pt
+python train.py --config config.json --pt
 ```
 
 ### Training pipeline
@@ -265,33 +267,33 @@ Saved in `output_dir`:
 
 ---
 
-## Training an Entire Dataset (`scripts/run_*.py`)
+## Training an Entire Dataset (`scripts/datasets/run_*.py`)
 
 Each `run_<DATASET>.py` script iterates over all shapes in a dataset, generates
-a per-shape `config.json`, and calls `main.py` as a subprocess. This is the
+a per-shape `config.json`, and calls `train.py` as a subprocess. This is the
 standard way to produce trained flows for an entire benchmark.
 
 ### Available scripts
 
 | Script | Dataset |
 |---|---|
-| `scripts/run_faust.py` | FAUST (meshes, registrations) |
-| `scripts/run_faust_r.py` | FAUST-R (remeshed) |
-| `scripts/run_faust_SDFs.py` | FAUST (SDF feature space) |
-| `scripts/run_smal.py` | SMAL (animal meshes) |
-| `scripts/run_smal_SDFs.py` | SMAL (SDF feature space) |
-| `scripts/run_shrec19.py` | SHREC19 |
-| `scripts/run_shrec20.py` | SHREC20 |
-| `scripts/run_kinect.py` | KINECT (point clouds) |
-| `scripts/run_surreal.py` | SURREAL |
-| `scripts/run_tosca.py` | TOSCA |
-| `scripts/run_scan_faust.py` | SCAN-FAUST (raw human scans) |
+| `scripts/datasets/run_faust.py` | FAUST (meshes, registrations) |
+| `scripts/datasets/run_faust_r.py` | FAUST-R (remeshed) |
+| `scripts/datasets/run_faust_SDFs.py` | FAUST (SDF feature space) |
+| `scripts/datasets/run_smal.py` | SMAL (animal meshes) |
+| `scripts/datasets/run_smal_SDFs.py` | SMAL (SDF feature space) |
+| `scripts/datasets/run_shrec19.py` | SHREC19 |
+| `scripts/datasets/run_shrec20.py` | SHREC20 |
+| `scripts/datasets/run_kinect.py` | KINECT (point clouds) |
+| `scripts/datasets/run_surreal.py` | SURREAL |
+| `scripts/datasets/run_tosca.py` | TOSCA |
+| `scripts/datasets/run_scan_faust.py` | SCAN-FAUST (raw human scans) |
 
 ### Arguments
 
 | Flag | Description |
 |---|---|
-| `--config` | **(required)** Path to the matching config JSON — the same file used by `matching.py`. All dataset paths, dists paths, correspondence paths, and output paths are read from `matching_config.<DATASET>.*` |
+| `--config` | **(required)** Path to the matching config JSON — the same file used by `match.py`. All dataset paths, dists paths, correspondence paths, and output paths are read from `matching_config.<DATASET>.*` |
 | `--overwrite` | Retrain shapes that already have a saved checkpoint |
 | `--external` | Load precomputed features instead of computing them from scratch |
 | `--method` | Override the training method (`FM` or `DDIM`) |
@@ -315,41 +317,41 @@ Each script reads all paths from the `matching_config` block of the config file:
 
 Train flows on all FAUST test shapes (tr_reg_080 to tr_reg_099):
 ```bash
-python scripts/run_faust.py --config config.json
+python scripts/datasets/run_faust.py --config config.json
 ```
 
 Train with a custom output directory:
 ```bash
-python scripts/run_faust.py --config config.json --run_name my-experiment
+python scripts/datasets/run_faust.py --config config.json --run_name my-experiment
 ```
 
 Load externally precomputed features (e.g., FMNet, Diff3D):
 ```bash
-python scripts/run_faust.py --config config.json --external
+python scripts/datasets/run_faust.py --config config.json --external
 ```
 
 Train flows on SMAL dataset:
 ```bash
-python scripts/run_smal.py --config config.json
+python scripts/datasets/run_smal.py --config config.json
 ```
 
 Train flows on SHREC20 shapes using the DDIM trajectory instead of FM:
 ```bash
-python scripts/run_shrec20.py --config config.json --method DDIM
+python scripts/datasets/run_shrec20.py --config config.json --method DDIM
 ```
 
 Train on KINECT point cloud dataset:
 ```bash
-python scripts/run_kinect.py --config config.json
+python scripts/datasets/run_kinect.py --config config.json
 ```
 
 Each script saves one subdirectory per shape under the `flows_path` specified
 in the config, containing the model checkpoint and the feature files used by
-`matching.py`.
+`match.py`.
 
 ---
 
-## Neural SDF Training (`scripts/train_SDF.py`)
+## Neural SDF Training (`scripts/utils/train_SDF.py`)
 
 Given a mesh file, you can train a neural Signed Distance Function (SDF) model
 using Implicit Geometric Regularization (IGR). Optionally, if landmark indices
@@ -367,7 +369,7 @@ free-space penalty to prevent the SDF from collapsing to zero.
 To train an SDF model on a single mesh:
 
 ```bash
-python scripts/train_SDF.py --mesh_path /path/to/mesh/tr_reg_082.ply --eval
+python scripts/utils/train_SDF.py --mesh_path /path/to/mesh/tr_reg_082.ply --eval
 ```
 
 The `--eval` flag evaluates the model after training: it extracts the
@@ -377,7 +379,7 @@ maps the mesh landmark coordinates into the SDF volume grid.
 To train on an entire dataset:
 
 ```bash
-python scripts/train_SDF.py --mesh_folder /path/to/dataset --all --eval [--test]
+python scripts/utils/train_SDF.py --mesh_folder /path/to/dataset --all --eval [--test]
 ```
 
 The `--test` flag restricts training to shapes `tr_reg_080` through
@@ -413,7 +415,7 @@ corresponding voxel coordinates.
 
 To extract features for a single shape:
 ```bash
-python scripts/extract_features_SDF.py \
+python scripts/utils/extract_features_SDF.py \
     --target tr_reg_097 \
     --num_points 500000 \
     --mesh_path ./data/MPI-FAUST/training/registrations/tr_reg_097.ply
@@ -421,7 +423,7 @@ python scripts/extract_features_SDF.py \
 
 To extract features for the FAUST test set:
 ```bash
-python scripts/extract_features_SDF.py \
+python scripts/utils/extract_features_SDF.py \
     --test \
     --mesh_folder ./data/MPI-FAUST/training/registrations \
     --num_points 500000 \
@@ -439,7 +441,7 @@ Once SDFs are trained and features are extracted, train the Flow Matching
 models that will be used for the later shape matching evaluation:
 
 ```bash
-python scripts/run_faust_SDFs.py --test --overwrite
+python scripts/datasets/run_faust_SDFs.py --test --overwrite
 ```
 
 The `--test` flag processes shapes `tr_reg_080` through `tr_reg_099`;
@@ -447,7 +449,7 @@ The `--test` flag processes shapes `tr_reg_080` through `tr_reg_099`;
 
 ---
 
-## Shape Matching Evaluation (`matching.py`)
+## Shape Matching Evaluation (`match.py`)
 
 This script loads trained flow models for each shape in a dataset, runs all
 selected matching methods on every source-target pair, and reports geodesic
@@ -457,7 +459,7 @@ error, Euclidean error, Dirichlet energy, and coverage.
 
 FAUST mesh-to-mesh matching (all pairs):
 ```bash
-python matching.py \
+python match.py \
     --config config.json \
     --faust \
     --source_rep mesh \
@@ -469,7 +471,7 @@ python matching.py \
 
 Match a specific pair (FAUST: tr_reg_080 -> tr_reg_081):
 ```bash
-python matching.py \
+python match.py \
     --config config.json \
     --faust \
     --source_rep mesh --target_rep mesh \
@@ -483,7 +485,7 @@ python matching.py \
 
 SMAL mesh-to-mesh matching:
 ```bash
-python matching.py \
+python match.py \
     --config config.json \
     --smal \
     --source_rep mesh --target_rep mesh \
@@ -494,7 +496,7 @@ python matching.py \
 
 SHREC20 cross-category matching (cow -> camel_a):
 ```bash
-python matching.py \
+python match.py \
     --config config.json \
     --shrec20 \
     --source_rep mesh --target_rep mesh \
@@ -507,7 +509,7 @@ python matching.py \
 
 KINECT point cloud matching:
 ```bash
-python matching.py \
+python match.py \
     --config config.json \
     --kinect \
     --source_rep pt --target_rep pt \
@@ -518,7 +520,7 @@ python matching.py \
 
 FAUST SDF-to-SDF matching:
 ```bash
-python matching.py \
+python match.py \
     --config config.json \
     --faust \
     --source_rep sdf --target_rep sdf \
@@ -529,7 +531,7 @@ python matching.py \
 
 SMPLX template skinning onto KINECT point clouds:
 ```bash
-python matching.py \
+python match.py \
     --config config.json \
     --kinect --pt_skinning \
     --source_rep mesh --target_rep pt \
@@ -539,7 +541,7 @@ python matching.py \
 
 Evaluate identity (same shape, used to evaluate the inversion error of the flow):
 ```bash
-python matching.py \
+python match.py \
     --config config.json \
     --faust \
     --source_rep mesh --target_rep mesh \
@@ -654,12 +656,12 @@ any script.
 
 The config has two main sections:
 
-- **Top-level training fields**: used by `main.py` for single-shape training
+- **Top-level training fields**: used by `train.py` for single-shape training
   (method, network architecture, features, normalization, paths for one shape).
 - **`matching_config`**: one sub-object per dataset, each containing the
   dataset mesh folder, geodesic distance cache folder, trained flow output
   folder, correspondence file folder, and landmark indices. These are read by
-  `matching.py` and the `scripts/run_*.py` dataset scripts.
+  `match.py` and the `scripts/datasets/run_*.py` dataset scripts.
 
 Precomputed geodesic distance matrices are cached in the folder pointed to by
 each dataset's `dists_path` key. The first run for a given shape computes and

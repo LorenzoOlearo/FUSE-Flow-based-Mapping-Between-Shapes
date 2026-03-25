@@ -25,12 +25,12 @@ from flow_matching.path.scheduler import CondOTScheduler
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import trange
 
-import util.lr_sched as lr_sched
+import utils.lr_sched as lr_sched
 from model import models, networks
 from model.models import EDMPrecond, FMCond
 from model.networks import MLP
-from util import misc
-from util.mesh_utils import (
+from utils import misc
+from utils.mesh_utils import (
     compute_features,
     generate_embeddings,
     mesh_geodesics,
@@ -39,9 +39,9 @@ from util.mesh_utils import (
     pointcloud_geodesics,
     sample_initial_distribution,
 )
-from util.misc import NativeScalerWithGradNormCount as NativeScaler
-from util.plot import plot_points, source_target_plot
-from util.train_utils import initialize_device_and_seed, setup_logging
+from utils.misc import NativeScalerWithGradNormCount as NativeScaler
+from utils.plot import plot_points, source_target_plot
+from utils.train_utils import initialize_device_and_seed, setup_logging
 
 
 def build_arg_parser():

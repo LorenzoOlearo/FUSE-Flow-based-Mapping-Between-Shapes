@@ -115,7 +115,7 @@ def get_targets_tosca(flows_path) -> List[str]:
     return targets
 
 
-def get_targets_faust_r() -> List[str]:
+def get_targets_faust_r(args) -> List[str]:
     """Determine which targets to process."""
     targets = []
     for i in range(80, 100):

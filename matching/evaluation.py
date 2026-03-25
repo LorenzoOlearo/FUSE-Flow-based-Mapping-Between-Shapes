@@ -12,8 +12,8 @@ from geomfum.shape.point_cloud import PointCloud
 from tqdm import tqdm
 
 from matching.data_structures import DataPath, Element, MatchingResult
-from util.dataset_utils import get_common_landmarks_between_two_models
-from util.metrics import (
+from utils.dataset_utils import get_common_landmarks_between_two_models
+from utils.metrics import (
     compute_coverage,
     compute_dirichlet_energy,
     compute_geodesic_error,

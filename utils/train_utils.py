@@ -6,8 +6,8 @@ import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 
-from util import lr_decay as lrd
-from util import misc
+from utils import lr_decay as lrd
+from utils import misc
 
 
 def setup_logging(output_dir: str):

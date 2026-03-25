@@ -10,8 +10,8 @@ from tqdm import tqdm
 from matching.data_structures import DataPath, Element
 from model.models import FMCond
 from model.networks import MLP, GeomDist
-from util.dataset_utils import get_common_landmarks_between_two_models
-from util.mesh_utils import (
+from utils.dataset_utils import get_common_landmarks_between_two_models
+from utils.mesh_utils import (
     compute_geodesic_distances_pointcloud,
     mesh_geodesics,
     pointcloud_geodesics,

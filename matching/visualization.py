@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import torch
 from plotly.subplots import make_subplots
 
-from util.plot import start_end_subplot
+from utils.plot import start_end_subplot
 
 from matching.data_structures import MatchingResult
 
