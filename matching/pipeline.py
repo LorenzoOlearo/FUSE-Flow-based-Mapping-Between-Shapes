@@ -28,6 +28,8 @@ def process_pair(
     mlp_hidden_size: int = 256,
     mlp_depth: int = 4,
     mlp_num_frequencies: int = -1,
+    network: str = "MLP",
+    edm_preconditioning: bool = False,
 ) -> pd.DataFrame:
     """
     Main pipeline to process a source-target pair for shape matching.
@@ -60,6 +62,8 @@ def process_pair(
         mlp_hidden_size=mlp_hidden_size,
         mlp_depth=mlp_depth,
         mlp_num_frequencies=mlp_num_frequencies,
+        network=network,
+        edm_preconditioning=edm_preconditioning,
     )
 
     target_element = process_element(
@@ -73,6 +77,8 @@ def process_pair(
         mlp_hidden_size=mlp_hidden_size,
         mlp_depth=mlp_depth,
         mlp_num_frequencies=mlp_num_frequencies,
+        network=network,
+        edm_preconditioning=edm_preconditioning,
     )
 
     matching_methods = get_matching_methods(

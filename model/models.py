@@ -275,15 +275,14 @@ class FMCond(torch.nn.Module):
         use_fp16=False,
         depth=6,
         network=None,
+        use_edm_preconditioning=False,
+        sigma_data=1,
     ):
         super().__init__()
 
         self.use_fp16 = use_fp16
-
-        # if network is not None:
-        #     self.net = network
-        # else:
-        #     self.net = MLP(channels=channels, hidden_size=1024, depth=depth)
+        self.use_edm_preconditioning = use_edm_preconditioning
+        self.sigma_data = sigma_data
 
         if network is not None:
             self.net = network
@@ -293,10 +292,18 @@ class FMCond(torch.nn.Module):
             )
             self.net = MLP(channels=channels, hidden_size=512, depth=depth)
 
-    def forward(self, x, sigma):
-        x = x
-        sigma = sigma.to(torch.float32).reshape(-1, 1)
-        V_x = self.net(x, sigma).to(torch.float32)
+    def forward(self, x, t):
+        t = t.to(torch.float32).reshape(-1, 1)
+
+        if self.use_edm_preconditioning:
+            c_skip = self.sigma_data**2 / (t**2 + self.sigma_data**2)
+            c_out = t * self.sigma_data / (t**2 + self.sigma_data**2).sqrt()
+            c_in = 1 / (self.sigma_data**2 + t**2).sqrt()
+            c_noise = t.clamp(min=1e-8).log() / 4
+            F_x = self.net(c_in * x, c_noise).to(torch.float32)
+            V_x = c_skip * x + c_out * F_x
+        else:
+            V_x = self.net(x, t).to(torch.float32)
 
         return V_x
 
@@ -309,7 +316,7 @@ class FMCond(torch.nn.Module):
 
         if intermediate:
             sample, sol = ot_sampler(
-                self.net,
+                self,
                 noise,
                 num_steps=num_steps,
                 enable_grad=enable_grad,
@@ -319,7 +326,7 @@ class FMCond(torch.nn.Module):
         else:
             tqdm.write(f"[INTEGRATION] Integrating forward with num_steps: {num_steps}")
             sample = ot_sampler(
-                self.net,
+                self,
                 noise,
                 num_steps=num_steps,
                 enable_grad=enable_grad,
@@ -333,7 +340,7 @@ class FMCond(torch.nn.Module):
 
         if intermediate:
             sample, sol = ot_inverse(
-                self.net,
+                self,
                 samples,
                 num_steps=num_steps,
                 enable_grad=enable_grad,
@@ -346,7 +353,7 @@ class FMCond(torch.nn.Module):
                 f"[INTEGRATION] Integrating backward with num_steps: {num_steps}"
             )
             sample = ot_inverse(
-                self.net,
+                self,
                 samples,
                 num_steps=num_steps,
                 enable_grad=enable_grad,

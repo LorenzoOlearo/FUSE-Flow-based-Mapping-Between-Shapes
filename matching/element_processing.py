@@ -7,16 +7,15 @@ import torch
 import trimesh
 from tqdm import tqdm
 
+from matching.data_structures import DataPath, Element
 from model.models import FMCond
-from model.networks import MLP
+from model.networks import MLP, GeomDist
 from util.dataset_utils import get_common_landmarks_between_two_models
 from util.mesh_utils import (
     compute_geodesic_distances_pointcloud,
     mesh_geodesics,
     pointcloud_geodesics,
 )
-
-from matching.data_structures import DataPath, Element
 
 
 def get_mesh_element_features(
@@ -427,6 +426,28 @@ def _process_pt_element(element, mesh, model, device, data_path) -> Element:
         )
 
 
+def get_network(
+    network_selection: str,
+    embedding_dim: int,
+    mlp_hidden_size: int,
+    mlp_depth: int,
+    mlp_num_frequencies: int,
+):
+    if network_selection == "MLP":
+        network = MLP(
+            channels=embedding_dim,
+            hidden_size=mlp_hidden_size,
+            depth=mlp_depth,
+            num_frequencies=mlp_num_frequencies,
+        )
+    elif network_selection == "GEOMDIST":
+        network = GeomDist(channels=embedding_dim)
+    else:
+        raise ValueError(f"Unknown network '{network_selection}'. Choose 'MLP' or 'GEOMDIST'.")
+
+    return network
+
+
 def process_element(
     element: str,
     representation: str,
@@ -438,6 +459,8 @@ def process_element(
     mlp_hidden_size: int = 256,
     mlp_depth: int = 4,
     mlp_num_frequencies: int = -1,
+    network_selection: str = "MLP",
+    edm_preconditioning: bool = False,
 ):
     """
     Process a dataset element according to the chosen representation.
@@ -450,12 +473,14 @@ def process_element(
 
     model = FMCond(
         channels=embedding_dim,
-        network=MLP(
-            channels=embedding_dim,
-            hidden_size=mlp_hidden_size,
-            depth=mlp_depth,
-            num_frequencies=mlp_num_frequencies,
+        network=get_network(
+            network_selection=network_selection,
+            embedding_dim=embedding_dim,
+            mlp_hidden_size=mlp_hidden_size,
+            mlp_depth=mlp_depth,
+            mlp_num_frequencies=mlp_num_frequencies,
         ),
+        use_edm_preconditioning=edm_preconditioning,
     ).to(device)
 
     if representation == "mesh":

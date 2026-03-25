@@ -1,7 +1,3 @@
-"""
-In this file we define some networks that takes as input a spatian input and a time input.
-"""
-
 import math
 
 import numpy as np
@@ -173,7 +169,7 @@ class PointEmbed(nn.Module):
         return embed
 
 
-class Network(nn.Module):
+class GeomDist(nn.Module):
     def __init__(
         self,
         channels=3,
