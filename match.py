@@ -260,7 +260,7 @@ def main(args):
             mlp_hidden_size=args.mlp_hidden_size,
             mlp_depth=args.mlp_depth,
             mlp_num_frequencies=args.mlp_num_frequencies,
-            network=args.network,
+            network_selection=args.network,
             edm_preconditioning=args.edm_preconditioning,
         )
         elapsed_time = time.perf_counter() - start_time

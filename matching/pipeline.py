@@ -28,7 +28,7 @@ def process_pair(
     mlp_hidden_size: int = 256,
     mlp_depth: int = 4,
     mlp_num_frequencies: int = -1,
-    network: str = "MLP",
+    network_selection: str = "MLP",
     edm_preconditioning: bool = False,
 ) -> pd.DataFrame:
     """
@@ -62,7 +62,7 @@ def process_pair(
         mlp_hidden_size=mlp_hidden_size,
         mlp_depth=mlp_depth,
         mlp_num_frequencies=mlp_num_frequencies,
-        network=network,
+        network_selection=network_selection,
         edm_preconditioning=edm_preconditioning,
     )
 
@@ -77,7 +77,7 @@ def process_pair(
         mlp_hidden_size=mlp_hidden_size,
         mlp_depth=mlp_depth,
         mlp_num_frequencies=mlp_num_frequencies,
-        network=network,
+        network_selection=network_selection,
         edm_preconditioning=edm_preconditioning,
     )
 
