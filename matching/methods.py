@@ -136,7 +136,7 @@ def get_matching_methods(
     }
 
     method_groups = {
-        "fast": ["KNN", "FUSE", "FUSE-ANCHOR"],
+        "fast": ["KNN", "FUSE"],
         "sdf": ["KNN", "OT", "FUSE", "NDP-SDF", "FUSE-ANCHOR"],
         "all": [
             "KNN",
