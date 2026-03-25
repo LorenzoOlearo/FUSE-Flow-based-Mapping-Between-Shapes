@@ -28,18 +28,16 @@ def get_mesh_element_features(
 ) -> torch.Tensor:
 
     vertex_features_path = Path(
-        data_path.flows_path, element, f"vertex-geodesics-vnorm.txt"
+        data_path.flows_path, element, f"vertex-features-{data_path.features_type}-norm.npy"
     )
-    # vertex_features_path = Path(data_path.flows_path, element, f"vertex-geodesics.txt")
     vertex_features = torch.tensor(
-        np.loadtxt(vertex_features_path).astype(np.float32)
+        np.load(vertex_features_path).astype(np.float32)
     ).to(device)
 
     features_path = Path(
-        data_path.flows_path, element, f"vertex-geodesics-interpolated-vnorm.txt"
+        data_path.flows_path, element, f"features-{data_path.features_type}-norm.npy"
     )
-    # features_path = Path(data_path.flows_path, element, f"vertex-geodesics-interpolated.txt")
-    features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
+    features = torch.tensor(np.load(features_path).astype(np.float32)).to(device)
 
     tqdm.write("------------------------------------")
     tqdm.write(f"loaded vertex_features (shape {list(vertex_features.shape)}):")
@@ -61,23 +59,17 @@ def get_sdf_element_features(
     device: str,
 ) -> torch.Tensor:
 
-    # We load the featues already normalized by the diameter as used to train the SDF flows
-    features_path = Path(
-        data_path.sdf_path, element, f"{element}-geodesics-normalized-diameter.txt"
-    )
-    vertex_features_path = Path(
-        data_path.sdf_path,
-        element,
-        f"{element}-vertex-geodesics-normalized-diameter.txt",
-    )
+    # We load the features already normalized by the diameter as used to train the SDF flows
+    features_path = Path(data_path.sdf_path, element, "features-landmarks-norm.npy")
+    vertex_features_path = Path(data_path.sdf_path, element, "vertex-features-landmarks-norm.npy")
 
     try:
         tqdm.write(
             f"Loading precomputed features for {element} from {data_path.features_path}"
         )
-        features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
+        features = torch.tensor(np.load(features_path).astype(np.float32)).to(device)
         vertex_features = torch.tensor(
-            np.loadtxt(vertex_features_path).astype(np.float32)
+            np.load(vertex_features_path).astype(np.float32)
         ).to(device)
     except Exception as e:
         raise ValueError(f"Error loading features from {vertex_features_path}: {e}")
@@ -99,7 +91,7 @@ def get_pt_element_features(
         )
         pt = trimesh.Trimesh(vertices=pt.vertices, faces=[], process=False)
         features_path = Path(
-            data_path.flows_path, element, f"vertex-geodesics-vnorm.txt"
+            data_path.flows_path, element, f"vertex-features-{data_path.features_type}-norm.npy"
         )
 
         if recompute:
@@ -116,7 +108,7 @@ def get_pt_element_features(
             tqdm.write(
                 f"Loading precomputed features for {element} from {features_path}"
             )
-            features = np.loadtxt(features_path).astype(np.float32)
+            features = np.load(features_path).astype(np.float32)
             features = torch.tensor(features).to(device)
         else:
             raise ValueError(
@@ -125,10 +117,10 @@ def get_pt_element_features(
 
     elif data_path.dataset == "FAUST":
         features_path = Path(
-            data_path.scan_features_path, element, f"vertex-geodesics-vnorm.txt"
+            data_path.scan_features_path, element, f"vertex-features-{data_path.features_type}-norm.npy"
         )
         tqdm.write(f"Loading precomputed features for {element} from {features_path}")
-        features = np.loadtxt(features_path).astype(np.float32)
+        features = np.load(features_path).astype(np.float32)
 
     return features
 
@@ -255,8 +247,8 @@ def _process_mesh_element(element, mesh, model, device, data_path) -> Element:
 
 def _process_sdf_element(element, mesh, model, device, data_path) -> Element:
     """Process an SDF-based representation element."""
-    vertex_points = np.loadtxt(
-        Path(data_path.sdf_path, element, f"{element}-vertex-voxel-projection.txt")
+    vertex_points = np.load(
+        Path(data_path.sdf_path, element, "vertex-voxel-projection.npy")
     ).astype(np.float32)
 
     points = np.loadtxt(

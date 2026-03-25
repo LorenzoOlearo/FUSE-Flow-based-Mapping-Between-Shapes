@@ -19,6 +19,7 @@ class DataPath:
     flows_path: Path
     flows_SDFs_path: Path | None
     sdf_path: Path | None
+    features_type: str = "landmarks"
     corr_path: Optional[Path] = None
     corr_offset: int = 0
 

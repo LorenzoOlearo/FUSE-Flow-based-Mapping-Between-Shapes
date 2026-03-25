@@ -40,7 +40,7 @@ def get_targets_smal(flows_path) -> List[str]:
         for f in flows_path.iterdir()
         if f.is_dir()
         and f.name.startswith(("cougar", "hippo", "horse"))
-        and os.path.exists(Path(flows_path, f.name, "vertex-geodesics-vnorm.txt"))
+        and (flows_path / f.name / "checkpoint-best.pth").is_file()
     ]
 
     tqdm.write(f"Processing targets: {targets}")

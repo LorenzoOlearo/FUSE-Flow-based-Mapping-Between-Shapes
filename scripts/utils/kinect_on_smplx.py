@@ -32,6 +32,7 @@ class SkinningConfig:
     kinect_features_path: Path
     kinect_dists_path: Path
     output_path: Path
+    features_type: str = "landmarks"
 
     @classmethod
     def from_mapping(cls, m: Mapping[str, Any]) -> "SkinningConfig":
@@ -51,6 +52,7 @@ class SkinningConfig:
             kinect_features_path=Path(m["kinect_features_path"]),
             kinect_dists_path=Path(m["kinect_dists_path"]),
             output_path=Path(m["output_path"]),
+            features_type=m.get("features_type", "landmarks"),
         )
 
 
@@ -72,9 +74,9 @@ def process_smplx_element(
     )
 
     features_path = Path(
-        skinning_config.smplx_features_path, element, f"vertex-geodesics-vnorm.txt"
+        skinning_config.smplx_features_path, element, f"vertex-features-{skinning_config.features_type}-norm.npy"
     )
-    features = torch.tensor(np.loadtxt(features_path).astype(np.float32)).to(device)
+    features = torch.tensor(np.load(features_path).astype(np.float32)).to(device)
 
     smplx_flows_path = Path(
         skinning_config.smplx_flows_path, element, "checkpoint-9999.pth"
@@ -115,10 +117,10 @@ def process_kinect_element(
     landmarks = corr[skinning_config.kinect_landmarks]
 
     features_path = Path(
-        skinning_config.kinect_features_path, element, f"vertex-geodesics-vnorm.txt"
+        skinning_config.kinect_features_path, element, f"vertex-features-{skinning_config.features_type}-norm.npy"
     )
     tqdm.write(f"Loading precomputed features for {element} from {features_path}")
-    features = np.loadtxt(features_path).astype(np.float32)
+    features = np.load(features_path).astype(np.float32)
     features = torch.tensor(features).to(device)
 
     model.load_state_dict(

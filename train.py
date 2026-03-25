@@ -662,8 +662,8 @@ def train(args, device):
                 f"[FEATURES] Number of vertex features ({vertex_features.shape[0]}) does not match number of mesh vertices ({len(mesh.vertices)}), squeezing vertex features and features"
             )
             vertex_features = vertex_features.squeeze(0)
-        np.savetxt(
-            os.path.join(args.output_dir, "vertex-geodesics.txt"),
+        np.save(
+            os.path.join(args.output_dir, f"vertex-features-{args.features_type}.npy"),
             vertex_features.detach().cpu().numpy(),
         )
 
@@ -694,8 +694,8 @@ def train(args, device):
                     f"[FEATURES] Number of vertex features ({vertex_features.shape[0]}) does not match number of mesh vertices ({len(mesh.vertices)}), squeezing vertex features and features"
                 )
                 features = features.squeeze(0)
-                np.savetxt(
-                    os.path.join(args.output_dir, "vertex-geodesics.txt"),
+                np.save(
+                    os.path.join(args.output_dir, f"vertex-features-{args.features_type}.npy"),
                     features.detach().cpu().numpy(),
                 )
 
@@ -714,12 +714,12 @@ def train(args, device):
             print(
                 f"Interpolated features over {args.features_interpolation} points | Features shape: {features.shape}"
             )
-            np.savetxt(
-                os.path.join(args.output_dir, "vertex-geodesics-interpolated.txt"),
+            np.save(
+                os.path.join(args.output_dir, f"features-{args.features_type}.npy"),
                 features.detach().cpu().numpy(),
             )
             print(
-                f"Saved interpolated features to {os.path.join(args.output_dir, 'features-interpolated.txt')}"
+                f"Saved interpolated features to {os.path.join(args.output_dir, f'features-{args.features_type}.npy')}"
             )
 
     # Default case: no vertex_features provided, compute them from the mesh and optionally interpolate them
@@ -731,12 +731,12 @@ def train(args, device):
         print(f"  min: {vertex_features.min(dim=0).values.tolist()}")
         print(f"  max: {vertex_features.max(dim=0).values.tolist()}")
         print(f"  avg: {vertex_features.mean(dim=0).tolist()}")
-        np.savetxt(
-            os.path.join(args.output_dir, "vertex-geodesics.txt"),
+        np.save(
+            os.path.join(args.output_dir, f"vertex-features-{args.features_type}.npy"),
             vertex_features.detach().cpu().numpy(),
         )
         print(
-            f"Saved vertex vertex_features to {os.path.join(args.output_dir, 'vertex-geodesics.txt')}"
+            f"Saved vertex vertex_features to {os.path.join(args.output_dir, f'vertex-features-{args.features_type}.npy')}"
         )
 
         if args.features_interpolation > 0:
@@ -757,12 +757,12 @@ def train(args, device):
             print(f"  max: {features.max(dim=0).values.tolist()}")
             print(f"  avg: {features.mean(dim=0).tolist()}")
             print("------------------------------------")
-            np.savetxt(
-                os.path.join(args.output_dir, "vertex-geodesics-interpolated.txt"),
+            np.save(
+                os.path.join(args.output_dir, f"features-{args.features_type}.npy"),
                 features.detach().cpu().numpy(),
             )
             print(
-                f"Saved interpolated features to {os.path.join(args.output_dir, 'vertex-geodesics-interpolated.txt')}"
+                f"Saved interpolated features to {os.path.join(args.output_dir, f'features-{args.features_type}.npy')}"
             )
         else:
             features = vertex_features
@@ -817,12 +817,12 @@ def train(args, device):
         print(f"  max: {features.max(dim=0).values.tolist()}")
         print(f"  avg: {features.mean(dim=0).tolist()}")
         print(f"output_dir: {args.output_dir}")
-        np.savetxt(
-            os.path.join(args.output_dir, "vertex-geodesics-interpolated-vnorm.txt"),
+        np.save(
+            os.path.join(args.output_dir, f"features-{args.features_type}-norm.npy"),
             features.detach().cpu().numpy(),
         )
-        np.savetxt(
-            os.path.join(args.output_dir, "vertex-geodesics-vnorm.txt"),
+        np.save(
+            os.path.join(args.output_dir, f"vertex-features-{args.features_type}-norm.npy"),
             vertex_features.detach().cpu().numpy(),
         )
 

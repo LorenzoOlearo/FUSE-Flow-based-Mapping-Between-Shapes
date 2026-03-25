@@ -152,22 +152,19 @@ All training is controlled by JSON config files. The key fields are:
 | `mlp_hidden_size` | Hidden dimension of the MLP | `256` |
 | `mlp_depth` | Number of MLP layers | `4` |
 
-Config files for matching evaluation live in `configs/matching/`. Per-shape
-training configs are generated automatically by the `scripts/datasets/run_*.py` scripts
-and saved alongside the model checkpoints.
+Per-shape training configs are generated automatically by the
+`scripts/datasets/run_*.py` scripts and saved alongside the model checkpoints.
 
 > **Note on `edm_preconditioning`.**
-> By default, FM and DDIM differ not only in their training objectives and
-> sampling procedures, but also in how the shared network is called. DDIM
-> wraps every forward pass with the EDM sigma-preconditioning scheme from
-> by Zhang et al. (2025), *Geometry Distributions*: the input is scaled by
-> `c_in = 1/√(σ_data² + t²)`, the time step is transformed to
-> `c_noise = log(t)/4`, and the raw network output is blended with a skip
-> connection `D(x,t) = c_skip·x + c_out·F(c_in·x, c_noise)`.
+> Because our DDIM implementation is based on GeomDist, by default, FM and DDIM
+> differ not only in their training objectives and sampling procedures, but
+> also in how the shared network is called. DDIM wraps every forward pass with
+> the EDM sigma-preconditioning scheme used by Zhang et al. (2025), *Geometry
+> Distributions*.
 > Setting `edm_preconditioning: true` applies the identical transformation
 > inside `FMCond.forward()`, making the two methods fully comparable: the only
 > remaining differences are the training objective (velocity matching vs.
-> denoising score matching), the time schedule (uniform `t ∈ [0,1]` vs.
+> denoising score matching), the time schedule (uniform `t in [0,1]` vs.
 > log-normal σ), and the ODE solver used at inference. This preconditioning is
 > applied consistently during both training and inference — the ODE solver
 > always calls `FMCond.forward()` directly so the scaling is never bypassed.
@@ -176,7 +173,7 @@ and saved alongside the model checkpoints.
 
 ## Training a Flow for a Single Shape (`train.py`)
 
-`train.py` trains a Flow or DDIM model on a single mesh. It handles feature
+`train.py` trains a Flow or DDIM model on a single shape. It handles feature
 computation, optional interpolation over sampled points, normalization, and the
 training loop.
 
@@ -186,7 +183,7 @@ training loop.
 python train.py --config config.json
 ```
 
-CLI arguments override config file values. The most commonly overridden arguments:
+Inline arguments override config file values. For example,
 
 Run training and inference on a FAUST mesh, with feature interpolation:
 ```bash
@@ -259,10 +256,10 @@ python train.py --config config.json --pt
 Saved in `output_dir`:
 - `checkpoint-best.pth` — best model checkpoint by training loss
 - `checkpoint-<epoch>.pth` — final epoch checkpoint
-- `vertex-geodesics.txt` — raw per-vertex features
-- `vertex-geodesics-interpolated.txt` — features interpolated over sampled points
-- `vertex-geodesics-vnorm.txt` — normalized per-vertex features
-- `vertex-geodesics-interpolated-vnorm.txt` — normalized interpolated features
+- `vertex-features-<features_type>.npy` — raw per-vertex features
+- `features-<features_type>.npy` — features interpolated over sampled points (only if `--features_interpolation` > 0)
+- `vertex-features-<features_type>-norm.npy` — normalized per-vertex features (only if `features_normalization` is not `none`)
+- `features-<features_type>-norm.npy` — normalized interpolated features (only if both apply)
 - `loss.png` — training loss curve
 
 ---
@@ -303,8 +300,8 @@ Each script reads all paths from the `matching_config` block of the config file:
 
 | Path read from config | Used for |
 |---|---|
-| `<DATASET>.dataset_path` | Mesh directory |
-| `<DATASET>.dists_path` | Geodesic distance cache |
+| `<DATASET>.dataset_path` | Dataset directory |
+| `<DATASET>.dists_path` | Precomputed geodesic distance |
 | `<DATASET>.flows_path` | Output directory for trained flows |
 | `<DATASET>.corr_path` | Correspondence files (FAUST_R, SMAL, KINECT, SHREC19) |
 | `<DATASET>.landmarks` | Base landmark indices |
@@ -410,7 +407,7 @@ Saved in `out/SDFs/<mesh_name>/`:
 Features for SDF-based matching are landmark distances computed by running
 Dijkstra's algorithm on the SDF voxel grid, constructing shortest paths between
 each landmark and all other grid points. Note that the landmarks used for the
-geodesic embeddings are projected onto the SDF surface and mapped into their
+geodesic embeddings are projected to the SDF surface and mapped into their
 corresponding voxel coordinates.
 
 To extract features for a single shape:

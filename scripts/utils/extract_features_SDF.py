@@ -24,7 +24,7 @@ from train_SDF import (MLP, MLPConfig, NeuralSDF, NeuralSDFConfig,
                        evaluate_model, make_volume)
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from util.mesh_utils import (compute_geodesic_distances, get_shape_diameter,
+from utils.mesh_utils import (compute_geodesic_distances, get_shape_diameter,
                              normalize_mesh_08)
 
 
@@ -993,18 +993,12 @@ def save_outputs(
 ):
     out_dir = Path(f"out/SDFs/faust-SDFs/{target}")
     out_dir.mkdir(exist_ok=True)
-    np.savetxt(out_dir / f"{target}-geodesics.txt", dists_surface_points, fmt="%.6f")
-    np.savetxt(
-        out_dir / f"{target}-geodesics-idw.txt", dists_surface_points_idw, fmt="%.6f"
-    )
-    np.savetxt(out_dir / f"{target}-surface-points.txt", surface_points, fmt="%.6f")
-    np.savetxt(out_dir / f"{target}-vertex-geodesics.txt", mesh_dists, fmt="%.6f")
-    np.savetxt(
-        out_dir / f"{target}-vertex-geodesics-idw.txt", mesh_dists_idw, fmt="%.6f"
-    )
-    np.savetxt(
-        out_dir / f"{target}-vertex-voxel-projection.txt", verts_projection, fmt="%.6f"
-    )
+    np.save(out_dir / "features-landmarks.npy", dists_surface_points)
+    np.save(out_dir / "features-landmarks-idw.npy", dists_surface_points_idw)
+    np.save(out_dir / "surface-points.npy", surface_points)
+    np.save(out_dir / "vertex-features-landmarks.npy", mesh_dists)
+    np.save(out_dir / "vertex-features-landmarks-idw.npy", mesh_dists_idw)
+    np.save(out_dir / "vertex-voxel-projection.npy", verts_projection)
 
     print(
         f"mesh_dists before normalization: min={np.min(mesh_dists)}, max={np.max(mesh_dists)}, mean={np.mean(mesh_dists)}"
@@ -1024,26 +1018,10 @@ def save_outputs(
     )
     print(f"Shape diameter: {diameter}")
 
-    np.savetxt(
-        out_dir / f"{target}-geodesics-normalized-diameter.txt",
-        dists_surface_points,
-        fmt="%.6f",
-    )
-    np.savetxt(
-        out_dir / f"{target}-geodesics-idw-normalized-diameter.txt",
-        dists_surface_points_idw,
-        fmt="%.6f",
-    )
-    np.savetxt(
-        out_dir / f"{target}-vertex-geodesics-normalized-diameter.txt",
-        mesh_dists,
-        fmt="%.6f",
-    )
-    np.savetxt(
-        out_dir / f"{target}-vertex-geodesics-idw-normalized-diameter.txt",
-        mesh_dists_idw,
-        fmt="%.6f",
-    )
+    np.save(out_dir / "features-landmarks-norm.npy", dists_surface_points)
+    np.save(out_dir / "features-landmarks-idw-norm.npy", dists_surface_points_idw)
+    np.save(out_dir / "vertex-features-landmarks-norm.npy", mesh_dists)
+    np.save(out_dir / "vertex-features-landmarks-idw-norm.npy", mesh_dists_idw)
 
 
 def geodesic_diameter(surface_mask, h, n_start=5):

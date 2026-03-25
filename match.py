@@ -108,6 +108,7 @@ def main(args):
         features_path=Path(config["matching_config"][dataset]["features_path"]),
         dataset_extension=config["matching_config"][dataset]["dataset_extension"],
         flows_path=Path(config["matching_config"][dataset]["flows_path"]),
+        features_type=config.get("features_type", "landmarks"),
         flows_SDFs_path=(
             Path(config["matching_config"][dataset]["flows_SDFs_path"])
             if "flows_SDFs_path" in config["matching_config"][dataset]
