@@ -63,7 +63,7 @@ def main(args):
         )
 
         config = {
-            "device": "cuda:1",
+            "device": "cuda:0",
             "blr": 5e-7,
             "output_dir": str(target_dir),
             "log_dir": str(target_dir),
@@ -74,13 +74,16 @@ def main(args):
             "num_steps": 64,
             "method": args.method,
             "network": "MLP",
-            "edm_preconditioning": True,
+            "edm_preconditioning": False,
             "mlp_hidden_size": 256,
             "mlp_depth": 4,
-            "mlp_num_frequencies": -1,
-            "batch_size": 50_000,
-            "num_points_train": 50_000,
+            "mlp_num_frequencies": 6,
+            "batch_size": 10_000,
+            "num_points_train": 10_000,
             "learning_rate": 0.001,
+            "lr_scheduler": "none",
+            "lr_plateau_scheduler_patience": 1000,
+            "lr_plateau_scheduler_factor": 0.5,
             "distribution": "gaussian",
             "embedding_dim": len(landmarks),
             "embedding_type": "features_only",
@@ -89,6 +92,9 @@ def main(args):
             "features_normalization": "diameter",
             "dists_path": dists_path,
             "landmarks": landmarks,
+            "lr_decay_epochs": 20_000,
+            "warmup_epochs": 100,
+            "min_lr": 1e-4,
         }
 
         config_path = os.path.join(target_dir, "config.json")

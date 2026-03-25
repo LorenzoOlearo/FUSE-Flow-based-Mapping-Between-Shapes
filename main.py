@@ -25,6 +25,7 @@ from flow_matching.path.scheduler import CondOTScheduler
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import trange
 
+import util.lr_sched as lr_sched
 from model import models, networks
 from model.models import EDMPrecond, FMCond
 from model.networks import MLP
@@ -38,8 +39,6 @@ from util.mesh_utils import (
     pointcloud_geodesics,
     sample_initial_distribution,
 )
-
-# import util.lr_sched as lr_sched
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
 from util.plot import plot_points, source_target_plot
 from util.train_utils import initialize_device_and_seed, setup_logging
@@ -78,6 +77,47 @@ def build_arg_parser():
         default=0.0001,
         metavar="LR",
         help="learning rate (absolute lr)",
+    )
+    parser.add_argument(
+        "--min_lr",
+        type=float,
+        default=1e-5,
+        metavar="LR",
+        help="lower lr bound for cosine scheduler",
+    )
+    parser.add_argument(
+        "--warmup_epochs",
+        default=0,
+        type=int,
+        help="epochs of lr warmup before cosine decay",
+    )
+    parser.add_argument(
+        "--lr_decay_epochs",
+        default=-1,
+        type=int,
+        help="epochs over which cosine decay completes (-1 = same as --epochs). "
+        "Set larger than --epochs to slow down the decay.",
+    )
+    parser.add_argument(
+        "--lr_scheduler",
+        default="cosine",
+        choices=["cosine", "plateau", "none"],
+        type=str,
+        help="Learning-rate scheduler: 'cosine' for warmup + half-cycle cosine decay (from GeomDist), "
+        "'plateau' to reduce LR by --lr_plateau_scheduler_factor after --lr_plateau_scheduler_patience epochs of no improvement, "
+        "'none' to keep the learning rate constant throughout training.",
+    )
+    parser.add_argument(
+        "--lr_plateau_scheduler_patience",
+        default=200,
+        type=int,
+        help="(plateau scheduler) epochs with no loss improvement before reducing LR.",
+    )
+    parser.add_argument(
+        "--lr_plateau_scheduler_factor",
+        default=0.5,
+        type=float,
+        help="(plateau scheduler) multiplicative factor applied to LR on each reduction (< 1).",
     )
     parser.add_argument(
         "--batch_size",
@@ -414,24 +454,12 @@ def initialize_model_and_optimizer(args, device):
 
     loss_scaler = NativeScaler(device)
 
-    scheduler = ReduceLROnPlateau(
-        optimizer,
-        mode="min",
-        factor=0.5,
-        patience=1000,
-        threshold=1e-3,
-        threshold_mode="rel",
-        cooldown=0,
-        min_lr=1e-4,
-        eps=1e-8,
-    )
-
     print("base lr: %.2e" % (args.learning_rate * 128 / eff_batch_size))
     print("actual lr: %.2e" % args.learning_rate)
     print("accumulate grad iterations: %d" % args.accum_iter)
     print("effective batch size: %d" % eff_batch_size)
 
-    return model, optimizer, loss_scaler, scheduler
+    return model, optimizer, loss_scaler
 
 
 def diffusion_step(model, y, device, args):
@@ -467,7 +495,7 @@ def fm_step(model, y, path, device, args):
         raise ValueError("Path object must be provided for FM method.")
 
     path_sample = path.sample(t=t, x_0=X_0, x_1=y)
-    V_y = model(x=path_sample.x_t, sigma=path_sample.t)
+    V_y = model(x=path_sample.x_t, t=path_sample.t)
     loss = torch.mean((V_y - path_sample.dx_t) ** 2)
     return loss
 
@@ -574,9 +602,7 @@ def train_one_epoch(
 
 
 def train(args, device):
-    model, optimizer, loss_scaler, scheduler = initialize_model_and_optimizer(
-        args, device
-    )
+    model, optimizer, loss_scaler = initialize_model_and_optimizer(args, device)
     misc.load_model(
         args=args, model_without_ddp=model, optimizer=optimizer, loss_scaler=loss_scaler
     )
@@ -833,7 +859,26 @@ def train(args, device):
     best_loss = float("inf")
     best_epoch = -1
 
+    if args.lr_scheduler == "plateau":
+
+        plateau_scheduler = ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=args.lr_plateau_scheduler_factor,
+            patience=args.lr_plateau_scheduler_patience,
+            threshold=1e-4,
+            min_lr=args.min_lr,
+        )
+        logging.info(
+            f"Using ReduceLROnPlateau scheduler: factor={args.lr_plateau_scheduler_factor}, "
+            f"patience={args.lr_plateau_scheduler_patience}, min_lr={args.min_lr}"
+        )
+    else:
+        logging.info("Using cosine LR scheduler")
+
     for epoch in trange(args.start_epoch, args.epochs, desc="Epochs"):
+        if args.lr_scheduler == "cosine":
+            lr_sched.adjust_learning_rate(optimizer, epoch, args)
         train_stats = train_one_epoch(
             model=model,
             data_loader=data_loader_train,
@@ -850,11 +895,14 @@ def train(args, device):
         )
 
         loss_history.append(train_stats["loss"])
-        scheduler.step(train_stats["loss"])
+
+        if args.lr_scheduler == "plateau":
+            plateau_scheduler.step(train_stats["loss"])
 
         if args.output_dir is not None:
             if train_stats["loss"] < best_loss:
                 best_loss = train_stats["loss"]
+                best_epoch = epoch
                 misc.save_model(
                     args=args,
                     model=model,
@@ -878,7 +926,7 @@ def train(args, device):
     misc.plot_loss(loss_history, args.output_dir, args.start_epoch)
 
     logging.info(
-        f"Training completed in {str(datetime.timedelta(seconds=int(total_time)))}"
+        f"Training completed in {str(datetime.timedelta(seconds=int(total_time)))} | Best loss: {best_loss:.6f} at epoch {best_epoch}"
     )
 
 
