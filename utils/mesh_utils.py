@@ -14,10 +14,12 @@ import scipy.sparse.csgraph
 import torch
 import trimesh
 from geomfum.descriptor.pipeline import ArangeSubsampler, DescriptorPipeline
-from geomfum.descriptor.spectral import (HeatKernelSignature,
-                                         LandmarkHeatKernelSignature,
-                                         LandmarkWaveKernelSignature,
-                                         WaveKernelSignature)
+from geomfum.descriptor.spectral import (
+    HeatKernelSignature,
+    LandmarkHeatKernelSignature,
+    LandmarkWaveKernelSignature,
+    WaveKernelSignature,
+)
 from geomfum.laplacian import LaplacianFinder, LaplacianSpectrumFinder
 from geomfum.metric import HeatDistanceMetric
 from geomfum.shape.mesh import TriangleMesh
@@ -245,6 +247,11 @@ def sample_initial_distribution(
             num_points=num_points,
             device=device,
         )
+
+    elif distribution == "sphere_surface":
+        directions = torch.randn(num_points, embedding_dim, device=device)
+        samples = directions / directions.norm(dim=1, keepdim=True)
+
     else:
         raise ValueError(f"Unsupported distribution type: {distribution}")
 
@@ -863,7 +870,16 @@ def pointcloud_geodesics(
 ######################## # FUNCTIONS FOR COMPUTING FEATURES ########################
 
 
-def compute_features(mesh, args, device):
+def compute_features(
+    mesh,
+    device,
+    features_type: str,
+    landmarks,
+    use_heat_method: bool = False,
+    embedding_dim: int = None,
+    embedding_type: str = "features_only",
+    embedding_type_dim: int = None,
+):
     """
     Compute feature embeddings for mesh vertices based on the specified feature type.
 
@@ -871,15 +887,20 @@ def compute_features(mesh, args, device):
     -----------
     mesh : trimesh.Trimesh
         The input mesh
-    args : Namespace
-        Configuration object containing:
-        - embedding_type: Type of embedding (e.g., "xyz")
-        - features_type: Type of features to compute
-        - landmarks: Array of landmark vertex indices
-        - use_heat_method: Whether to use heat method for geodesic computation
-        - embedding_dim: Dimension of the embedding space
     device : torch.device
         Device to place tensors on
+    features_type : str
+        Type of features to compute
+    landmarks : array-like
+        Landmark vertex indices
+    use_heat_method : bool
+        Whether to use heat method for geodesic computation
+    embedding_dim : int
+        Dimension of the embedding space (required for wks/hks variants)
+    embedding_type : str
+        Type of embedding (e.g., "xyz", "features_only")
+    embedding_type_dim : int
+        Dimension for mds embedding
 
     Returns:
     --------
@@ -887,16 +908,15 @@ def compute_features(mesh, args, device):
         Feature tensor of shape (num_vertices, feature_dim)
     """
     has_faces = len(mesh.faces) > 0
-    landmarks = np.array(args.landmarks)
-    features_type = args.features_type
+    landmarks = np.array(landmarks)
 
-    if args.features_type == "none" and args.embedding_type == "xyz":
+    if features_type == "none" and embedding_type == "xyz":
         raw_features = mesh.vertices
         transpose = False
 
     elif features_type in ("landmarks", "landmarks_exp"):
         if has_faces:
-            if args.use_heat_method and features_type == "landmarks":
+            if use_heat_method and features_type == "landmarks":
                 print("[FEATURES] Using Heat Method for geodesic distances computation")
                 raw_features = compute_geodesic_distances_heat_method(
                     mesh, source_index=landmarks
@@ -915,30 +935,24 @@ def compute_features(mesh, args, device):
         transpose = True
 
     elif features_type == "wks":
-        raw_features = compute_wks(mesh, num_desc=args.embedding_dim)
+        raw_features = compute_wks(mesh, num_desc=embedding_dim)
         transpose = False
 
     elif features_type == "hks":
-        raw_features = compute_hks(mesh, num_desc=args.embedding_dim)
+        raw_features = compute_hks(mesh, num_desc=embedding_dim)
         transpose = False
 
     elif features_type == "wks_landmarks":
-        raw_features = compute_wks(
-            mesh, num_desc=args.embedding_dim, landmarks=args.landmarks
-        )
+        raw_features = compute_wks(mesh, num_desc=embedding_dim, landmarks=landmarks)
         transpose = False
 
     elif features_type == "hks_landmarks":
-        raw_features = compute_hks(
-            mesh, num_desc=args.embedding_dim, landmarks=args.landmarks
-        )
+        raw_features = compute_hks(mesh, num_desc=embedding_dim, landmarks=landmarks)
         transpose = False
 
     elif features_type == "mds":
         print("[FEATURES] Computing MDS embedding")
-        raw_features = compute_mds(
-            mesh.vertices, mesh.faces, k=args.embedding_type_dim - 3
-        )
+        raw_features = compute_mds(mesh.vertices, mesh.faces, k=embedding_type_dim - 3)
         transpose = False
 
     else:

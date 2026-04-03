@@ -1,5 +1,4 @@
 from pathlib import Path
-from types import SimpleNamespace
 from typing import List
 
 import numpy as np
@@ -42,14 +41,14 @@ def get_mesh_element_features(
         tqdm.write(
             f"[FEATURES] Pre-computed features not found for '{element}', computing on-the-fly..."
         )
-        args = SimpleNamespace(
-            landmarks=landmarks,
+        raw = compute_features(
+            mesh,
+            device,
             features_type=data_path.features_type,
+            landmarks=landmarks,
             use_heat_method=False,
             embedding_dim=len(landmarks),
-            embedding_type="features_only",
-        )
-        raw = compute_features(mesh, args, device)  # (n_vertices, n_landmarks)
+        )  # (n_vertices, n_landmarks)
 
         normalization = data_path.features_normalization
         if normalization == "diameter":
