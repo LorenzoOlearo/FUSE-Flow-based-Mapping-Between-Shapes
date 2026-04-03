@@ -41,14 +41,14 @@ def process_pair(
         device (str): Device to use for computation.
         mesh_baseline (bool): Whether to use the mesh as the base geometry.
         plot_html, plot_png (bool): Whether to export visualization plots.
-        all_methods (str): Matching methods to evaluate.
+        selected_methods (str): Matching methods to evaluate.
         features_normalization (str): Feature normalization scheme.
         data_path (DataPath): Container for dataset paths.
         output_dir (str): Directory to store results.
         embedding_dim (int): Number of landmark features / flow channels.
 
     Returns:
-        pd.DataFrame: Results table containing evaluation metrics for all methods.
+        pd.DataFrame: Results table containing evaluation metrics for selected methods.
     """
 
     load_flow = any(m.startswith("FUSE") for m in METHOD_GROUPS[selected_methods])
@@ -95,7 +95,7 @@ def process_pair(
         source_landmarks=source_element.landmarks,
         target_landmarks=target_element.landmarks,
         device=device,
-        matching_methods=all_methods,
+        matching_methods=selected_methods,
         backward_steps=backward_steps,
         forward_steps=forward_steps,
         source_sdf_projected_vertex_points=source_element.vertex_points,

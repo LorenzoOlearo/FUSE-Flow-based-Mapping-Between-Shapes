@@ -124,3 +124,15 @@ def get_targets_faust_r(args) -> List[str]:
 
     tqdm.write(f"Processing all targets: {targets}")
     return targets
+
+
+def get_targets_topkids(args) -> List[str]:
+    """Determine which targets to process."""
+    targets = []
+    base_name = "kid"
+    for i in range(0, 26):
+        target = f"{base_name}{i:02d}"
+        targets.append(target)
+
+    tqdm.write(f"Processing all targets: {targets}")
+    return targets

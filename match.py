@@ -22,6 +22,7 @@ from matching.targets import (
     get_targets_smal,
     get_targets_smplx,
     get_targets_surreal,
+    get_targets_topkids,
     get_targets_tosca,
 )
 
@@ -83,9 +84,12 @@ def main(args):
     elif args.faust_r:
         dataset = "FAUST_R"
         targets = get_targets_faust_r(args)
+    elif args.topkids:
+        dataset = "TOPKIDS"
+        targets = get_targets_topkids(args)
     else:
         raise ValueError(
-            "Please specify either --faust, --smal, --kinect, --surreal, --smplx, --shrec20, or --shrec19, tosca to select the dataset."
+            "Please specify either --faust, --smal, --kinect, --surreal, --smplx, --shrec20, --shrec19, --tosca, --faust_r, or --topkids to select the dataset."
         )
 
     if targets is None or len(targets) == 0:
@@ -109,6 +113,7 @@ def main(args):
         dataset_extension=config["matching_config"][dataset]["dataset_extension"],
         flows_path=Path(config["matching_config"][dataset]["flows_path"]),
         features_type=config.get("features_type", "landmarks"),
+        features_normalization=config.get("features_normalization", "diameter"),
         flows_SDFs_path=(
             Path(config["matching_config"][dataset]["flows_SDFs_path"])
             if "flows_SDFs_path" in config["matching_config"][dataset]
@@ -186,6 +191,10 @@ def main(args):
             Path(config["matching_config"][dataset]["flows_path"])
         )
         pairs = [(s, t) for s in sources for t in targets]
+
+    elif dataset == "TOPKIDS":
+        # Match all shapes to the template kid00
+        pairs = [(t, "kid00") for t in targets if t != "kid00"]
 
     elif dataset == "SHREC19":
         # Only load the pairs defined in the corr_path
@@ -361,6 +370,12 @@ if __name__ == "__main__":
         "--faust_r",
         action="store_true",
         help="Run matching methods on the TOSCA_R SYM dataset",
+        default=False,
+    )
+    parser.add_argument(
+        "--topkids",
+        action="store_true",
+        help="Run matching methods on the TOPKIDS dataset (all kidNN to kid00)",
         default=False,
     )
     parser.add_argument(

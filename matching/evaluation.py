@@ -205,6 +205,34 @@ def evaluate_faust_scan(
     return matched_points, euclidean_error, geodesic_error, dirichlet_energy, coverage
 
 
+def evaluate_topkids(
+    p2p: np.ndarray,
+    source_element: Element,
+    target_element: Element,
+    max_euclidean_error: float,
+) -> Tuple:
+    # source_element.corr[i] = kid00 vertex for kidNN vertex i (from kidNN.vts).
+    # p2p[i] = predicted kid00 vertex for kidNN vertex i.
+    gt_corr = source_element.corr
+    matched_points = target_element.vertex_points[p2p]
+    target_points_gt = target_element.vertex_points[gt_corr]
+
+    euclidean_error = (
+        torch.norm(matched_points - target_points_gt, dim=-1).mean().item()
+        / max_euclidean_error
+    )
+    geodesic_error = compute_geodesic_error(
+        target_element.dists, p2p, np.arange(len(p2p)), gt_corr
+    )
+    dirichlet_energy = compute_dirichlet_energy(
+        source_element.mesh, target_element.mesh, p2p
+    ).item()
+    coverage = compute_coverage(
+        p2p, source_element.vertex_points, target_element.vertex_points
+    )
+    return matched_points, euclidean_error, geodesic_error, dirichlet_energy, coverage
+
+
 def evaluate_default(
     p2p: np.ndarray,
     matched_points: torch.Tensor,
@@ -253,8 +281,14 @@ def run_matching_methods(
             torch.cuda.synchronize()
         p2p, elapsed = func()
 
-        matched_points = target_points[p2p[source_element.corr]]
-        target_points_corr = target_element.vertex_points[target_element.corr]
+        # TOPKIDS corr is inverted (kidNN→kid00), so p2p[corr] would index p2p with
+        # kid00 vertex indices (up to 12000) on an 8608-element array — skip for TOPKIDS.
+        if data_path.dataset == "TOPKIDS":
+            matched_points = target_points[p2p]
+            target_points_corr = None
+        else:
+            matched_points = target_points[p2p[source_element.corr]]
+            target_points_corr = target_element.vertex_points[target_element.corr]
 
         if target_points.shape[0] <= 50_000:
             max_euclidean_error = torch.cdist(target_points, target_points).max().item()
@@ -310,6 +344,19 @@ def run_matching_methods(
                 source_element,
                 target_element,
                 data_path,
+                max_euclidean_error,
+            )
+        elif data_path.dataset == "TOPKIDS":
+            (
+                matched_points,
+                euclidean_error,
+                geodesic_error,
+                dirichlet_energy,
+                coverage,
+            ) = evaluate_topkids(
+                p2p,
+                source_element,
+                target_element,
                 max_euclidean_error,
             )
         else:

@@ -41,9 +41,13 @@ of human bodies.
 
 1. [Repository Structure](#repository-structure)
 2. [Configuration](#configuration)
-3. [Training a Flow for a single shape (train.py)](#training-a-single-shape-trainpy)
-4. [Training an Entire Dataset (scripts/run\_\*.py)](#training-an-entire-dataset-scriptsrun_py)
-5. [Neural SDF Training (scripts/train\_SDF.py)](#neural-sdf-training-scriptstrain_sdfpy)
+3. [Training a Flow for a Single Shape (`train.py`)](#training-a-flow-for-a-single-shape-trainpy)
+4. [Training an Entire Dataset (`scripts/datasets/run_*.py`)](#training-an-entire-dataset-scriptsdatasetsrun_py)
+5. [SDF Pipeline (`scripts/utils/`)](#sdf-pipeline-scriptsutils)
+   - [Neural SDF Training (`train_SDF.py`)](#neural-sdf-training-train_sdfpy)
+   - [SDF Feature Extraction (`extract_features_SDF.py`)](#sdf-feature-extraction-extract_features_sdfpy)
+   - [Analytical SDF via libigl](#analytical-sdf-via-libigl-alternative-to-neural-sdf)
+   - [Training a Flow on SDF Features](#training-a-flow-on-the-extracted-sdf-features)
 6. [Shape Matching Evaluation (`match.py`)](#shape-matching-evaluation-matchpy)
 7. [Configuration and Dataset Paths](#configuration-and-dataset-paths)
 
@@ -98,6 +102,7 @@ FlowMatching4Matching/
 │   │   ├── run_surreal.py         # Train flows on SURREAL dataset
 │   │   ├── run_tosca.py           # Train flows on TOSCA dataset
 │   │   ├── run_scan_faust.py      # Train flows on SCAN-FAUST (raw scans)
+│   │   ├── run_topkids.py         # Train flows on TOPKIDS dataset
 │   │   └── run_dataset.py         # Generic dataset training script
 │   └── utils/                     # Standalone utility and experimental scripts
 │       ├── train_SDF.py           # Train neural SDFs (IGR) on mesh data
@@ -285,6 +290,7 @@ standard way to produce trained flows for an entire benchmark.
 | `scripts/datasets/run_surreal.py` | SURREAL |
 | `scripts/datasets/run_tosca.py` | TOSCA |
 | `scripts/datasets/run_scan_faust.py` | SCAN-FAUST (raw human scans) |
+| `scripts/datasets/run_topkids.py` | TOPKIDS |
 
 ### Arguments
 
@@ -348,7 +354,9 @@ in the config, containing the model checkpoint and the feature files used by
 
 ---
 
-## Neural SDF Training (`scripts/utils/train_SDF.py`)
+## SDF Pipeline (`scripts/utils/`)
+
+### Neural SDF Training (`train_SDF.py`)
 
 Given a mesh file, you can train a neural Signed Distance Function (SDF) model
 using Implicit Geometric Regularization (IGR). Optionally, if landmark indices
@@ -361,7 +369,7 @@ combines a zero-level-set term (SDF is zero on the surface), an eikonal term
 (gradient norm equals 1 everywhere), a normals alignment term, and a
 free-space penalty to prevent the SDF from collapsing to zero.
 
-### Training a neural SDF
+#### Training a neural SDF
 
 To train an SDF model on a single mesh:
 
@@ -383,7 +391,7 @@ The `--test` flag restricts training to shapes `tr_reg_080` through
 `tr_reg_099` in the FAUST dataset. The `--all` flag processes every mesh in
 `--mesh_folder`.
 
-### Optional arguments
+#### Optional arguments
 
 | Argument | Description |
 |---|---|
@@ -394,7 +402,7 @@ The `--test` flag restricts training to shapes `tr_reg_080` through
 | `--test` | Restrict `--all` to FAUST test shapes (`tr_reg_080` to `tr_reg_099`) |
 | `--smal` | Filter `--all` to SMAL animal species (`cougar`, `hippo`, `horse`) |
 
-### Outputs
+#### Outputs
 
 Saved in `out/SDFs/<mesh_name>/`:
 - `<mesh_name>-SDF.pth` — trained SDF network weights
@@ -402,7 +410,7 @@ Saved in `out/SDFs/<mesh_name>/`:
 - `<mesh_name>-landmarks-voxels.npy` — landmark coordinates mapped to voxel indices
 - `<mesh_name>-landmarks-vertices.npy` — original landmark vertex coordinates
 
-### SDF feature extraction
+### SDF Feature Extraction (`extract_features_SDF.py`)
 
 Features for SDF-based matching are landmark distances computed by running
 Dijkstra's algorithm on the SDF voxel grid, constructing shortest paths between
@@ -432,7 +440,7 @@ SDF surface and the points sampled over it, the voxelized zero-level set, the
 features computed on the SDF grid, the features remapped back to the sampled
 points and the projection of the mesh vertices onto the SDF surface.
 
-### Analytical SDF via libigl (alternative to neural SDF)
+### Analytical SDF via libigl (Alternative to Neural SDF)
 
 As an alternative to training a neural SDF, you can use the exact analytical
 signed distance function provided by [libigl](https://libigl.github.io/) via
@@ -472,7 +480,7 @@ When `--igl_sdf` is set, the pipeline:
 The rest of the SDF pipeline (`run_faust_SDFs.py`, `match.py`) is identical
 regardless of which SDF source was used.
 
-### Training a flow on the extracted SDF features
+### Training a Flow on the Extracted SDF Features
 
 Once SDFs are trained and features are extracted, train the Flow Matching
 models that will be used for the later shape matching evaluation:
@@ -600,6 +608,7 @@ python match.py \
 | `--kinect` | KINECT (point clouds) |
 | `--surreal` | SURREAL |
 | `--tosca` | TOSCA |
+| `--topkids` | TOPKIDS |
 
 ### Shape representations
 

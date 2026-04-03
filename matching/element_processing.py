@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 from typing import List
 
 import numpy as np
@@ -12,6 +13,7 @@ from model.models import FMCond
 from model.networks import MLP, GeomDist
 from utils.dataset_utils import get_common_landmarks_between_two_models
 from utils.mesh_utils import (
+    compute_features,
     compute_geodesic_distances_pointcloud,
     mesh_geodesics,
     pointcloud_geodesics,
@@ -28,18 +30,56 @@ def get_mesh_element_features(
 ) -> torch.Tensor:
 
     vertex_features_path = Path(
-        data_path.flows_path,
+        data_path.features_path,
         element,
         f"vertex-features-{data_path.features_type}-norm.npy",
     )
-    vertex_features = torch.tensor(np.load(vertex_features_path).astype(np.float32)).to(
-        device
+    features_file_path = Path(
+        data_path.features_path, element, f"features-{data_path.features_type}-norm.npy"
     )
 
-    features_path = Path(
-        data_path.flows_path, element, f"features-{data_path.features_type}-norm.npy"
-    )
-    features = torch.tensor(np.load(features_path).astype(np.float32)).to(device)
+    if not vertex_features_path.exists() or recompute:
+        tqdm.write(
+            f"[FEATURES] Pre-computed features not found for '{element}', computing on-the-fly..."
+        )
+        args = SimpleNamespace(
+            landmarks=landmarks,
+            features_type=data_path.features_type,
+            use_heat_method=False,
+            embedding_dim=len(landmarks),
+            embedding_type="features_only",
+        )
+        raw = compute_features(mesh, args, device)  # (n_vertices, n_landmarks)
+
+        normalization = data_path.features_normalization
+        if normalization == "diameter":
+            _, diameter = mesh_geodesics(
+                mesh=mesh,
+                target=element,
+                recompute=False,
+                dists_path=str(data_path.dists_path),
+            )
+            vertex_features = raw / diameter
+        elif normalization == "none":
+            vertex_features = raw
+        else:
+            raise ValueError(
+                f"On-the-fly feature computation does not support normalization '{normalization}'. "
+                "Pre-compute features with train.py instead."
+            )
+
+        vertex_features_path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(vertex_features_path, vertex_features.cpu().numpy())
+        np.save(features_file_path, vertex_features.cpu().numpy())
+        tqdm.write(
+            f"[FEATURES] Saved computed features to {vertex_features_path.parent}"
+        )
+    else:
+        vertex_features = torch.tensor(
+            np.load(vertex_features_path).astype(np.float32)
+        ).to(device)
+
+    features = torch.tensor(np.load(features_file_path).astype(np.float32)).to(device)
 
     tqdm.write("------------------------------------")
     tqdm.write(f"loaded vertex_features (shape {list(vertex_features.shape)}):")
@@ -47,7 +87,7 @@ def get_mesh_element_features(
     tqdm.write(f"  max: {vertex_features.max(dim=0).values.tolist()}")
     tqdm.write(f"  avg: {vertex_features.mean(dim=0).tolist()}")
     tqdm.write("------------------------------------")
-    tqdm.write(f"loaded features (shape {list(vertex_features.shape)}):")
+    tqdm.write(f"loaded features (shape {list(features.shape)}):")
     tqdm.write(f"  min: {features.min(dim=0).values.tolist()}")
     tqdm.write(f"  max: {features.max(dim=0).values.tolist()}")
     tqdm.write(f"  avg: {features.mean(dim=0).tolist()}")
@@ -183,6 +223,21 @@ def _load_landmarks_and_correspondences(element, mesh, data_path):
             )
             return corr, landmarks
 
+    # TOPKIDS: kid00 is the template, landmarks are direct indices
+    if data_path.dataset == "TOPKIDS" and element == "kid00":
+        corr = np.arange(len(mesh.vertices))
+        landmarks = np.array(data_path.landmarks)
+        return corr, landmarks
+
+    # TOPKIDS non-template: corr[i] = kid00 vertex for kidNN vertex i.
+    # Landmarks are template indices, find the kidNN vertex by inverse lookup.
+    if data_path.dataset == "TOPKIDS":
+        corr = _load_correspondence_file(
+            element, data_path.corr_path, mesh, data_path.corr_offset
+        )
+        landmarks = np.array([np.where(corr == L)[0][0] for L in data_path.landmarks])
+        return corr, landmarks
+
     # Default case
     corr = _load_correspondence_file(
         element, data_path.corr_path, mesh, data_path.corr_offset
@@ -219,7 +274,9 @@ def _process_mesh_element(element, mesh, model, device, data_path) -> Element:
         element=element,
         mesh=mesh,
         data_path=data_path,
-        landmarks=data_path.landmarks,
+        landmarks=(
+            landmarks.tolist() if hasattr(landmarks, "tolist") else list(landmarks)
+        ),
         device=device,
         recompute=False,
     )
