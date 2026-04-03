@@ -17,6 +17,51 @@ from matching.p2p import (
     compute_p2p_ot,
 )
 
+METHOD_GROUPS = {
+    "fast": ["KNN", "FUSE"],
+    "sdf": ["KNN", "OT", "FUSE", "NDP-SDF", "FUSE-ANCHOR"],
+    "all": [
+        "KNN",
+        "OT",
+        "FMaps",
+        "FMaps-zoomout",
+        "FMaps-neural-zoomout",
+        "NDP-landmarks",
+        "FUSE",
+        "FUSE-ANCHOR",
+        "FUSE-zoomout",
+        "FUSE-neural-zoomout",
+    ],
+    "baselines": [
+        "KNN",
+        "OT",
+        "FUSE",
+        "FMaps",
+        "FMaps-zoomout",
+        "FMaps-neural-zoomout",
+        "FUSE-ANCHOR",
+        "NDP-landmarks",
+    ],
+    "baselines-no-zoomout": [
+        "KNN",
+        "OT",
+        "FUSE",
+        "FMaps",
+        "FUSE-ANCHOR",
+        "NDP-landmarks",
+    ],
+    "zoomout": ["FMaps", "FMaps-zoomout", "FMaps-neural-zoomout"],
+    "la": ["KNN", "FUSE", "hungarian", "lapjv", "FUSE-hungarian", "FUSE-lapjv"],
+    "baselines-no-FUSE": [
+        "KNN",
+        "OT",
+        "FMaps",
+        "FMaps-zoomout",
+        "FMaps-neural-zoomout",
+        "NDP-landmarks",
+    ],
+}
+
 
 def get_matching_methods(
     source_features,
@@ -38,8 +83,10 @@ def get_matching_methods(
 
     source_features = source_features.to(device)
     target_features = target_features.to(device)
-    source_model = source_model.to(device)
-    target_model = target_model.to(device)
+    if source_model is not None:
+        source_model = source_model.to(device)
+    if target_model is not None:
+        target_model = target_model.to(device)
 
     all_methods = {
         "KNN": lambda: compute_p2p_knn(source_features, target_features),
@@ -135,48 +182,8 @@ def get_matching_methods(
         ),
     }
 
-    method_groups = {
-        "fast": ["KNN", "FUSE"],
-        "sdf": ["KNN", "OT", "FUSE", "NDP-SDF", "FUSE-ANCHOR"],
-        "all": [
-            "KNN",
-            "OT",
-            "FMaps",
-            "FMaps-zoomout",
-            "FMaps-neural-zoomout",
-            "NDP-landmarks",
-            "NDP-wks",
-            "FUSE",
-            "FUSE-ANCHOR",
-            "FUSE-zoomout",
-            "FUSE-neural-zoomout",
-        ],
-        "baselines": [
-            "KNN",
-            "OT",
-            "FUSE",
-            "FMaps",
-            "FMaps-zoomout",
-            "FMaps-neural-zoomout",
-            "FUSE-ANCHOR",
-            "NDP-landmarks",
-            "NDP-wks",
-        ],
-        "baselines-no-zoomout": [
-            "KNN",
-            "OT",
-            "FUSE",
-            "FMaps",
-            "FUSE-ANCHOR",
-            "NDP-landmarks",
-            "NDP-wks",
-        ],
-        "zoomout": ["FMaps", "FMaps-zoomout", "FMaps-neural-zoomout"],
-        "la": ["KNN", "FUSE", "hungarian", "lapjv", "FUSE-hungarian", "FUSE-lapjv"],
-    }
-
-    if matching_methods not in method_groups:
+    if matching_methods not in METHOD_GROUPS:
         raise ValueError(f"Unknown matching methods option: {matching_methods}")
 
-    selected_keys = method_groups[matching_methods]
+    selected_keys = METHOD_GROUPS[matching_methods]
     return {key: all_methods[key] for key in selected_keys}

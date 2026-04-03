@@ -46,7 +46,7 @@ class Element:
     vertex_features: torch.Tensor
     points: torch.Tensor
     vertex_points: torch.Tensor
-    model: torch.nn.Module
+    model: Optional[torch.nn.Module]
     mesh: trimesh.Trimesh
     landmarks: np.ndarray
     corr: np.ndarray | None

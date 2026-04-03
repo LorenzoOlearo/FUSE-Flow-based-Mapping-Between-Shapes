@@ -5,7 +5,7 @@ import pandas as pd
 from matching.data_structures import DataPath
 from matching.element_processing import process_element
 from matching.evaluation import log_results, run_matching_methods
-from matching.methods import get_matching_methods
+from matching.methods import METHOD_GROUPS, get_matching_methods
 from matching.visualization import plot_results
 
 
@@ -18,7 +18,7 @@ def process_pair(
     mesh_baseline: bool,
     plot_html: bool,
     plot_png: bool,
-    all_methods: str,
+    selected_methods: str,
     features_normalization: str,
     data_path: "DataPath",
     output_dir: str,
@@ -51,6 +51,8 @@ def process_pair(
         pd.DataFrame: Results table containing evaluation metrics for all methods.
     """
 
+    load_flow = any(m.startswith("FUSE") for m in METHOD_GROUPS[selected_methods])
+
     source_element = process_element(
         element=source,
         representation=source_rep,
@@ -64,6 +66,7 @@ def process_pair(
         mlp_num_frequencies=mlp_num_frequencies,
         network_selection=network_selection,
         edm_preconditioning=edm_preconditioning,
+        load_flow=load_flow,
     )
 
     target_element = process_element(
@@ -79,6 +82,7 @@ def process_pair(
         mlp_num_frequencies=mlp_num_frequencies,
         network_selection=network_selection,
         edm_preconditioning=edm_preconditioning,
+        load_flow=load_flow,
     )
 
     matching_methods = get_matching_methods(

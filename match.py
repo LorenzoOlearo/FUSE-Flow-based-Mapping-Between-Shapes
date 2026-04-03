@@ -251,7 +251,7 @@ def main(args):
             mesh_baseline=mesh_baseline,
             plot_html=args.plot_html,
             plot_png=args.plot_png,
-            all_methods=args.matching_methods,
+            selected_methods=args.matching_methods,
             features_normalization=args.features_normalization,
             data_path=data_path,
             output_dir=output_dir,

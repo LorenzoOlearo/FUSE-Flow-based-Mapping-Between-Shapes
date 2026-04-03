@@ -28,11 +28,13 @@ def get_mesh_element_features(
 ) -> torch.Tensor:
 
     vertex_features_path = Path(
-        data_path.flows_path, element, f"vertex-features-{data_path.features_type}-norm.npy"
+        data_path.flows_path,
+        element,
+        f"vertex-features-{data_path.features_type}-norm.npy",
     )
-    vertex_features = torch.tensor(
-        np.load(vertex_features_path).astype(np.float32)
-    ).to(device)
+    vertex_features = torch.tensor(np.load(vertex_features_path).astype(np.float32)).to(
+        device
+    )
 
     features_path = Path(
         data_path.flows_path, element, f"features-{data_path.features_type}-norm.npy"
@@ -61,7 +63,9 @@ def get_sdf_element_features(
 
     # We load the features already normalized by the diameter as used to train the SDF flows
     features_path = Path(data_path.sdf_path, element, "features-landmarks-norm.npy")
-    vertex_features_path = Path(data_path.sdf_path, element, "vertex-features-landmarks-norm.npy")
+    vertex_features_path = Path(
+        data_path.sdf_path, element, "vertex-features-landmarks-norm.npy"
+    )
 
     try:
         tqdm.write(
@@ -91,7 +95,9 @@ def get_pt_element_features(
         )
         pt = trimesh.Trimesh(vertices=pt.vertices, faces=[], process=False)
         features_path = Path(
-            data_path.flows_path, element, f"vertex-features-{data_path.features_type}-norm.npy"
+            data_path.flows_path,
+            element,
+            f"vertex-features-{data_path.features_type}-norm.npy",
         )
 
         if recompute:
@@ -117,7 +123,9 @@ def get_pt_element_features(
 
     elif data_path.dataset == "FAUST":
         features_path = Path(
-            data_path.scan_features_path, element, f"vertex-features-{data_path.features_type}-norm.npy"
+            data_path.scan_features_path,
+            element,
+            f"vertex-features-{data_path.features_type}-norm.npy",
         )
         tqdm.write(f"Loading precomputed features for {element} from {features_path}")
         features = np.load(features_path).astype(np.float32)
@@ -223,11 +231,12 @@ def _process_mesh_element(element, mesh, model, device, data_path) -> Element:
         dists_path=str(data_path.dists_path),
     )
 
-    model_path = Path(data_path.flows_path, element, "checkpoint-best.pth")
-    model.load_state_dict(
-        torch.load(model_path, weights_only=False)["model"], strict=True
-    )
-    model.to(device).eval()
+    if model is not None:
+        model_path = Path(data_path.flows_path, element, "checkpoint-best.pth")
+        model.load_state_dict(
+            torch.load(model_path, weights_only=False)["model"], strict=True
+        )
+        model.to(device).eval()
 
     return Element(
         element=element,
@@ -266,11 +275,12 @@ def _process_sdf_element(element, mesh, model, device, data_path) -> Element:
         mesh=mesh, target=element, recompute=False, dists_path=str(data_path.dists_path)
     )
 
-    model_path = Path(data_path.flows_SDFs_path, element, "checkpoint-9999.pth")
-    model.load_state_dict(
-        torch.load(model_path, weights_only=False)["model"], strict=True
-    )
-    model.to(device).eval()
+    if model is not None:
+        model_path = Path(data_path.flows_SDFs_path, element, "checkpoint-9999.pth")
+        model.load_state_dict(
+            torch.load(model_path, weights_only=False)["model"], strict=True
+        )
+        model.to(device).eval()
 
     return Element(
         element=element,
@@ -313,11 +323,12 @@ def _process_pt_element(element, mesh, model, device, data_path) -> Element:
             pt=pt, target=element, recompute=False, dists_path=str(data_path.dists_path)
         )
 
-        model_path = Path(data_path.flows_path, element, "checkpoint-9999.pth")
-        model.load_state_dict(
-            torch.load(model_path, weights_only=False)["model"], strict=True
-        )
-        model.to(device).eval()
+        if model is not None:
+            model_path = Path(data_path.flows_path, element, "checkpoint-9999.pth")
+            model.load_state_dict(
+                torch.load(model_path, weights_only=False)["model"], strict=True
+            )
+            model.to(device).eval()
 
         return Element(
             element=element,
@@ -394,13 +405,14 @@ def _process_pt_element(element, mesh, model, device, data_path) -> Element:
         # Align the new dists over the scan diameter
         dists = dists * (diameter / diameter_mesh)
 
-        model_path = Path(
-            data_path.scan_flows_path, element_scan, "checkpoint-9999.pth"
-        )
-        model.load_state_dict(
-            torch.load(model_path, weights_only=False)["model"], strict=True
-        )
-        model.to(device).eval()
+        if model is not None:
+            model_path = Path(
+                data_path.scan_flows_path, element_scan, "checkpoint-9999.pth"
+            )
+            model.load_state_dict(
+                torch.load(model_path, weights_only=False)["model"], strict=True
+            )
+            model.to(device).eval()
 
         return Element(
             element=element_scan,
@@ -435,7 +447,9 @@ def get_network(
     elif network_selection == "GEOMDIST":
         network = GeomDist(channels=embedding_dim)
     else:
-        raise ValueError(f"Unknown network '{network_selection}'. Choose 'MLP' or 'GEOMDIST'.")
+        raise ValueError(
+            f"Unknown network '{network_selection}'. Choose 'MLP' or 'GEOMDIST'."
+        )
 
     return network
 
@@ -453,27 +467,34 @@ def process_element(
     mlp_num_frequencies: int = -1,
     network_selection: str = "MLP",
     edm_preconditioning: bool = False,
+    load_flow: bool = True,
 ):
     """
     Process a dataset element according to the chosen representation.
     Returns a fully populated Element object.
+
+    If load_flow=False, no checkpoint is loaded and the model is set to None;
+    Use this when running only non-FUSE methods
     """
     tqdm.write(f"Loading element '{element}' with representation '{representation}'")
 
     mesh_path = Path(data_path.dataset_path, element + data_path.dataset_extension)
     mesh = trimesh.load(mesh_path, process=False) if mesh_baseline else None
 
-    model = FMCond(
-        channels=embedding_dim,
-        network=get_network(
-            network_selection=network_selection,
-            embedding_dim=embedding_dim,
-            mlp_hidden_size=mlp_hidden_size,
-            mlp_depth=mlp_depth,
-            mlp_num_frequencies=mlp_num_frequencies,
-        ),
-        use_edm_preconditioning=edm_preconditioning,
-    ).to(device)
+    if load_flow:
+        model = FMCond(
+            channels=embedding_dim,
+            network=get_network(
+                network_selection=network_selection,
+                embedding_dim=embedding_dim,
+                mlp_hidden_size=mlp_hidden_size,
+                mlp_depth=mlp_depth,
+                mlp_num_frequencies=mlp_num_frequencies,
+            ),
+            use_edm_preconditioning=edm_preconditioning,
+        ).to(device)
+    else:
+        model = None
 
     if representation == "mesh":
         element = _process_mesh_element(element, mesh, model, device, data_path)
