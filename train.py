@@ -17,6 +17,7 @@ from pathlib import Path
 
 import fpsample
 import numpy as np
+import ot as pot
 import pandas as pd
 import torch
 import trimesh
@@ -35,6 +36,7 @@ from utils.mesh_utils import (
     generate_embeddings,
     mesh_geodesics,
     mesh_geodesics_heat_method,
+    normalize_features,
     normalize_mesh_unit,
     pointcloud_geodesics,
     sample_initial_distribution,
@@ -295,113 +297,6 @@ def setup_data_loader(data_path, batch_size, num_points_train):
         f"Data path: {data_path} | Batch size: {batch_size} | epoch size: {data_loader_train['epoch_size']}"
     )
     return data_loader_train
-
-
-def normalize_features(features, vertex_features, method, diameter=None):
-    """Normalize features based on the specified method."""
-    if method == "none":
-        print("No normalization applied to features.")
-        normalized = features
-        vertex_features_normalized = vertex_features
-
-    elif method == "0_1_indipendent":
-        # Normalize each feature channel to [0, 1]
-        min_vals = vertex_features.min(dim=0).values
-        max_vals = vertex_features.max(dim=0).values
-        normalized = (features - min_vals) / (max_vals - min_vals + 1e-8)
-        vertex_features_normalized = (vertex_features - min_vals) / (
-            max_vals - min_vals + 1e-8
-        )
-        print(
-            f"Feature normalization (0_1_indipendent): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}"
-        )
-
-    elif method == "0_1_global":
-        # Normalize all features to [0, 1] based on global min and max
-        min_val = vertex_features.min()
-        max_val = vertex_features.max()
-        normalized = (features - min_val) / (max_val - min_val + 1e-8)
-        vertex_features_normalized = (vertex_features - min_val) / (
-            max_val - min_val + 1e-8
-        )
-        print(
-            f"Feature normalization (0_1_global): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}"
-        )
-
-    elif method == "0_center_indipendent":
-        # Center each feature channel around 0 and scale to [-1, 1]
-        mean_vals = vertex_features.mean(dim=0)
-        max_devs = torch.max(torch.abs(vertex_features - mean_vals), dim=0).values
-        normalized = (features - mean_vals) / (max_devs + 1e-8)
-        vertex_features_normalized = (vertex_features - mean_vals) / (max_devs + 1e-8)
-        print(
-            f"Feature normalization (0_center_indipendent): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}"
-        )
-
-    elif method == "0_center_global":
-        # Center all features around 0 and scale to [-1, 1] based on global max deviation
-        mean_val = vertex_features.mean()
-        max_dev = torch.max(torch.abs(vertex_features - mean_val))
-        normalized = (features - mean_val) / (max_dev + 1e-8)
-        vertex_features_normalized = (vertex_features - mean_val) / (max_dev + 1e-8)
-        print(
-            f"Feature normalization (0_center_global): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}"
-        )
-
-    elif method == "euclidean":
-        # Normalize each channel by the Euclidean norm of the vertex features
-        norms = torch.norm(vertex_features, dim=0)
-        normalized = features / (norms + 1e-8)
-        vertex_features_normalized = vertex_features / (norms + 1e-8)
-        print(
-            f"Feature normalization (euclidean): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}"
-        )
-
-    elif method == "mean_var_vertex":
-        mean_vertex_features = vertex_features.mean(dim=0)
-        var_vertex_features = vertex_features.std(dim=0)
-        features_normalized = (features - mean_vertex_features) / (
-            var_vertex_features + 1e-8
-        )
-        vertex_features_normalized = (vertex_features - mean_vertex_features) / (
-            var_vertex_features + 1e-8
-        )
-        normalized = features_normalized
-        print(
-            f"Feature normalization (mean_var_vertex): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}"
-        )
-
-    elif method == "mean_var":
-        mean_features = features.mean(dim=0)
-        mean_vertex_features = vertex_features.mean(dim=0)
-        var_vertex_features = features.std(dim=0)
-        features_normalized = (features - mean_features) / (var_vertex_features + 1e-8)
-        vertex_features_normalized = (vertex_features - mean_vertex_features) / (
-            var_vertex_features + 1e-8
-        )
-        normalized = features_normalized
-        print(
-            f"Feature normalization (mean_var_vertex): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}"
-        )
-
-    elif method == "mean_var_features":
-        mean_features = features.mean(dim=0)
-        var_features = features.std(dim=0)
-        features_normalized = (features - mean_features) / (var_features + 1e-8)
-        vertex_features_normalized = (vertex_features - mean_features) / (
-            var_features + 1e-8
-        )
-        normalized = features_normalized
-        print(
-            f"Feature normalization (mean_var_features): min {normalized.min(dim=0).values.tolist()}, max {normalized.max(dim=0).values.tolist()}"
-        )
-    elif method == "diameter":
-        vertex_features_normalized = vertex_features / diameter
-        normalized = features / diameter
-    else:
-        raise ValueError(f"Unknown normalization method: {method}")
-
-    return normalized, vertex_features_normalized
 
 
 def build_network(args):
@@ -695,7 +590,9 @@ def train(args, device):
                 )
                 features = features.squeeze(0)
                 np.save(
-                    os.path.join(args.output_dir, f"vertex-features-{args.features_type}.npy"),
+                    os.path.join(
+                        args.output_dir, f"vertex-features-{args.features_type}.npy"
+                    ),
                     features.detach().cpu().numpy(),
                 )
 
@@ -725,7 +622,16 @@ def train(args, device):
     # Default case: no vertex_features provided, compute them from the mesh and optionally interpolate them
     else:
         print(f"Computing {args.features_type} features from mesh...")
-        vertex_features = compute_features(mesh, args, device)
+        vertex_features = compute_features(
+            mesh,
+            device,
+            features_type=args.features_type,
+            landmarks=args.landmarks,
+            use_heat_method=args.use_heat_method,
+            embedding_dim=args.embedding_dim,
+            embedding_type=args.embedding_type,
+            embedding_type_dim=getattr(args, "embedding_type_dim", None),
+        )
         print("------------------------------------")
         print(f"vertex_features (shape {list(vertex_features.shape)}):")
         print(f"  min: {vertex_features.min(dim=0).values.tolist()}")
@@ -822,7 +728,9 @@ def train(args, device):
             features.detach().cpu().numpy(),
         )
         np.save(
-            os.path.join(args.output_dir, f"vertex-features-{args.features_type}-norm.npy"),
+            os.path.join(
+                args.output_dir, f"vertex-features-{args.features_type}-norm.npy"
+            ),
             vertex_features.detach().cpu().numpy(),
         )
 

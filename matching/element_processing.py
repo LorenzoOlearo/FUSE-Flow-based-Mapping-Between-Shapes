@@ -15,6 +15,7 @@ from utils.mesh_utils import (
     compute_features,
     compute_geodesic_distances_pointcloud,
     mesh_geodesics,
+    normalize_features,
     pointcloud_geodesics,
 )
 
@@ -51,6 +52,7 @@ def get_mesh_element_features(
         )  # (n_vertices, n_landmarks)
 
         normalization = data_path.features_normalization
+        diameter = None
         if normalization == "diameter":
             _, diameter = mesh_geodesics(
                 mesh=mesh,
@@ -58,14 +60,7 @@ def get_mesh_element_features(
                 recompute=False,
                 dists_path=str(data_path.dists_path),
             )
-            vertex_features = raw / diameter
-        elif normalization == "none":
-            vertex_features = raw
-        else:
-            raise ValueError(
-                f"On-the-fly feature computation does not support normalization '{normalization}'. "
-                "Pre-compute features with train.py instead."
-            )
+        raw, vertex_features = normalize_features(raw, raw, normalization, diameter)
 
         vertex_features_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(vertex_features_path, vertex_features.cpu().numpy())

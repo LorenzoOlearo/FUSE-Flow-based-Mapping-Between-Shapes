@@ -967,6 +967,82 @@ def compute_features(
     return features
 
 
+def normalize_features(features, vertex_features, method: str, diameter=None):
+    """
+    Normalize feature tensors using the specified method.
+
+    Statistics are always computed from vertex_features (the dense, per-vertex
+    tensor) so that the same scale is applied consistently to both tensors.
+
+    Parameters
+    ----------
+    features : torch.Tensor
+        Features for the sampled / interpolated points, shape (N, D).
+    vertex_features : torch.Tensor
+        Features for all mesh vertices, shape (V, D).
+    method : str
+        One of: 'none', 'diameter', '0_1_indipendent', '0_1_global',
+        '0_center_indipendent', '0_center_global', 'euclidean',
+        'mean_var_vertex', 'mean_var', 'mean_var_features'.
+    diameter : float or None
+        Mesh diameter; required when method == 'diameter'.
+
+    Returns
+    -------
+    (features_norm, vertex_features_norm) : tuple[torch.Tensor, torch.Tensor]
+    """
+    if method == "none":
+        return features, vertex_features
+
+    elif method == "diameter":
+        return features / diameter, vertex_features / diameter
+
+    elif method == "0_1_indipendent":
+        min_vals = vertex_features.min(dim=0).values
+        max_vals = vertex_features.max(dim=0).values
+        scale = max_vals - min_vals + 1e-8
+        return (features - min_vals) / scale, (vertex_features - min_vals) / scale
+
+    elif method == "0_1_global":
+        min_val = vertex_features.min()
+        max_val = vertex_features.max()
+        scale = max_val - min_val + 1e-8
+        return (features - min_val) / scale, (vertex_features - min_val) / scale
+
+    elif method == "0_center_indipendent":
+        mean_vals = vertex_features.mean(dim=0)
+        max_devs = torch.max(torch.abs(vertex_features - mean_vals), dim=0).values + 1e-8
+        return (features - mean_vals) / max_devs, (vertex_features - mean_vals) / max_devs
+
+    elif method == "0_center_global":
+        mean_val = vertex_features.mean()
+        max_dev = torch.max(torch.abs(vertex_features - mean_val)) + 1e-8
+        return (features - mean_val) / max_dev, (vertex_features - mean_val) / max_dev
+
+    elif method == "euclidean":
+        norms = torch.norm(vertex_features, dim=0) + 1e-8
+        return features / norms, vertex_features / norms
+
+    elif method == "mean_var_vertex":
+        mean = vertex_features.mean(dim=0)
+        std = vertex_features.std(dim=0) + 1e-8
+        return (features - mean) / std, (vertex_features - mean) / std
+
+    elif method == "mean_var":
+        mean_f = features.mean(dim=0)
+        mean_v = vertex_features.mean(dim=0)
+        std = features.std(dim=0) + 1e-8
+        return (features - mean_f) / std, (vertex_features - mean_v) / std
+
+    elif method == "mean_var_features":
+        mean = features.mean(dim=0)
+        std = features.std(dim=0) + 1e-8
+        return (features - mean) / std, (vertex_features - mean) / std
+
+    else:
+        raise ValueError(f"Unknown normalization method: {method!r}")
+
+
 def compute_geodesic_distmat(verts, faces):
     """
     Compute geodesic distance matrix using Dijkstra algorithm

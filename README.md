@@ -82,7 +82,7 @@ FlowMatching4Matching/
 │   └── losses.py                  # ChamferLoss, HausdorffLoss
 │
 ├── utils/
-│   ├── mesh_utils.py              # Geodesic computation, feature extraction, mesh sampling
+│   ├── mesh_utils.py              # Mesh preprocessing, features computation, features normalization, mesh sampling
 │   ├── metrics.py                 # Geodesic error, coverage, Dirichlet energy
 │   ├── dataset_utils.py           # Dataset-specific helpers and SHREC20 landmark loading
 │   ├── misc.py                    # MetricLogger, checkpoint save/load, distributed utils
@@ -670,7 +670,7 @@ Individual methods:
 | `--same` | Match each shape to itself (identity, for sanity checking) |
 | `--backward_steps` | ODE integration steps for the inverse flow (default: 64) |
 | `--forward_steps` | ODE integration steps for the forward flow (default: 64) |
-| `--features_normalization` | Apply an additional normalization at evaluation time |
+| `--features_normalization` | Normalization applied to features (same methods as training: `diameter`, `0_1_indipendent`, `mean_var`, etc.; use `none` to skip) |
 | `--mlp_hidden_size` | MLP hidden size (must match the trained model) |
 | `--mlp_depth` | MLP depth (must match the trained model) |
 | `--mlp_num_frequencies` | Fourier frequencies (must match the trained model) |
