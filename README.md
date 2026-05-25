@@ -2,6 +2,8 @@
 
 __Authors__: Lorenzo Olearo*, Giulio Viganò*, Daniele Baieri, Filippo Maggioli, Simone Melzi
 
+- [![arXiv](https://img.shields.io/badge/arXiv-Paper-<COLOR>.svg)](https://arxiv.org/abs/2511.13431) - **FUSE: A Flow-based Mapping Between Shapes**
+
 ![](assets/cover.png)
 
 We introduce a novel neural representation for maps between 3D shapes based on
@@ -20,7 +22,6 @@ in shape matching. Beyond shape matching, our framework shows promising results
 in other tasks, including UV mapping and registration of raw point cloud scans
 of human bodies.
 
-- [![arXiv](https://img.shields.io/badge/arXiv-Paper-<COLOR>.svg)](https://arxiv.org/abs/2511.13431) - **FUSE: A Flow-based Mapping Between Shapes**
 
 **Citation**:
 ```
