@@ -58,12 +58,12 @@ def main(args):
         working_dir = Path(str(Path(__file__).resolve()).split("/scripts")[0])
         data_path = Path(working_dir, dataset_dir, f"{target}.off")
 
-        # kid00 is the template — use landmarks directly.
+        # kid00 is the template, use landmarks directly.
         # All other shapes map template landmarks via their corr file.
         if target == "kid00":
             target_landmarks = base_landmarks
         else:
-            # corr[kidNN_i] = kid00 vertex (kidNN→kid00 direction, 1-indexed → 0-indexed).
+            # corr[kidNN_i] = kid00 vertex (kidNN -> kid00 direction, 1-indexed -> 0-indexed).
             # Find the kidNN vertex that maps to each template landmark via inverse lookup.
             corr = np.array(np.loadtxt(f"{corr_path}/{target}.vts")) - 1
             target_landmarks = [int(np.where(corr == L)[0][0]) for L in base_landmarks]
@@ -86,8 +86,8 @@ def main(args):
             "mlp_num_frequencies": 6,
             "batch_size": 10_000,
             "num_points_train": 10_000,
-            "learning_rate": 0.001,
-            "lr_scheduler": "none",
+            "learning_rate": 0.01,
+            "lr_scheduler": "cosine",
             "distribution": "gaussian",
             "embedding_dim": len(base_landmarks),
             "embedding_type": "features_only",

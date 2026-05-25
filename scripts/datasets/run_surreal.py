@@ -92,7 +92,7 @@ def main(args):
         if args.external is True:
             command = [
                 "python",
-                "main.py",
+                "train.py",
                 "--config",
                 config_path,
                 "--features_path",
@@ -101,7 +101,7 @@ def main(args):
                 str(500000),
             ]
         else:
-            command = ["python", "main.py", "--config", config_path]
+            command = ["python", "train.py", "--config", config_path]
 
         command_str = " ".join(command)
         print(f"Running command: {command_str}")

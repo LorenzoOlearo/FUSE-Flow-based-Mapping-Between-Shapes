@@ -973,7 +973,7 @@ def main():
             # Build the command
             cmd = [
                 "python",
-                "main.py",
+                "train.py",
                 "--blr",
                 str(args.blr),
                 "--output_dir",

@@ -94,7 +94,7 @@ def main(args):
         if args.external is True:
             command = [
                 "python",
-                "main.py",
+                "train.py",
                 "--config",
                 config_path,
                 "--features_interpolation",
@@ -103,7 +103,7 @@ def main(args):
         else:
             command = [
                 "python",
-                "main.py",
+                "train.py",
                 "--config",
                 config_path,
             ]

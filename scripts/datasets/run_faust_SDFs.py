@@ -127,13 +127,13 @@ def main(args):
 
         command = [
             "python",
-            "main.py",
+            "train.py",
             "--config",
             config_path,
             "--features_path",
-            f"{sdf_dir}/{target}/{target}-geodesics-normalized-diameter.txt",
+            f"{sdf_dir}/{target}/features-landmarks-norm.npy",
             "--vertex_features_path",
-            f"{sdf_dir}/{target}/{target}-vertex-geodesics-normalized-diameter.txt",
+            f"{sdf_dir}/{target}/vertex-features-landmarks-norm.npy",
         ]
 
         command_str = " ".join(command)
